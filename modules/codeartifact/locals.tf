@@ -119,13 +119,25 @@ locals {
     Resource  = "*"
   }
 
+  # concat unifies the types of the elements it is given. The read and publish statements are the
+  # same shape except for Principal.AWS, which is a string or a list of strings on the read side and,
+  # when the publisher ARNs are unknown at plan time, an unknown of no settled type on the publish
+  # side. Those two do not unify, and cty panics inside concat rather than degrading to an unknown
+  # statement. Any caller that wires a role's ARN into publisher_principal_arns hits it; the
+  # examples pass literals, which is why the module shipped green.
+  #
+  # Encoding each statement to a JSON string before the concat means concat only ever unifies
+  # strings, which always works. Each element is decoded straight back afterwards, so the rendered
+  # policy is byte-identical to what the object form produced.
   repository_policy_json = {
     for k in local.policy_repository_keys : k => jsonencode({
       Version = "2012-10-17"
-      Statement = concat(
-        local.has_readers ? [local.repository_read_statement] : [],
-        contains(local.publish_keys, k) ? [local.repository_publish_statement] : [],
-      )
+      Statement = [
+        for statement in concat(
+          local.has_readers ? [jsonencode(local.repository_read_statement)] : [],
+          contains(local.publish_keys, k) ? [jsonencode(local.repository_publish_statement)] : [],
+        ) : jsondecode(statement)
+      ]
     })
   }
 
