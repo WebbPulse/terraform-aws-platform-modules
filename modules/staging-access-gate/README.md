@@ -147,6 +147,18 @@ session; the API starts answering 401 as soon as the cookies are cleared or the 
 - The CloudFront Function checks only that the policy cookie exists and has not expired. The
   signature is verified by CloudFront itself on the key-group behaviors; a forged cookie reaches
   `/index.html` (the SPA shell) and nothing else.
+- **CloudFront validates the signed cookie before it runs the viewer-request function.** On a
+  behavior with a trusted key group, the key-group check comes first in the request pipeline, so a
+  request with no cookies is rejected with a 403 and the function never runs. An unauthenticated
+  deep link to `/some/route` therefore does not get the function's 302 to `/_auth/login`. It gets
+  the 403, which the consumer's `custom_error_response` turns into `/index.html` with a 200, and
+  the SPA shell loads and starts the sign-in from the client instead. The function's 302 only
+  fires on behaviors without a key group, which is `/_auth/*` and `/index.html`. This is why the
+  unsigned `/index.html` behavior is mandatory rather than a nicety: without it the shell itself
+  is behind the key group and the 403 fallback cannot fetch it, so the deep link dead-ends. If
+  server-side redirects on deep links are wanted instead of the client-side flow, the key group
+  has to come off the default behavior and the function has to become the only check, which
+  weakens the gate to a cookie-presence test.
 - Callers that are not browsers (a Chrome extension, a deploy pipeline health check) cannot
   complete the hosted UI flow. They call `api.staging.<domain>` directly with the origin-verify
   header, read from SSM.

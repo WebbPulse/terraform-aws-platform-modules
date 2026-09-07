@@ -33,9 +33,9 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # API host with the origin verification header, only with an access gate.
+  # API host with the origin verification header, only in proxy mode.
   dynamic "origin" {
-    for_each = local.gate_enabled ? [1] : []
+    for_each = local.gate_api_proxy_enabled ? [1] : []
 
     content {
       domain_name = var.access_gate.api_origin_domain_name
@@ -96,7 +96,8 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   # Ordered behaviors exist only with an access gate. Their order matters: CloudFront evaluates
-  # path patterns top to bottom.
+  # path patterns top to bottom. The API behavior in the middle exists only in proxy mode, so
+  # without it the auth and SPA shell behaviors keep the same relative order.
 
   dynamic "ordered_cache_behavior" {
     for_each = local.gate_enabled ? [1] : []
@@ -117,8 +118,9 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
+  # The API behavior exists only in proxy mode.
   dynamic "ordered_cache_behavior" {
-    for_each = local.gate_enabled ? [1] : []
+    for_each = local.gate_api_proxy_enabled ? [1] : []
 
     content {
       path_pattern             = var.access_gate.api_path_pattern

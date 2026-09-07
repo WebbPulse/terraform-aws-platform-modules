@@ -6,6 +6,11 @@ locals {
   use_policies  = var.cache_mode == "policies"
   gate_enabled  = var.access_gate != null
 
+  # Proxy mode: the gate also fronts the API through this distribution. Off by default, in which
+  # case the frontend calls the API host directly and the gate's own authorizer checks the same
+  # signed cookies there.
+  gate_api_proxy_enabled = local.gate_enabled && var.access_gate.api_origin_domain_name != null
+
   # The SPA shell behavior follows cache_mode unless index_cache_mode overrides it, and reuses the
   # default behavior's policies unless index_cache_policies overrides them. Both default to the
   # inherited value so a consumer that sets neither plans exactly what it planned before.

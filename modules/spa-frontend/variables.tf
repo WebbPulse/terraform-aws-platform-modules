@@ -267,45 +267,67 @@ variable "viewer_request_function_arn" {
 # ---------------------------------------------------------------------------
 
 variable "access_gate" {
-  description = "Outputs of a staging-access-gate module instance, minus the origin verification header value, which is a separate input. When set, the distribution gains the login origin, the API origin with the origin verification header, ordered behaviors for the auth and API path patterns, an unsigned behavior for the SPA shell, trusted_key_groups on the default and API behaviors, and the gate's viewer-request function on every behavior. The secret is kept out of this object on purpose: an object with one sensitive member is sensitive as a whole at the module boundary, which would redact every path pattern, origin id and TTL read out of it and make the distribution plan a spurious in-place update where only the sensitivity marks differ."
+  description = "Outputs of a staging-access-gate module instance, minus the origin verification header value, which is a separate input. When set, the distribution gains the login origin, an ordered behavior for the auth path pattern, an unsigned behavior for the SPA shell, trusted_key_groups on the default behavior, and the gate's viewer-request function on every behavior. The api_origin_domain_name, api_path_pattern and origin_verify_header_name members are optional and null by default: leave them null and the frontend calls the API directly at its own hostname, which is the shape the gate's authorizer is built for. Set all three to also proxy the API through this distribution; see the api_origin_domain_name note below. The secret is kept out of this object on purpose: an object with one sensitive member is sensitive as a whole at the module boundary, which would redact every path pattern, origin id and TTL read out of it and make the distribution plan a spurious in-place update where only the sensitivity marks differ."
   type = object({
     key_group_id                                           = string
     viewer_request_function_arn                            = string
     login_origin_domain_name                               = string
     login_origin_access_control_id                         = string
     auth_path_pattern                                      = string
-    api_origin_domain_name                                 = string
-    api_path_pattern                                       = string
-    origin_verify_header_name                              = string
     cache_policy_id_caching_disabled                       = string
     origin_request_policy_id_all_viewer_except_host_header = string
     login_origin_id                                        = optional(string, "access-gate-login")
-    api_origin_id                                          = optional(string, "api")
+
+    # Proxy mode only. Null on all three means no API origin and no API behavior.
+    api_origin_domain_name    = optional(string)
+    api_path_pattern          = optional(string)
+    origin_verify_header_name = optional(string)
+    api_origin_id             = optional(string, "api")
   })
   default  = null
   nullable = true
 
   validation {
-    condition     = var.access_gate == null || can(regex("^/.+\\*$", var.access_gate.auth_path_pattern)) && can(regex("^/.+\\*$", var.access_gate.api_path_pattern))
-    error_message = "access_gate.auth_path_pattern and api_path_pattern must be CloudFront path patterns such as /_auth/* and /api/*."
+    condition     = var.access_gate == null || can(regex("^/.+\\*$", var.access_gate.auth_path_pattern))
+    error_message = "access_gate.auth_path_pattern must be a CloudFront path pattern such as /_auth/*."
   }
 
   validation {
-    condition     = var.access_gate == null || (var.access_gate.login_origin_id != var.origin_id && var.access_gate.api_origin_id != var.origin_id && var.access_gate.login_origin_id != var.access_gate.api_origin_id)
-    error_message = "access_gate.login_origin_id, access_gate.api_origin_id and origin_id must be three different strings."
+    condition = var.access_gate == null || (
+      (var.access_gate.api_origin_domain_name == null && var.access_gate.api_path_pattern == null && var.access_gate.origin_verify_header_name == null) ||
+      (var.access_gate.api_origin_domain_name != null && var.access_gate.api_path_pattern != null && var.access_gate.origin_verify_header_name != null)
+    )
+    error_message = "access_gate.api_origin_domain_name, api_path_pattern and origin_verify_header_name go together: set all three to proxy the API through this distribution, or none of them to have the frontend call the API host directly."
+  }
+
+  validation {
+    condition     = var.access_gate == null || var.access_gate.api_path_pattern == null || can(regex("^/.+\\*$", var.access_gate.api_path_pattern))
+    error_message = "access_gate.api_path_pattern must be a CloudFront path pattern such as /api/*."
+  }
+
+  validation {
+    condition     = var.access_gate == null || var.access_gate.login_origin_id != var.origin_id
+    error_message = "access_gate.login_origin_id and origin_id must be different strings; they are two origins on one distribution."
+  }
+
+  validation {
+    condition = var.access_gate == null || var.access_gate.api_origin_domain_name == null || (
+      var.access_gate.api_origin_id != var.origin_id && var.access_gate.api_origin_id != var.access_gate.login_origin_id
+    )
+    error_message = "In proxy mode access_gate.api_origin_id must differ from origin_id and from access_gate.login_origin_id."
   }
 }
 
 variable "access_gate_origin_verify_header_value" {
-  description = "Value of the origin verification header CloudFront sends to the API origin, normally module.gate.origin_verify_header_value. Required when access_gate is set and ignored otherwise. It is a top-level input rather than a member of access_gate so that its sensitive mark stays on this one value instead of spreading to every attribute of the object."
+  description = "Value of the origin verification header CloudFront sends to the API origin, normally module.gate.origin_verify_header_value. Required only in proxy mode, that is when access_gate sets api_origin_domain_name; ignored otherwise. It is a top-level input rather than a member of access_gate so that its sensitive mark stays on this one value instead of spreading to every attribute of the object."
   type        = string
   default     = null
   sensitive   = true
   nullable    = true
 
   validation {
-    condition     = var.access_gate == null || var.access_gate_origin_verify_header_value != null
-    error_message = "access_gate_origin_verify_header_value is required when access_gate is set: the API origin needs the header the gate's authorizer checks."
+    condition     = var.access_gate == null || var.access_gate.api_origin_domain_name == null || var.access_gate_origin_verify_header_value != null
+    error_message = "access_gate_origin_verify_header_value is required when access_gate sets api_origin_domain_name: the API origin needs the header the gate's authorizer checks."
   }
 }
 

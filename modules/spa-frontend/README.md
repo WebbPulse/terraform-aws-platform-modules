@@ -22,9 +22,20 @@ browser ── https://www.<domain>/anything
        │     403 / 404 from S3 ──► 200 /index.html
        └─ with access_gate set:
             /_auth/*     ──► login Lambda function URL origin
-            /api/*       ──► API host origin + origin verification header, signed cookies required
             /index.html  ──► S3 origin without the key group, so the error fallback can fetch it
+       └─ only in proxy mode (access_gate.api_* set):
+            /api/*       ──► API host origin + origin verification header, signed cookies required
 ```
+
+The gate has two shapes and this module supports both. **Direct subdomain is the default and the
+recommended one:** the frontend calls `https://api.staging.<domain>` itself, the gate's cookies are
+scoped to the staging apex so the browser sends them there, and the gate's API authorizer checks
+them. CloudFront carries only the sign-in wall, and this module renders no API origin and no
+`/api/*` behavior. **Proxy mode** is the alternative: set `api_origin_domain_name`,
+`api_path_pattern` and `origin_verify_header_name` on the `access_gate` object and the distribution
+also fronts the API at `/api/*` on the site's own hostname. That costs a second CloudFront hop per
+API call and a shared secret to rotate, so reach for it only when the frontend genuinely needs to
+be same-origin with the API.
 
 The module was written so that the two hand-written frontends in CarModPicker and
 WebbPulse-Portfolio can be moved into it with `moved` blocks and a plan of zero adds, zero
@@ -72,6 +83,18 @@ written with a managed cache policy. `index_cache_mode` and `index_cache_policie
 shell behavior pick its own model and its own policies; both default to whatever the default
 behavior uses, so a consumer that sets neither plans exactly what it planned before they existed.
 
+**The API proxy is optional and off.** The gate was originally wired with `/api/*` as an origin on
+this distribution, so the whole site including its API sat behind one hostname. Since the gate's
+authorizer accepts the signed cookies on the API host itself, that hop buys nothing for a
+first-party SPA and both consumers dropped it. So `access_gate.api_origin_domain_name`,
+`api_path_pattern` and `origin_verify_header_name` are optional and null by default: leave them out
+and the module renders the login origin, `/_auth/*`, the unsigned `/index.html` behavior and the
+key group on the default behavior, and nothing else. Set all three and the API origin and `/api/*`
+behavior come back exactly as they were, which is why a consumer already on proxy mode upgrades
+with no plan diff. `access_gate_origin_verify_header_value` is required only in proxy mode; in
+direct mode the module never sends the header, so demanding the secret would be asking a consumer
+to wire a value nothing reads.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -99,7 +122,7 @@ behavior uses, so a consumer that sets neither plans exactly what it planned bef
 | `error_caching_min_ttl` | Seconds the fallback is cached | `0` |
 | `viewer_request_function_arn` | CloudFront Function for the default behavior | `null` |
 | `access_gate` | staging-access-gate outputs, see below | `null` |
-| `access_gate_origin_verify_header_value` | The gate's origin verification header value, sensitive; required with `access_gate` | `null` |
+| `access_gate_origin_verify_header_value` | The gate's origin verification header value, sensitive; required only in proxy mode | `null` |
 | `create_dns_records` | Create alias records in `zone_id` | `false` |
 | `zone_id` | Hosted zone for the records | `null` |
 | `dns_records` | `{ label = hostname }`, every hostname also in `aliases` | `{}` |
@@ -109,7 +132,8 @@ behavior uses, so a consumer that sets neither plans exactly what it planned bef
 
 ### `access_gate`
 
-An object with the gate module's outputs of the same names plus the API host:
+An object with the gate module's outputs of the same names. The default shape, direct subdomain,
+carries no API members at all:
 
 ```hcl
 access_gate = var.staging_access_gate ? {
@@ -118,21 +142,39 @@ access_gate = var.staging_access_gate ? {
   login_origin_domain_name                               = module.gate[0].login_origin_domain_name
   login_origin_access_control_id                         = module.gate[0].login_origin_access_control_id
   auth_path_pattern                                      = module.gate[0].auth_path_pattern
-  api_origin_domain_name                                 = "api.staging.example.com"
-  api_path_pattern                                       = module.gate[0].api_path_pattern
-  origin_verify_header_name                              = module.gate[0].origin_verify_header_name
   cache_policy_id_caching_disabled                       = module.gate[0].cache_policy_id_caching_disabled
   origin_request_policy_id_all_viewer_except_host_header = module.gate[0].origin_request_policy_id_all_viewer_except_host_header
+} : null
+```
+
+The frontend build points at `https://api.staging.<domain>`. No
+`access_gate_origin_verify_header_value` is needed, because this distribution never talks to the
+API. What the module adds: the login origin, `trusted_key_groups` on the default behavior, an
+ordered behavior for the auth pattern, an ordered behavior for `/<default_root_object>` without the
+key group, and the gate function as viewer-request on all three behaviors.
+
+Optional key `login_origin_id` (default `access-gate-login`) names the login origin.
+
+#### Proxy mode
+
+To also front the API at `/api/*` on this distribution, add all three API members and the secret:
+
+```hcl
+access_gate = var.staging_access_gate ? {
+  # ... the seven members above, unchanged ...
+  api_origin_domain_name    = "api.staging.example.com"
+  api_path_pattern          = module.gate[0].api_path_pattern
+  origin_verify_header_name = module.gate[0].origin_verify_header_name
 } : null
 
 access_gate_origin_verify_header_value = one(module.gate[*].origin_verify_header_value)
 ```
 
-Optional keys `login_origin_id` (`access-gate-login`) and `api_origin_id` (`api`) name the two
-extra origins. When set, the module adds exactly what the gate README's consumer checklist lists:
-both origins, `trusted_key_groups` on the default and API behaviors, ordered behaviors for the
-auth pattern, the API pattern and `/<default_root_object>` (the last one without the key group),
-and the gate function as viewer-request on all four behaviors.
+The three go together: setting some but not all of them is a validation error, because an API
+origin without a path pattern or without the header the authorizer checks is never what a consumer
+means. `api_origin_id` (default `api`) names the extra origin. Proxy mode adds the API origin with
+the origin verification header and an ordered behavior for the API pattern with the key group, both
+between the auth behavior and the SPA shell behavior.
 
 The origin verification header value is deliberately **not** a member of this object. It is the
 separate `access_gate_origin_verify_header_value` input, declared `sensitive`. An object with one
@@ -168,6 +210,13 @@ plan that reads `Plan: 0 to add, 0 to change, 0 to destroy` (only "has moved to"
 module inherits the root `aws` provider, so `default_tags` and `ignore_tags` carry over. Merge to
 `staging` first and read the speculative plan on the staging workspace before touching `main`.
 
+Both hand-written distributions are on the direct subdomain shape today. Gated, each has origins
+`[<s3 origin>, access-gate-login]` and ordered behaviors `[/_auth/*, /index.html]`, with no API
+origin and no `/api/*` behavior. That is exactly what this module renders when the `access_gate`
+object omits `api_origin_domain_name`, `api_path_pattern` and `origin_verify_header_name`, so the
+gated staging plan is zero diff alongside the ungated production plan. Leave
+`access_gate_origin_verify_header_value` unset: nothing on the distribution reads it.
+
 Provider defaults that both estates already carry and that the module leaves untouched: OAC
 description `Managed by Terraform`, `http_version = http2`, no `comment`, no `web_acl_id`, no
 logging, `connection_attempts = 3`, `connection_timeout = 10`.
@@ -181,7 +230,7 @@ Function (`cloudfront_function.tf`) stay where they are.
 ```hcl
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
-  version = "~> 1.4"
+  version = "~> 1.5"
 
   name                       = "${local.prefix}-frontend"     # bucket carmodpicker-<env>-frontend
   origin_access_control_name = "${local.prefix}-frontend-oac"
@@ -255,13 +304,27 @@ resources and the two records they replace, plus `local.frontend_origin_id`, and
   `frontend_bucket` -> `module.frontend.bucket_name`.
 - `locals.tf`: `frontend_url = module.frontend.frontend_url` (same value as today).
 
-With the staging access gate on, pass the `access_gate` object shown above with
-`api_origin_domain_name = "api.${local.domain_name}"`, pass
-`access_gate_origin_verify_header_value = one(module.staging_access_gate[*].origin_verify_header_value)`,
-and give the gate `viewer_request_handler_js` built from
+With the staging access gate on, add the `access_gate` object in its direct subdomain form:
+
+```hcl
+  access_gate = local.staging_gate_enabled ? {
+    key_group_id                                           = module.staging_access_gate[0].key_group_id
+    viewer_request_function_arn                            = module.staging_access_gate[0].viewer_request_function_arn
+    login_origin_domain_name                               = module.staging_access_gate[0].login_origin_domain_name
+    login_origin_access_control_id                         = module.staging_access_gate[0].login_origin_access_control_id
+    auth_path_pattern                                      = module.staging_access_gate[0].auth_path_pattern
+    cache_policy_id_caching_disabled                       = module.staging_access_gate[0].cache_policy_id_caching_disabled
+    origin_request_policy_id_all_viewer_except_host_header = module.staging_access_gate[0].origin_request_policy_id_all_viewer_except_host_header
+    login_origin_id                                        = "${local.prefix}-access-gate-login"
+  } : null
+```
+
+`login_origin_id` has to be set here because the hand-written origin id is prefixed; the module's
+default is the bare `access-gate-login`. Give the gate `viewer_request_handler_js` built from
 `cloudfront_functions/uri_rewrite.js.tftpl` with `handler` renamed to `appHandler`. CarModPicker
 runs `cache_mode = "policies"` on every behavior, so it leaves `index_cache_mode` and
-`index_cache_policies` unset.
+`index_cache_policies` unset, and the `/index.html` behavior inherits all three policy ids, which
+is what the hand-written behavior has. Leave `access_gate_origin_verify_header_value` unset.
 
 ### WebbPulse-Portfolio
 
@@ -273,7 +336,7 @@ cannot do that with the provider that owns the bucket. Point them at the module'
 ```hcl
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
-  version = "~> 1.4"
+  version = "~> 1.5"
 
   name = "${local.prefix}-frontend" # bucket and OAC webbpulse-<env>-frontend
   # origin_id = "s3-frontend" and bucket_policy_sid = "AllowCloudFrontServicePrincipal" are the defaults.
@@ -332,14 +395,27 @@ Repoint:
   `frontend_bucket` -> `module.frontend.bucket_name`.
 - `locals.tf`: `frontend_url = module.frontend.frontend_url`.
 
-With the staging access gate on, pass the `access_gate` object with
-`api_origin_domain_name = local.api_host`, pass
-`access_gate_origin_verify_header_value = one(module.staging_access_gate[*].origin_verify_header_value)`,
-and hand the apex redirect code to the gate as `viewer_request_handler_js` (rename `handler` to
-`appHandler`); `aws_cloudfront_function.apex_redirect` can then be gated off in staging, since the
-module ignores `viewer_request_function_arn` while the gate is attached. Keep
-`index_cache_mode = "policies"` and the one-key `index_cache_policies` above: the SPA shell
-behavior only exists while the gate is on, and those two inputs are what make it match.
+With the staging access gate on, add the `access_gate` object in its direct subdomain form:
+
+```hcl
+  access_gate = local.staging_gate_enabled ? {
+    key_group_id                                           = module.staging_access_gate[0].key_group_id
+    viewer_request_function_arn                            = module.staging_access_gate[0].viewer_request_function_arn
+    login_origin_domain_name                               = module.staging_access_gate[0].login_origin_domain_name
+    login_origin_access_control_id                         = module.staging_access_gate[0].login_origin_access_control_id
+    auth_path_pattern                                      = module.staging_access_gate[0].auth_path_pattern
+    cache_policy_id_caching_disabled                       = module.staging_access_gate[0].cache_policy_id_caching_disabled
+    origin_request_policy_id_all_viewer_except_host_header = module.staging_access_gate[0].origin_request_policy_id_all_viewer_except_host_header
+  } : null
+```
+
+Portfolio's login origin id is the bare `access-gate-login`, which is the module default, so
+`login_origin_id` stays unset. Hand the apex redirect code to the gate as
+`viewer_request_handler_js` (rename `handler` to `appHandler`); `aws_cloudfront_function.apex_redirect`
+can then be gated off in staging, since the module ignores `viewer_request_function_arn` while the
+gate is attached. Keep `index_cache_mode = "policies"` and the one-key `index_cache_policies` above:
+the SPA shell behavior only exists while the gate is on, and those two inputs are what make it
+match. Leave `access_gate_origin_verify_header_value` unset.
 
 ### What could still show a diff
 
@@ -350,6 +426,10 @@ behavior only exists while the gate is on, and those two inputs are what make it
   change is planned. If a plan ever shows them, set `cache_mode = "forwarded_values"` only if the
   live distribution really has a forwarded_values block; otherwise report it as a module bug.
 - `trusted_key_groups` is computed and left null without a gate; adding a gate later sets it.
+- Moving an existing proxy-mode distribution to direct mode (dropping the three API members) is a
+  real change, not a no-op: it removes an origin and an ordered behavior. That is the intended
+  diff, and it is the diff both consumers already took by hand. Upgrading a consumer that is still
+  on proxy mode and keeps all three members set plans nothing.
 - The SPA shell behavior inherits `cache_mode` and the default behavior's three policy ids unless
   `index_cache_mode` and `index_cache_policies` are set. A live distribution that mixes the two
   models plans an update on that one behavior until they are; set them to whatever the console
@@ -359,5 +439,8 @@ behavior only exists while the gate is on, and those two inputs are what make it
 
 - `examples/spa-frontend-basic`: production-shaped site with a consumer-owned certificate, an apex
   redirect function and module-managed alias records.
-- `examples/spa-frontend-with-access-gate`: staging site behind the staging-access-gate module,
-  with `access_gate` toggled by a variable so the same code plans a plain site when it is false.
+- `examples/spa-frontend-with-access-gate`: staging site behind the staging-access-gate module on
+  the direct subdomain shape, with `access_gate` toggled by a variable so the same code plans a
+  plain site when it is false. This is the shape to copy.
+- `examples/spa-frontend-with-access-gate-proxy`: the same site with `/api/*` proxied through the
+  distribution instead, for the case where the frontend has to be same-origin with the API.
