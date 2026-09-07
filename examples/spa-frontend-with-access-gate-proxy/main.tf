@@ -3,11 +3,14 @@
 # outputs through as one object. Real consumers gate the access_gate argument on a variable so
 # the production workspace passes null and plans a no-op.
 #
-# This example uses the direct subdomain shape, which is the default: the browser calls
-# https://api.staging.example.com itself and the gate's authorizer on that API checks the same
-# signed cookies, because they are scoped to the staging apex. CloudFront carries only the sign-in
-# wall. See examples/spa-frontend-with-access-gate-proxy for the alternative where /api/* is
-# proxied through this distribution instead.
+# This example uses the proxy shape, which is the alternative: /api/* on the site's own hostname is
+# an extra origin on this distribution pointing at the API host, carrying the gate's origin
+# verification header, and requiring the same signed cookies. Prefer the direct subdomain shape in
+# examples/spa-frontend-with-access-gate unless the frontend must call the API same-origin, for
+# example because a third-party embed or an older browser makes cross-site cookies awkward.
+#
+# The cost of this shape is a second network hop through CloudFront on every API call, a shared
+# secret to rotate, and an origin request policy that has to strip the Host header.
 
 terraform {
   required_version = ">= 1.10"
@@ -42,7 +45,7 @@ variable "staging_access_users" {
 }
 
 locals {
-  name     = "example-staging-frontend"
+  name     = "example-staging-proxy-frontend"
   domain   = "staging.example.com"
   www_host = "www.${local.domain}"
   api_host = "api.${local.domain}"
@@ -127,7 +130,7 @@ module "gate" {
 
   count = var.staging_access_gate ? 1 : 0
 
-  name             = "example-staging"
+  name             = "example-staging-proxy"
   cookie_domain    = local.domain
   site_host        = local.www_host
   additional_hosts = [local.domain]
@@ -165,10 +168,16 @@ module "frontend" {
     cache_policy_id_caching_disabled                       = module.gate[0].cache_policy_id_caching_disabled
     origin_request_policy_id_all_viewer_except_host_header = module.gate[0].origin_request_policy_id_all_viewer_except_host_header
 
-    # api_origin_domain_name, api_path_pattern and origin_verify_header_name are left unset, so
-    # this distribution gets no API origin and no /api/* behavior. The frontend build points at
-    # https://api.staging.example.com and the API's own authorizer checks the gate's cookies.
+    # Proxy mode. These three go together: set all of them, or none of them.
+    api_origin_domain_name    = local.api_host
+    api_path_pattern          = module.gate[0].api_path_pattern
+    origin_verify_header_name = module.gate[0].origin_verify_header_name
   } : null
+
+  # The secret is its own input, not a member of access_gate: an object with one sensitive member
+  # is sensitive as a whole at the module boundary, which would redact every path pattern and
+  # origin id read out of it and make the distribution plan a spurious in-place update.
+  access_gate_origin_verify_header_value = one(module.gate[*].origin_verify_header_value)
 
   create_dns_records = true
   zone_id            = aws_route53_zone.staging.zone_id
@@ -183,8 +192,8 @@ output "frontend_url" {
 }
 
 output "frontend_api_base_url" {
-  description = "Base URL the frontend build calls. The API host directly, not a path on this distribution."
-  value       = "https://${local.api_host}"
+  description = "Base URL the frontend build calls. Same-origin, proxied through this distribution."
+  value       = "${module.frontend.frontend_url}/api"
 }
 
 output "hosted_ui_domain" {
