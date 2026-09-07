@@ -38,7 +38,7 @@ intend. Write `~> 1.3.0` instead to hold a minor and take patch releases only.
 | [`modules/lambda-function`](modules/lambda-function/) | An API Lambda's role, log group and function with tracing, logging config and code-drift ignore rules; code arrives as a local zip or an S3 object, IAM attachments stay in the app. |
 | [`modules/acm-certificate`](modules/acm-certificate/) | DNS validated ACM certificate whose validation records are written through a separate `aws.records` provider, so cross-account zones work. |
 | [`modules/dynamodb-tables`](modules/dynamodb-tables/) | An application's DynamoDB tables as one map: keys, GSIs, TTL, PITR, deletion protection, optional streams and encryption. |
-| [`modules/api-alarms`](modules/api-alarms/) | SNS topic with email subscriptions plus CloudWatch alarms for Lambda errors and throttles, HTTP API 5xx and integration latency, and per-table DynamoDB throttles. |
+| [`modules/api-alarms`](modules/api-alarms/) | SNS topic with email subscriptions plus CloudWatch alarms for Lambda errors and throttles, HTTP API 5xx and integration latency, and DynamoDB throttles either as one alarm per environment or one per table. |
 | [`modules/app-secrets`](modules/app-secrets/) | A map of Secrets Manager secrets in five shapes (generated, given, JSON, placeholder, empty) with a ready-made read policy for the app role. |
 
 Each module README carries an "Adoption" section with the `moved` blocks and variable values that

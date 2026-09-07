@@ -124,3 +124,47 @@ resource "aws_cloudwatch_metric_alarm" "dynamodb_throttles" {
     }
   }
 }
+
+# One alarm for the whole environment, on read plus write throttle events across every table in
+# the account and Region. Two Metrics Insights queries are summed by metric math, so a table that
+# throttles reads and a table that throttles writes both raise this one alarm.
+#
+# SCHEMA("AWS/DynamoDB", TableName) matches only the series carrying TableName and nothing else,
+# which is the table level metric. That excludes the per index series, which carry
+# GlobalSecondaryIndexName as well, so an index is not counted twice against its table.
+#
+# The queries are re-resolved on every evaluation, so a table created after the apply is covered
+# without a Terraform change and a deleted table drops out on its own.
+
+resource "aws_cloudwatch_metric_alarm" "dynamodb_aggregate_throttles" {
+  count = var.dynamodb_aggregate_alarm ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-dynamodb-throttles"
+  alarm_description   = "DynamoDB read or write throttle events on any table in the account"
+  evaluation_periods  = var.dynamodb_aggregate_evaluation_periods
+  threshold           = var.dynamodb_aggregate_threshold
+  comparison_operator = var.comparison_operator
+  treat_missing_data  = var.treat_missing_data
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.ok_actions
+  tags                = var.tags
+
+  metric_query {
+    id          = "throttles"
+    expression  = "reads + writes"
+    label       = "ThrottleEvents"
+    return_data = true
+  }
+
+  metric_query {
+    id         = "reads"
+    expression = "SELECT SUM(ReadThrottleEvents) FROM SCHEMA(\"AWS/DynamoDB\", TableName)"
+    period     = var.dynamodb_aggregate_period
+  }
+
+  metric_query {
+    id         = "writes"
+    expression = "SELECT SUM(WriteThrottleEvents) FROM SCHEMA(\"AWS/DynamoDB\", TableName)"
+    period     = var.dynamodb_aggregate_period
+  }
+}

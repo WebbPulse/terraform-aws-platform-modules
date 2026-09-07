@@ -21,6 +21,7 @@ output "alarm_names" {
     [for a in aws_cloudwatch_metric_alarm.api_5xx : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_throttles : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles : a.alarm_name],
   ))
 }
 
@@ -32,6 +33,7 @@ output "alarm_arns" {
     [for a in aws_cloudwatch_metric_alarm.api_5xx : a.arn],
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.arn],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_throttles : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles : a.arn],
   ))
 }
 
@@ -54,4 +56,9 @@ output "api_alarm_names" {
 output "dynamodb_alarm_names" {
   description = "DynamoDB throttle alarm names keyed by the dynamodb_tables key that produced them."
   value       = { for k, a in aws_cloudwatch_metric_alarm.dynamodb_throttles : k => a.alarm_name }
+}
+
+output "dynamodb_aggregate_alarm_name" {
+  description = "Name of the aggregate DynamoDB throttle alarm, null when dynamodb_aggregate_alarm is false."
+  value       = one(aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles[*].alarm_name)
 }

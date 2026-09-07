@@ -3,7 +3,7 @@
 # the module owns the topic, the subscriptions and the alarms.
 #
 # Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-# with version = "~> 1.6"; the relative path here keeps the example runnable from the repository.
+# with version = "~> 1.7"; the relative path here keeps the example runnable from the repository.
 #
 # Applying this sends a confirmation email to every address in notification_emails. Until an
 # address clicks the link its subscription stays pending and it receives no alarm notifications.
@@ -110,9 +110,11 @@ module "alarms" {
   lambda_function_name = aws_lambda_function.api.function_name
   http_api_id          = module.api.api_id
 
-  # Keyed the same way the tables are, so the alarm addresses follow the table addresses. The
-  # value is the real table name, which becomes "<table name>-throttles".
-  dynamodb_tables = { for k, t in aws_dynamodb_table.tables : k => t.name }
+  # One "<name_prefix>-dynamodb-throttles" alarm covering read and write throttling across every
+  # table in the account, rather than one alarm per table. It needs no table list, so
+  # dynamodb_tables stays empty; the per table shape is still available by populating it instead.
+  dynamodb_aggregate_alarm = true
+  dynamodb_tables          = {}
 
   # Every threshold, period and evaluation count already defaults to the value shown here; they
   # are spelled out so the example doubles as the list of knobs.
@@ -121,7 +123,7 @@ module "alarms" {
   api_5xx_threshold            = 0
   api_latency_statistic        = "p99"
   api_latency_threshold_ms     = 10000
-  dynamodb_throttles_threshold = 0
+  dynamodb_aggregate_threshold = 0
 }
 
 output "alarm_topic_arn" {
