@@ -16,6 +16,10 @@ locals {
 
   ssm_prefix = "/${var.name}/access-gate"
 
+  # Passing the distribution ARN would be a cycle for most consumers (the distribution consumes this
+  # module's outputs), so the default scopes the grant to every distribution in the account.
+  login_permission_source_arn = coalesce(var.cloudfront_distribution_arn, "arn:${data.aws_partition.current.partition}:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/*")
+
   invite_login_url = coalesce(var.invite_login_url, "https://${var.site_host}/")
 
   # Function URLs look like https://<id>.lambda-url.<region>.on.aws/; CloudFront wants the bare host.
