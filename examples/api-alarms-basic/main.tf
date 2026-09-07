@@ -3,7 +3,8 @@
 # the module owns the topic, the subscriptions and the alarms.
 #
 # Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-# with version = "~> 1.7"; the relative path here keeps the example runnable from the repository.
+# with version = "~> 1.7", and the http-api module in front of it with version = "~> 2.0" for the
+# integrations map; the relative paths here keep the example runnable from the repository.
 #
 # Applying this sends a confirmation email to every address in notification_emails. Until an
 # address clicks the link its subscription stays pending and it receives no alarm notifications.
@@ -79,9 +80,16 @@ resource "aws_lambda_function" "api" {
 module "api" {
   source = "../../modules/http-api"
 
-  name                 = "${local.name}-api"
-  lambda_invoke_arn    = aws_lambda_function.api.invoke_arn
-  lambda_function_name = aws_lambda_function.api.function_name
+  name = "${local.name}-api"
+
+  # One backend behind the API. The key "legacy" is the module's default_integration, so this one
+  # entry serves every request through the $default route.
+  integrations = {
+    legacy = {
+      lambda_function_name = aws_lambda_function.api.function_name
+      lambda_invoke_arn    = aws_lambda_function.api.invoke_arn
+    }
+  }
 }
 
 # --- The tables -------------------------------------------------------------------------------
