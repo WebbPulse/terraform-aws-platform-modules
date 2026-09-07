@@ -42,9 +42,12 @@ module "alarms" {
   name_prefix         = local.prefix
   notification_emails = ["alerts@example.com"]
 
-  lambda_function_name = aws_lambda_function.api.function_name
+  # With lambda-function and dynamodb-tables adopted, wire the module outputs. An app that still
+  # owns those resources passes aws_lambda_function.api.function_name and
+  # { for k, t in aws_dynamodb_table.tables : k => t.name } instead.
+  lambda_function_name = module.lambda_api.function_name
   http_api_id          = module.api.api_id
-  dynamodb_tables      = { for k, t in aws_dynamodb_table.tables : k => t.name }
+  dynamodb_tables      = module.dynamodb.table_names
 }
 ```
 
@@ -154,12 +157,14 @@ module "alarms" {
   name_prefix         = local.prefix
   notification_emails = ["tyler@webbpulse.com", "tylert2610@gmail.com"]
 
-  lambda_function_name = aws_lambda_function.api.function_name
+  lambda_function_name = module.lambda_api.function_name
   http_api_id          = module.api.api_id
 
-  # Keyed by the dynamodb_tables.json key so each alarm keeps the address it has in state; the
-  # value is the real table name, which is what "<table name>-throttles" is built from.
-  dynamodb_tables = { for k, t in aws_dynamodb_table.tables : k => t.name }
+  # module.dynamodb.table_names is keyed by the dynamodb_tables.json key so each alarm keeps the
+  # address it has in state; the value is the real table name, which is what
+  # "<table name>-throttles" is built from. Before adopting dynamodb-tables this was
+  # { for k, t in aws_dynamodb_table.tables : k => t.name }.
+  dynamodb_tables = module.dynamodb.table_names
 
   # Every threshold, period and evaluation count is the module default and matches state, so
   # none of them is passed here.
@@ -237,12 +242,13 @@ module "alarms" {
   name_prefix         = local.prefix
   notification_emails = ["tyler@webbpulse.com", "tylert2610@gmail.com"]
 
-  lambda_function_name = local.lambda_function_name
+  lambda_function_name = module.lambda_api.function_name
   http_api_id          = module.api.api_id
 
-  # local.dynamodb_tables is already keyed by entity, and aws_dynamodb_table.this names each
-  # table "${local.prefix}-${key}", so this is the same shape CarModPicker passes.
-  dynamodb_tables = { for k, t in aws_dynamodb_table.this : k => t.name }
+  # module.dynamodb.table_names is keyed by entity and each table is named
+  # "${local.prefix}-${key}", so this is the same shape CarModPicker passes. Before adopting
+  # dynamodb-tables this was { for k, t in aws_dynamodb_table.this : k => t.name }.
+  dynamodb_tables = module.dynamodb.table_names
 }
 ```
 
