@@ -7,9 +7,10 @@ locals {
   callback_urls = [for h in local.all_hosts : "https://${h}${var.auth_path_prefix}callback"]
   logout_urls   = [for h in local.all_hosts : "https://${h}${var.auth_path_prefix}logged-out"]
 
-  # AWS provider 6.x exposes the region as `region`; 5.x only has the deprecated-in-6 `name`.
-  # try() picks whichever exists so the module validates cleanly on both majors.
-  region = try(data.aws_region.current.region, data.aws_region.current.name)
+  # AWS provider 6.x exposes the region as `region`; 5.x only has `name` and `id`. A schema-level
+  # unknown attribute is a static error that try() cannot catch, so `id` is the one spelling that
+  # resolves on both majors (6.x only warns about it).
+  region = data.aws_region.current.id
 
   hosted_ui_domain = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${local.region}.amazoncognito.com"
 
