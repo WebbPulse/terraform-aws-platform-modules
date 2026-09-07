@@ -358,6 +358,22 @@ external packages the estate actually depends on becomes enumerable in one place
 
 ## Fixed
 
+- **v2.0.2: the publish grant is split by resource scope.** Before this release, every publisher
+  action went into one statement on `Resource = "*"`, and CodeArtifact rejected the whole policy at
+  apply time with `ValidationException: Policy document isn't a valid policy document`. No plan
+  catches it, because it is the service validating rather than Terraform, and it only bites a
+  repository that actually has a publish grant. `codeartifact:PublishPackageVersion` is a
+  package-level action, "the resource used with this action must be a package"
+  ([Repository policies][repo-policies]), and the same page's NuGet note tells a publisher to add
+  `ReadFromRepository` "and specify the repository resource". Those two cannot share a statement.
+  The module now renders `PublishPackageVersion` and `PutPackageMetadata` on the repository's
+  package ARN, `arn:<partition>:codeartifact:<region>:<account>:package/<domain>/<repository>/*`,
+  under the `Publish` Sid, and every other publisher action on `"*"` under `PublishRepositoryAccess`.
+  The package ARN is derived from the repository's own ARN rather than assembled from
+  `aws_region`/`aws_caller_identity`, whose attributes moved between provider majors while this
+  module supports both. A repository with no publish grant is unaffected and its policy is
+  unchanged.
+
 - **v2.0.1: unknown publisher ARNs no longer fail the plan.** Before this release, passing
   `publisher_principal_arns` values that are unknown at plan time, an ARN read off an
   `aws_iam_role` or another module's output rather than written as a literal, failed the plan with

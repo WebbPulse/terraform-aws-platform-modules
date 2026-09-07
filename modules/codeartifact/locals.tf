@@ -111,12 +111,55 @@ locals {
     Resource = "*"
   }
 
-  repository_publish_statement = {
-    Sid       = "Publish"
-    Effect    = "Allow"
-    Principal = { AWS = local.publisher_principal_value }
-    Action    = sort(distinct(var.publisher_repository_actions))
-    Resource  = "*"
+  # Publish actions are not all scoped the same way, and CodeArtifact rejects the whole policy if
+  # they are treated as if they were. "The resource used with this action must be a package" is
+  # stated for PublishPackageVersion, and the same page's note on NuGet tells a publisher to add
+  # ReadFromRepository "and specify the repository resource". So the two halves need different
+  # Resource values, and a single statement on "*" fails with
+  # "ValidationException: Policy document isn't a valid policy document" at apply time. The plan
+  # cannot catch it: this is the service validating, not Terraform.
+  #
+  # The package ARN is arn:aws:codeartifact:<region>:<account>:package/<domain>/<repository>/*,
+  # which is every package of every format in that one repository.
+  package_scoped_publish_actions = toset([
+    "codeartifact:PublishPackageVersion",
+    "codeartifact:PutPackageMetadata",
+  ])
+
+  publish_package_actions = sort([
+    for a in distinct(var.publisher_repository_actions) : a
+    if contains(local.package_scoped_publish_actions, a)
+  ])
+
+  publish_repository_actions = sort([
+    for a in distinct(var.publisher_repository_actions) : a
+    if !contains(local.package_scoped_publish_actions, a)
+  ])
+
+  # One statement per repository, because the package ARN names the repository it applies to.
+  repository_publish_statements = {
+    for k in local.publish_keys : k => concat(
+      length(local.publish_package_actions) > 0 ? [{
+        Sid       = "Publish"
+        Effect    = "Allow"
+        Principal = { AWS = local.publisher_principal_value }
+        Action    = local.publish_package_actions
+        # Derived from the repository's own ARN rather than assembled from partition, region and
+        # account data sources: those attributes moved between provider major versions, and this
+        # module supports both. A repository ARN is
+        # arn:<partition>:codeartifact:<region>:<account>:repository/<domain>/<repository>, so
+        # replacing the one ":repository/" segment yields the package ARN for every package of
+        # every format in that repository.
+        Resource = "${replace(local.repository_arns[k], ":repository/", ":package/")}/*"
+      }] : [],
+      length(local.publish_repository_actions) > 0 ? [{
+        Sid       = "PublishRepositoryAccess"
+        Effect    = "Allow"
+        Principal = { AWS = local.publisher_principal_value }
+        Action    = local.publish_repository_actions
+        Resource  = "*"
+      }] : [],
+    )
   }
 
   # concat unifies the types of the elements it is given. The read and publish statements are the
@@ -135,7 +178,7 @@ locals {
       Statement = [
         for statement in concat(
           local.has_readers ? [jsonencode(local.repository_read_statement)] : [],
-          contains(local.publish_keys, k) ? [jsonencode(local.repository_publish_statement)] : [],
+          contains(local.publish_keys, k) ? [for s in local.repository_publish_statements[k] : jsonencode(s)] : [],
         ) : jsondecode(statement)
       ]
     })
