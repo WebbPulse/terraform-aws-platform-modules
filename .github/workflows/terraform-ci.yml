@@ -134,9 +134,10 @@ jobs:
       # Examples reference the published address
       # app.terraform.io/WebbPulse/platform-modules/aws//modules/<name>, because that is what
       # a real consumer writes. Resolving it needs an HCP Terraform API token, and this
-      # workflow holds no credentials. A generated override file repoints those sources at
-      # this checkout, which is also more useful: the pull request gets validated against the
-      # module code it changes rather than against the last published release.
+      # workflow holds no credentials. This rewrites those source arguments in the checked
+      # out copy to point at ../../modules/<name>, which is also more useful: the pull
+      # request gets validated against the module code it changes rather than against the
+      # last published release. The runner throws the working copy away afterwards.
       - name: Point registry module sources at this checkout
         run: python3 .github/scripts/local_module_override.py "${{ matrix.dir }}" .
 
