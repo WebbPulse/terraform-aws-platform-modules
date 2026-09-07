@@ -51,7 +51,7 @@ the wiring below, because a CloudFront distribution is a single resource that th
 partially manage. `examples/staging-access-gate-complete` at the repository root shows all of it.
 
 1. `module "gate"` with `name`, `cookie_domain` (the staging apex), `site_host` (the www host),
-   `allowed_emails`, `cloudfront_distribution_arn`, `http_api_id` and, if the app has one, its
+   `allowed_emails`, `http_api_id` and, if the app has one, its
    existing viewer-request logic as `viewer_request_handler_js` defining `function appHandler(event)`.
 2. On the distribution:
    - an `origin` for the login function URL using `login_origin_domain_name` and
@@ -85,7 +85,7 @@ partially manage. `examples/staging-access-gate-complete` at the repository root
 | `auth_path_prefix` | Path routed to the login Lambda | `/_auth/` |
 | `api_path_prefix` | Path treated as API traffic by the function | `/api/` |
 | `viewer_request_handler_js` | JavaScript defining `appHandler(event)` | passthrough |
-| `cloudfront_distribution_arn` | Distribution allowed to invoke the login function URL | required |
+| `cloudfront_distribution_arn` | Narrow the login function URL permission to one distribution; leave unset when that distribution consumes this module (cycle) | any in the account |
 | `http_api_id` | HTTP API to attach the origin-verify authorizer to | `null` |
 | `origin_verify_header_name` | Header CloudFront adds and the authorizer checks | `x-origin-verify` |
 | `invite_login_url` | URL in the invitation email | `https://<site_host>/` |

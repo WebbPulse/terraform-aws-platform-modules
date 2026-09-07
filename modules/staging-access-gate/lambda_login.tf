@@ -91,6 +91,6 @@ resource "aws_lambda_permission" "login_url" {
   action                 = "lambda:InvokeFunctionUrl"
   function_name          = aws_lambda_function.login.function_name
   principal              = "cloudfront.amazonaws.com"
-  source_arn             = var.cloudfront_distribution_arn
+  source_arn             = coalesce(var.cloudfront_distribution_arn, "arn:${data.aws_partition.current.partition}:cloudfront::${data.aws_caller_identity.current.account_id}:distribution/*")
   function_url_auth_type = "AWS_IAM"
 }
