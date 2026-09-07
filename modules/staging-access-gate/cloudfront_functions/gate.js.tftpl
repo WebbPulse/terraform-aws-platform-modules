@@ -1,0 +1,124 @@
+// Access gate viewer-request function. Rendered by Terraform from gate.js.tftpl.
+//
+// Order of operations:
+//   1. <auth_prefix>*  -> pass straight through to the login origin (the app handler never runs).
+//   2. <api_prefix>*   -> session check only; no session gives 401 JSON, never a redirect.
+//   3. everything else -> appHandler(event) first (redirects, URI rewrites), then the session check;
+//                          no session gives a 302 to <auth_prefix>login?next=<original path and query>.
+//
+// The session check only looks at the CloudFront-Policy cookie's expiry. The signature itself is
+// verified by CloudFront through the trusted key group on each protected behavior; this function
+// exists so that a browser with no or an expired cookie sees the login page instead of a bare 403.
+
+${app_handler}
+
+var AUTH_PREFIX = '${auth_prefix}';
+var API_PREFIX = '${api_prefix}';
+var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+// CloudFront's URL-safe base64 (- _ ~ in place of + = /) to a string. Policies are ASCII JSON.
+function decodePolicy(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/');
+  var out = '';
+  var buf = 0;
+  var bits = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (c === '=') {
+      break;
+    }
+    var v = B64.indexOf(c);
+    if (v < 0) {
+      return '';
+    }
+    buf = (buf << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode((buf >> bits) & 255);
+      buf = buf & ((1 << bits) - 1);
+    }
+  }
+  return out;
+}
+
+function sessionLooksLive(request) {
+  var cookies = request.cookies || {};
+  var policy = cookies['CloudFront-Policy'];
+  if (!policy || !cookies['CloudFront-Signature'] || !cookies['CloudFront-Key-Pair-Id']) {
+    return false;
+  }
+  var match = decodePolicy(policy.value).match(/"AWS:EpochTime":\s*(\d+)/);
+  if (!match) {
+    return false;
+  }
+  // 30 seconds of slack so a session that is about to lapse is renewed before an API call fails.
+  return parseInt(match[1], 10) > Math.floor(Date.now() / 1000) + 30;
+}
+
+function queryString(request) {
+  var parts = [];
+  var qs = request.querystring || {};
+  for (var k in qs) {
+    var entry = qs[k];
+    var ek = encodeURIComponent(k);
+    if (entry.multiValue) {
+      for (var i = 0; i < entry.multiValue.length; i++) {
+        parts.push(ek + '=' + encodeURIComponent(entry.multiValue[i].value));
+      }
+    } else {
+      parts.push(ek + '=' + encodeURIComponent(entry.value));
+    }
+  }
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
+async function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+
+  if (uri.startsWith(AUTH_PREFIX)) {
+    if (request.headers.host) {
+      request.headers['x-forwarded-host'] = { value: request.headers.host.value };
+    }
+    return request;
+  }
+
+  var next = uri + queryString(request);
+  var isApi = uri.startsWith(API_PREFIX);
+
+  if (!isApi) {
+    var result = await appHandler(event);
+    if (result && result.statusCode) {
+      return result;
+    }
+    if (result) {
+      request = result;
+    }
+  }
+
+  if (sessionLooksLive(request)) {
+    return request;
+  }
+
+  if (isApi) {
+    return {
+      statusCode: 401,
+      statusDescription: 'Unauthorized',
+      headers: {
+        'content-type': { value: 'application/json' },
+        'cache-control': { value: 'no-store' },
+      },
+      body: '{"detail":"Staging access session required. Reload the page to sign in."}',
+    };
+  }
+
+  return {
+    statusCode: 302,
+    statusDescription: 'Found',
+    headers: {
+      location: { value: AUTH_PREFIX + 'login?next=' + encodeURIComponent(next) },
+      'cache-control': { value: 'no-store' },
+    },
+  };
+}

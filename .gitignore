@@ -1,0 +1,6 @@
+.build/
+.terraform/
+*.tfstate*
+modules/*/test/node_modules/
+modules/*/test/package*.json
+modules/*/test/gate.rendered.js
