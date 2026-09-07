@@ -154,11 +154,12 @@ The rule semantics the module relies on, from
   cannot be empty.
 - **`tagPrefixList` matches on prefix; `tagPatternList` matches a wildcard pattern.** AWS documents
   `tagPatternList` as the best practice of the two, and `tagPrefixList` as what you use when you
-  are not specifying a pattern list. This module writes `tagPrefixList`, because the estate's tags
-  are `sha-<commit>` and a prefix says exactly that with no wildcard to get wrong. A repository
-  that needs pattern matching passes a complete document through its `lifecycle_policy` field.
-  Both keys are accepted by the AWS provider, which passes the document through as an opaque
-  string.
+  are not specifying a pattern list. Each is required only when the other is absent. This module
+  writes `tagPrefixList`, because the estate's tags are `sha-<commit>` and a prefix says exactly
+  that with no wildcard to get wrong. A repository that needs pattern matching passes a complete
+  document through its `lifecycle_policy` field; `tagPatternList` allows at most four wildcards per
+  string. Both keys are accepted by the AWS provider, which passes the document through as an
+  opaque string.
 - **A rule whose `tagStatus` is `any` must have the highest `rulePriority` and be evaluated last.**
   Neither generated rule uses `any`, but a hand-written `lifecycle_policy` that adds one has to
   respect this.
@@ -166,6 +167,9 @@ The rule semantics the module relies on, from
   validations enforce at plan time rather than at apply time.
 - **`imageCountMoreThan` counts images in the repository**, which is the whole reason this module
   is one repository per domain rather than one per environment.
+- **`storageClass` is omitted, so both rules act on `standard` images.** The docs default it to
+  `standard`, which is the only value `imageCountMoreThan` and `sinceImagePushed` support. A rule
+  that transitions images to archive storage needs a hand-written `lifecycle_policy`.
 
 Untagged images are what accumulate silently: every time a tag is moved or an image is replaced,
 the previous one becomes untagged and keeps billing. One day is enough of a window to notice a bad
@@ -248,8 +252,11 @@ the moving tag existed to answer. A repository that genuinely needs a moving tag
 
 ## Scanning
 
-`scan_on_push = true` turns on **basic scanning**, which is free and scans operating system
-packages against the CVE database at push time.
+`scan_on_push = true` turns on **basic scanning**, which scans operating system packages for CVEs
+at push time and carries no charge on the ECR pricing page. AWS documents it as sourcing more than
+50 data feeds, including vendor security advisories, the National Vulnerability Database and MITRE.
+An image can be scanned once per 24 hours, and a registry can scan up to 100,000 images per
+24 hours.
 
 **Enhanced scanning is out of scope for this module, on purpose.** It is a different feature: it is
 Amazon Inspector, it covers language packages as well as OS packages, and it continuously rescans
@@ -258,7 +265,7 @@ registry at the account level**, in the ECR private registry scanning configurat
 repository, so it is not a per-repository input this module could sensibly own. Second, it bills
 per image scanned and per rescan, against every image in the registry, which is exactly the
 cost-at-rest shape this estate is avoiding. Basic scanning plus a dependency audit in CI covers the
-same ground for nothing. Revisit it if the estate ever handles third-party data.
+same ground at no additional ECR charge. Revisit it if the estate ever handles third-party data.
 
 ## Encryption
 
@@ -279,11 +286,13 @@ Verified on the [ECR pricing page](https://aws.amazon.com/ecr/pricing/) on 2026-
 | Private repository storage | **$0.10 per GB-month** |
 | Data transfer, ECR to Lambda in the same region | **$0.00 per GB** |
 | Repositories themselves | free, ECR bills storage only |
-| Basic scanning | free |
+| Basic scanning | no line item on the ECR pricing page |
 
 The pricing page states that data transferred between ECR and other services in the same region,
 naming AWS Lambda among them, is free of charge. Repository count does not enter the bill, which is
-what makes one repository per domain the cheap option as well as the correct one.
+what makes one repository per domain the cheap option as well as the correct one. Basic scanning
+carries no charge on the ECR pricing page, unlike enhanced scanning, which Amazon Inspector bills
+per scan and per rescan.
 
 **ECR bills unique layers, not the sum of image sizes.** A shared base image and a shared dependency
 install are one set of layers every domain image references; only the thin application layer
@@ -298,6 +307,54 @@ is simpler besides.
 
 The dominant term is retained history, which is what `keep_last_tagged_images` controls. Halving it
 roughly halves storage and saves a few cents, which is not worth trading rollback headroom for.
+
+## Adoption
+
+This module ships from 1.8.0, so consumers pin `version = "~> 1.8"`.
+
+Unlike the other modules in this repository, there is usually nothing to adopt: the per-domain
+Lambda migration creates these repositories new, so the first plan is a create and there is no
+`moved` block to write. Land it on `staging` first and read the speculative plan: it must show only
+the repositories and their lifecycle policies, `0 to change, 0 to destroy`, and no
+`aws_ecr_repository_policy` at all.
+
+If an application already has hand-written `aws_ecr_repository` resources, they move in without a
+replace, because every attribute this module sets is either already on them or not force-new:
+
+```hcl
+module "registry" {
+  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/ecr-repository"
+  version = "~> 1.8"
+
+  name_prefix  = local.prefix
+  repositories = { parts = {}, users = {} }
+}
+
+moved {
+  from = aws_ecr_repository.parts
+  to   = module.registry.aws_ecr_repository.this["parts"]
+}
+
+moved {
+  from = aws_ecr_lifecycle_policy.parts
+  to   = module.registry.aws_ecr_lifecycle_policy.this["parts"]
+}
+```
+
+Three things to check before the move, because each of them replaces the repository or changes it
+in place rather than moving cleanly:
+
+- **The name must already match `<name_prefix>/<key>`.** `name` is force-new, so a repository
+  currently called `parts` cannot become `carmodpicker-production/parts` without being destroyed
+  and recreated, which loses every image. Adopt it under a `name_prefix` of `""` and the key
+  `parts`, or accept the recreate on a repository whose images CI can rebuild.
+- **`encryption_type` must match what the repository was created with.** Encryption is fixed at
+  creation and is force-new.
+- **An existing repository policy written by Lambda is not in Terraform state.** Leave
+  `repository_policy_principals` empty and the module writes no `aws_ecr_repository_policy`, so
+  Lambda's `LambdaECRImageRetrievalPolicy` statement is left alone. Setting the input would make
+  Terraform own the whole policy document and drop that statement on the next apply, so a
+  same-account estate should leave it empty.
 
 ## Notes
 
