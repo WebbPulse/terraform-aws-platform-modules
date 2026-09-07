@@ -1,6 +1,8 @@
 # Minimal consumer: an existing S3-backed SPA distribution and an existing HTTP API with a custom
-# domain, both moved behind the gate. Real consumers gate every block below on a variable so the
-# production plan is a no-op; see the module README.
+# domain, both moved behind the gate. The SPA calls https://api.staging.example.com directly, the
+# way it does in production; the gate's authorizer verifies the same signed cookies the browser
+# already holds, so the API never has to be proxied through CloudFront. Real consumers gate every
+# block below on a variable so the production plan is a no-op; see the module README.
 
 module "gate" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
@@ -35,23 +37,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  origin {
-    domain_name = "api.staging.example.com"
-    origin_id   = "api"
-
-    custom_origin_config {
-      http_port              = 80
-      https_port             = 443
-      origin_protocol_policy = "https-only"
-      origin_ssl_protocols   = ["TLSv1.2"]
-    }
-
-    custom_header {
-      name  = module.gate.origin_verify_header_name
-      value = module.gate.origin_verify_header_value
-    }
-  }
-
   default_cache_behavior {
     target_origin_id       = "s3-frontend"
     viewer_protocol_policy = "redirect-to-https"
@@ -74,22 +59,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     cached_methods           = ["GET", "HEAD"]
     cache_policy_id          = module.gate.cache_policy_id_caching_disabled
     origin_request_policy_id = module.gate.origin_request_policy_id_all_viewer_except_host_header
-
-    function_association {
-      event_type   = "viewer-request"
-      function_arn = module.gate.viewer_request_function_arn
-    }
-  }
-
-  ordered_cache_behavior {
-    path_pattern             = module.gate.api_path_pattern
-    target_origin_id         = "api"
-    viewer_protocol_policy   = "https-only"
-    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
-    cached_methods           = ["GET", "HEAD"]
-    cache_policy_id          = module.gate.cache_policy_id_caching_disabled
-    origin_request_policy_id = module.gate.origin_request_policy_id_all_viewer_except_host_header
-    trusted_key_groups       = [module.gate.key_group_id]
 
     function_association {
       event_type   = "viewer-request"
@@ -120,8 +89,23 @@ resource "aws_apigatewayv2_api" "api" {
   name                         = "example-staging-api"
   protocol_type                = "HTTP"
   disable_execute_api_endpoint = true
+
+  # The browser calls this API from the SPA host, so the origin must be listed explicitly and
+  # credentials allowed; a wildcard origin is not permitted alongside credentials. The gate's
+  # authorizer lets OPTIONS through so this preflight answer is the one the browser sees.
+  cors_configuration {
+    allow_origins     = ["https://www.staging.example.com"]
+    allow_methods     = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    allow_headers     = ["content-type", "authorization"]
+    allow_credentials = true
+    max_age           = 300
+  }
 }
 
+# Every route carries the gate authorizer. It admits CORS preflights, the origin verification
+# header (for pipelines and health checks, value in module.gate.origin_verify_ssm_parameter_name),
+# and the gate's own signed cookies, which the browser sends because they are scoped to
+# Domain=staging.example.com.
 resource "aws_apigatewayv2_route" "default" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "$default"

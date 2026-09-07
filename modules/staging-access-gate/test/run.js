@@ -120,12 +120,85 @@ function ev(uri, opts={}) {
   console.log('login lambda tests passed');
 
   // ---- authorizer
+  // A throwaway key pair, signed the way the login Lambda signs, so the authorizer is exercised
+  // against real RSA-SHA1 signatures rather than a stub.
+  const akey = crypto.generateKeyPairSync('rsa', {modulusLength: 2048});
+  const apriv = akey.privateKey.export({type:'pkcs1', format:'pem'});
+  const apub = akey.publicKey.export({type:'spki', format:'pem'});
+  const signPolicy = (exp, resource='https://*staging.example.com/*') => {
+    const policy = JSON.stringify({Statement:[{Resource: resource, Condition:{DateLessThan:{'AWS:EpochTime': exp}}}]});
+    return {
+      policy: cfsafe(Buffer.from(policy, 'utf8')),
+      signature: cfsafe(crypto.createSign('RSA-SHA1').update(policy, 'utf8').sign(apriv)),
+    };
+  };
+  const gateCookies = (signed, kid='KPUB1') => [
+    `CloudFront-Policy=${signed.policy}`,
+    `CloudFront-Signature=${signed.signature}`,
+    `CloudFront-Key-Pair-Id=${kid}`,
+  ];
+  const areq = (opts={}) => ({
+    requestContext: {http: {method: opts.method || 'GET'}},
+    headers: opts.headers || {},
+    cookies: opts.cookies,
+  });
+
   process.env.HEADER_NAME='x-origin-verify'; process.env.ORIGIN_VERIFY_PARAM='/o';
+  process.env.KEY_PAIR_ID='KPUB1'; process.env.COOKIE_DOMAIN='staging.example.com';
+  process.env.SIGNING_PUBLIC_KEY_PEM=apub;
   ssmMod.SSMClient.prototype.send = async () => ({ Parameter: { Value: 'S3CRET' } });
   const auth = require('../lambda/authorizer/index.js');
-  assert.deepStrictEqual(await auth.handler({headers:{'x-origin-verify':'S3CRET'}}), {isAuthorized:true});
-  assert.deepStrictEqual(await auth.handler({headers:{'X-Origin-Verify':'S3CRET'}}), {isAuthorized:true});
-  assert.deepStrictEqual(await auth.handler({headers:{'x-origin-verify':'nope'}}), {isAuthorized:false});
-  assert.deepStrictEqual(await auth.handler({headers:{}}), {isAuthorized:false});
+
+  // CORS preflight is always allowed: it carries neither the header nor the cookies.
+  assert.deepStrictEqual(await auth.handler(areq({method:'OPTIONS'})), {isAuthorized:true}, 'OPTIONS allowed');
+  assert.deepStrictEqual(await auth.handler(areq({method:'options'})), {isAuthorized:true}, 'lowercase options allowed');
+
+  // The origin verification header path is unchanged.
+  assert.deepStrictEqual(await auth.handler(areq({headers:{'x-origin-verify':'S3CRET'}})), {isAuthorized:true}, 'header allowed');
+  assert.deepStrictEqual(await auth.handler(areq({headers:{'X-Origin-Verify':'S3CRET'}})), {isAuthorized:true}, 'header case-insensitive');
+  assert.deepStrictEqual(await auth.handler(areq({headers:{'x-origin-verify':'nope'}})), {isAuthorized:false}, 'wrong header denied');
+
+  // A live, correctly signed cookie set, as event.cookies and as a raw cookie header.
+  const live2 = Math.floor(Date.now()/1000)+3600;
+  const good = signPolicy(live2);
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(good)})), {isAuthorized:true}, 'valid cookies allowed');
+  assert.deepStrictEqual(await auth.handler(areq({headers:{cookie: gateCookies(good).join('; ')}})), {isAuthorized:true}, 'valid cookie header allowed');
+  // ... and alongside a wrong header value, which must not short-circuit the cookie check.
+  assert.deepStrictEqual(await auth.handler(areq({headers:{'x-origin-verify':'nope'}, cookies: gateCookies(good)})), {isAuthorized:true}, 'cookies win over a bad header');
+
+  // Expired policy.
+  const stale = signPolicy(Math.floor(Date.now()/1000)-5);
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(stale)})), {isAuthorized:false}, 'expired policy denied');
+
+  // Wrong key pair id.
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(good, 'SOMEONEELSE')})), {isAuthorized:false}, 'wrong key pair id denied');
+
+  // Tampered signature, and a signature from a different key.
+  const tampered = {...good, signature: good.signature.slice(0, -4) + 'AAAA'};
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(tampered)})), {isAuthorized:false}, 'tampered signature denied');
+  const other = crypto.generateKeyPairSync('rsa', {modulusLength: 2048});
+  const otherPolicy = JSON.stringify({Statement:[{Resource:'https://*staging.example.com/*',Condition:{DateLessThan:{'AWS:EpochTime': live2}}}]});
+  const forged = {policy: cfsafe(Buffer.from(otherPolicy)), signature: cfsafe(crypto.createSign('RSA-SHA1').update(otherPolicy).sign(other.privateKey.export({type:'pkcs1', format:'pem'})))};
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(forged)})), {isAuthorized:false}, 'foreign key denied');
+
+  // A policy signed for a different domain must not open this API.
+  const wrongResource = signPolicy(live2, 'https://*staging.evil.com/*');
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(wrongResource)})), {isAuthorized:false}, 'wrong resource denied');
+
+  // Nothing at all, partial cookies, and garbage.
+  assert.deepStrictEqual(await auth.handler(areq({})), {isAuthorized:false}, 'no credentials denied');
+  assert.deepStrictEqual(await auth.handler(areq({cookies: gateCookies(good).slice(0, 2)})), {isAuthorized:false}, 'missing key pair id denied');
+  assert.deepStrictEqual(await auth.handler(areq({cookies: ['CloudFront-Policy=!!!','CloudFront-Signature=!!!','CloudFront-Key-Pair-Id=KPUB1']})), {isAuthorized:false}, 'garbage cookies denied');
+
+  // The cookies the login Lambda actually issued in the test above are accepted end to end.
+  process.env.SIGNING_PUBLIC_KEY_PEM = pub.export({type:'spki', format:'pem'});
+  delete require.cache[require.resolve('../lambda/authorizer/index.js')];
+  const auth2 = require('../lambda/authorizer/index.js');
+  assert.deepStrictEqual(await auth2.handler(areq({cookies: [
+    `CloudFront-Policy=${policyB64}`,
+    set['CloudFront-Signature'].split(';')[0],
+    'CloudFront-Key-Pair-Id=KPUB1',
+  ]})), {isAuthorized:true}, 'login lambda cookies accepted by the authorizer');
+
   console.log('authorizer tests passed');
 })().catch(e => { console.error(e); process.exit(1); });
