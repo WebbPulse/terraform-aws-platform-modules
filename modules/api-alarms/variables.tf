@@ -231,19 +231,19 @@ variable "dynamodb_throttles_evaluation_periods" {
 }
 
 variable "dynamodb_aggregate_alarm" {
-  description = "Create one <name_prefix>-dynamodb-throttles alarm covering read and write throttle events across every DynamoDB table in the account and Region, instead of, or alongside, the per table alarms from dynamodb_tables. It is built from two CloudWatch Metrics Insights queries, so it needs no table list and picks up a new table on its next evaluation. false, the default, keeps the module on the per table alarms only."
+  description = "Create one <name_prefix>-dynamodb-throttles alarm covering throttled requests across every DynamoDB table in the account and Region, instead of, or alongside, the per table alarms from dynamodb_tables. It is a CloudWatch Metrics Insights query over ThrottledRequests, so it needs no table list and picks up a new table on its next evaluation. It is not quite the same signal as the per table alarms: see the README on batch operations. false, the default, keeps the module on the per table alarms only."
   type        = bool
   default     = false
 }
 
 variable "dynamodb_aggregate_threshold" {
-  description = "Combined read plus write throttle events across all tables over one period that must be exceeded for the aggregate alarm to fire."
+  description = "Throttled requests across all tables over one period that must be exceeded for the aggregate alarm to fire."
   type        = number
   default     = 0
 }
 
 variable "dynamodb_aggregate_period" {
-  description = "Period in seconds of both Metrics Insights queries feeding the aggregate alarm. Metrics Insights alarms are standard resolution and evaluate every 60 seconds, so 60 is the only value AWS documents for them, which is why this does not default to 300 the way the per table alarms do."
+  description = "Period in seconds of the Metrics Insights query feeding the aggregate alarm. Metrics Insights alarms are standard resolution and evaluate every 60 seconds, so 60 is the only value AWS documents for them, which is why this does not default to 300 the way the per table alarms do."
   type        = number
   default     = 60
 

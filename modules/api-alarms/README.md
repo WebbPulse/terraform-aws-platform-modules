@@ -2,10 +2,10 @@
 
 The alarm set for a Lambda-backed HTTP API on DynamoDB: one SNS topic with email subscribers,
 Lambda `Errors` and `Throttles` alarms, HTTP API `5xx` and integration latency percentile alarms,
-and DynamoDB read plus write throttle alarms, either one for the whole environment or one per
-table. It is the shape CarModPicker already
-runs by hand, lifted into one place so the next application gets the same coverage without
-retyping it, and so a change to a threshold reaches every application on its next plan.
+and DynamoDB throttle alarms, either one for the whole environment or one per table. It is the
+shape CarModPicker already runs by hand, lifted into one place so the next application gets the
+same coverage without retyping it, and so a change to a threshold reaches every application on
+its next plan.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms`. The function,
 the API and the tables stay with the consumer; the module needs only a function name, an API id
@@ -75,9 +75,12 @@ create, and the new address gets a fresh confirmation email.
 ## Watching the DynamoDB tables
 
 There are two shapes, and an application picks one. `dynamodb_aggregate_alarm = true` is the
-recommended one: a single alarm for the whole environment. `dynamodb_tables` is the original per
-table shape, kept so an application that wants an alarm named after each table can still have one.
-Setting both is allowed and gives you both sets, which is normally a mistake.
+default recommendation: a single alarm for the whole environment, with no table list to maintain
+and automatic coverage of tables added later. `dynamodb_tables` is the original per table shape,
+which names each alarm after its table and is the more sensitive of the two on batch writes; the
+section below on what the aggregate alarm misses is the thing to read before choosing. Setting
+both is allowed and gives you both sets, which is normally a mistake but is the honest answer for
+an application that wants the aggregate alarm's coverage and the per table alarms' sensitivity.
 
 ### One alarm for the environment
 
@@ -86,37 +89,47 @@ dynamodb_aggregate_alarm = true
 dynamodb_tables          = {}
 ```
 
-That creates `<name_prefix>-dynamodb-throttles` and nothing else. It is two CloudWatch Metrics
-Insights queries added by metric math:
+That creates `<name_prefix>-dynamodb-throttles` and nothing else. It is one CloudWatch Metrics
+Insights query:
 
 ```
-throttles = reads + writes    # returned to the alarm
-reads     = SELECT SUM(ReadThrottleEvents)  FROM SCHEMA("AWS/DynamoDB", TableName)
-writes    = SELECT SUM(WriteThrottleEvents) FROM SCHEMA("AWS/DynamoDB", TableName)
+throttles = SELECT SUM(ThrottledRequests) FROM SCHEMA("AWS/DynamoDB", TableName, Operation)
 ```
 
 Three things follow from that:
 
-- **No table list.** The queries are resolved on every evaluation, so a table added after the
-  apply is covered without a Terraform change and a dropped table falls out on its own. This is
-  the main reason to prefer it: the per table shape silently stops covering a new table until
-  someone re-applies.
-- **Account wide, not prefix filtered.** `SCHEMA("AWS/DynamoDB", TableName)` matches every table
-  in the account and Region, not only the ones named after `name_prefix`. That is right for these
+- **No table list.** The query is resolved on every evaluation, so a table added after the apply
+  is covered without a Terraform change and a dropped table falls out on its own. This is the
+  main reason to prefer it: the per table shape silently stops covering a new table until someone
+  re-applies.
+- **Account wide, not prefix filtered.** `SCHEMA("AWS/DynamoDB", ...)` matches every table in the
+  account and Region, not only the ones named after `name_prefix`. That is right for these
   applications, where an environment is its own account. An account holding two environments would
   see one environment's throttling raise the other's alarm, and wants the per table shape or a
   `WHERE` clause the module does not expose yet.
-- **The two metrics are the table level ones.** Naming only `TableName` in `SCHEMA` matches the
-  series carrying exactly that dimension, which excludes the per index series that also carry
-  `GlobalSecondaryIndexName`. An index throttling still shows up, because it is charged to the
-  table's own `ReadThrottleEvents`, and it is not double counted.
+- **One query is the ceiling.** An alarm may carry only one Metrics Insights query. Two queries
+  plus a math expression summing them is rejected by `PutMetricAlarm` with
+  `ValidationError: Invalid metrics list`, which is why this alarm cannot be
+  `ReadThrottleEvents + WriteThrottleEvents` the way the per table alarms are. One query plus
+  metric math *over that one query* is accepted, so a future threshold on a rate rather than a
+  count is still open.
 
-`ReadThrottleEvents` plus `WriteThrottleEvents` is deliberate, rather than the single
-`ThrottledRequests` metric that would need only one query. `ThrottledRequests` is incremented only
-when *every* event in a request is throttled, so a `BatchWriteItem` where nine of ten writes are
-throttled increments nothing, while `WriteThrottleEvents` counts all nine. The throttle event
-metrics are also the ones the per table alarms already use, so the two shapes agree on what
-counts as throttling.
+### What this alarm misses
+
+`ThrottledRequests` is the only DynamoDB metric that covers reads and writes on its own, so a
+single query alarm has to use it. It is not the same signal as the per table alarms, and the
+difference is worth knowing before relying on it.
+
+`ThrottledRequests` counts a request in which *any* event was throttled, with one exception: for
+a batch operation such as `BatchGetItem` or `BatchWriteItem` it increments only when *every* item
+in the batch was throttled. A `BatchWriteItem` of 25 items where 24 are throttled and one succeeds
+increments nothing. `WriteThrottleEvents`, which the per table alarms use, would count all 24.
+
+So this alarm is the right shape for the failure it exists to catch, a table or an index actually
+running out of capacity, where throttling is broad and sustained rather than one item in one
+batch. It is weaker than the per table alarms at catching light, partial throttling inside batch
+writes. An application whose write path is mostly batched and which wants that sensitivity should
+stay on `dynamodb_tables`, or run both.
 
 `dynamodb_aggregate_period` defaults to 60, not the 300 the rest of the module uses. A Metrics
 Insights alarm is standard resolution and evaluates every 60 seconds, so 60 is the only period
@@ -125,19 +138,19 @@ periods allow.
 
 ### Cost
 
-Both shapes cost the same in us-west-2 today, and the aggregate one is not the cheaper of the
-two. CloudWatch bills a Metrics Insights alarm per *metric the query matches*, at the same $0.10
-per month as an ordinary alarm metric, so an environment with 25 tables pays 25 tables x 2
-metrics x $0.10 = $5.00 a month either way. What the aggregate shape buys is one alarm resource
-instead of 25, no table list to keep in step, and a bill that no longer grows a line per table
-per environment. What it costs is per table attribution in the alarm itself: the notification
-says the environment throttled, not which table did, and CloudWatch Metrics is where you find
-out which.
+CloudWatch bills a Metrics Insights alarm per *metric the query matches*, at the same $0.10 per
+month as an ordinary alarm metric. `ThrottledRequests` carries an `Operation` dimension, so the
+query matches one series per table *per operation actually exercised*, and the bill depends on
+how varied the access pattern is rather than on the table count alone. An environment with 25
+tables and a handful of operations each lands in the same range as the 25 per table alarms it
+replaces, which cost 25 x 2 x $0.10 = $5.00 a month; a wider spread of operations costs more, a
+narrow one less.
 
-The cost does depend on the metrics matched, so the query matters. `ThrottledRequests` carries an
-`Operation` dimension, so a query over it matches a series per table *per operation* and can cost
-several times more; it is also the less sensitive metric, which is the other reason this module
-does not use it.
+Cost is not the reason to prefer this shape, and it is worth watching on the first bill. What the
+aggregate shape buys is one alarm resource instead of 25, no table list to keep in step, and
+coverage of tables that do not exist yet. What it costs is per table attribution in the alarm
+itself: the notification says the environment throttled, not which table did, and CloudWatch
+Metrics is where you find out which.
 
 ### One alarm per table
 
@@ -203,8 +216,8 @@ publish `sns_topic_arn` and point them at it.
 | `dynamodb_throttles_period` | Period in seconds of both metrics | `300` |
 | `dynamodb_throttles_evaluation_periods` | Periods evaluated | `1` |
 | `dynamodb_aggregate_alarm` | Create one `<name_prefix>-dynamodb-throttles` alarm over every table | `false` |
-| `dynamodb_aggregate_threshold` | Read plus write throttle events across all tables per period to exceed | `0` |
-| `dynamodb_aggregate_period` | Period in seconds of both queries; 60 or a multiple of it | `60` |
+| `dynamodb_aggregate_threshold` | Throttled requests across all tables per period to exceed | `0` |
+| `dynamodb_aggregate_period` | Period in seconds of the query; 60 or a multiple of it | `60` |
 | `dynamodb_aggregate_evaluation_periods` | Periods evaluated | `1` |
 | `comparison_operator` | Comparison on every alarm | `"GreaterThanThreshold"` |
 | `treat_missing_data` | Missing data handling on every alarm | `"notBreaching"` |
@@ -327,9 +340,9 @@ readable plans rather than one.
 
 WebbPulse-Portfolio had no alarms before it adopted this module, so there was nothing to move.
 Starting from nothing the block below is **all adds**, eight of them: one topic, two email
-subscriptions, the two Lambda alarms, the two API alarms, and the one aggregate DynamoDB alarm. Applying it also sends a confirmation email to
-each address in `notification_emails`, and the alarms deliver nothing to an address until that
-address clicks the link.
+subscriptions, the two Lambda alarms, the two API alarms, and the one aggregate DynamoDB alarm.
+Applying it also sends a confirmation email to each address in `notification_emails`, and the
+alarms deliver nothing to an address until that address clicks the link.
 
 Add this as `terraform/monitoring.tf`:
 

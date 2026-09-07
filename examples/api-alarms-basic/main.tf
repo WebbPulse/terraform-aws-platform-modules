@@ -110,9 +110,9 @@ module "alarms" {
   lambda_function_name = aws_lambda_function.api.function_name
   http_api_id          = module.api.api_id
 
-  # One "<name_prefix>-dynamodb-throttles" alarm covering read and write throttling across every
-  # table in the account, rather than one alarm per table. It needs no table list, so
-  # dynamodb_tables stays empty; the per table shape is still available by populating it instead.
+  # One "<name_prefix>-dynamodb-throttles" alarm covering throttled requests across every table in
+  # the account, rather than one alarm per table. It needs no table list, so dynamodb_tables stays
+  # empty; the per table shape is still available by populating it instead.
   dynamodb_aggregate_alarm = true
   dynamodb_tables          = {}
 
