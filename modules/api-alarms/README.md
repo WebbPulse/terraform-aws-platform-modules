@@ -20,8 +20,8 @@ aws_sns_topic.alarms                                   <name_prefix>-alarms
 aws_sns_topic_subscription.email["<address>"]          one per notification_emails entry
 aws_cloudwatch_metric_alarm.lambda_errors[0]           only with lambda_function_name
 aws_cloudwatch_metric_alarm.lambda_throttles[0]        only with lambda_function_name
-aws_cloudwatch_metric_alarm.lambda_aggregate_errors[0]      only with lambda_aggregate_alarm
-aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[0]   only with lambda_aggregate_alarm
+aws_cloudwatch_metric_alarm.lambda_aggregate_errors[N]      one per group of 10 lambda_function_names
+aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[N]   one per group of 10 lambda_function_names
 aws_cloudwatch_metric_alarm.api_5xx[0]                 only with http_api_id
 aws_cloudwatch_metric_alarm.api_integration_latency[0] only with http_api_id
 aws_cloudwatch_metric_alarm.dynamodb_throttles["<key>"] one per dynamodb_tables entry
@@ -39,7 +39,9 @@ Alarm names:
 | `lambda_errors` | `<name_prefix>-lambda-errors` |
 | `lambda_throttles` | `<name_prefix>-lambda-throttles` |
 | `lambda_aggregate_errors[0]` | `<name_prefix>-lambda-errors-aggregate` |
+| `lambda_aggregate_errors[N]`, N > 0 | `<name_prefix>-lambda-errors-aggregate-<N+1>` |
 | `lambda_aggregate_throttles[0]` | `<name_prefix>-lambda-throttles-aggregate` |
+| `lambda_aggregate_throttles[N]`, N > 0 | `<name_prefix>-lambda-throttles-aggregate-<N+1>` |
 | `api_5xx` | `<name_prefix>-api-5xx` |
 | `api_integration_latency` | `<name_prefix>-api-integration-latency-<api_latency_statistic>` |
 | `dynamodb_throttles["<key>"]` | `<table name>-throttles` |
@@ -96,7 +98,7 @@ build different alarms and a consumer that passes both has not decided which it 
 | Input | Shape | Alarms |
 | --- | --- | --- |
 | `lambda_function_name` | one function | `<prefix>-lambda-errors` and `<prefix>-lambda-throttles`, each on that function's `FunctionName` dimension |
-| `lambda_function_names` plus `lambda_aggregate_alarm = true` | a function per domain | `<prefix>-lambda-errors-aggregate` and `<prefix>-lambda-throttles-aggregate`, each summing every listed function |
+| `lambda_function_names` plus `lambda_aggregate_alarm = true` | a function per domain | `<prefix>-lambda-errors-aggregate` and `<prefix>-lambda-throttles-aggregate`, each summing every listed function, plus a numbered pair for each further group of 10 |
 
 `lambda_function_names` on its own creates nothing. It is the list the aggregate alarms sum over,
 so it needs `lambda_aggregate_alarm = true` to do anything, and there is deliberately no per
@@ -142,19 +144,61 @@ Four things follow from that construction:
   to the estate but not to `lambda_function_names` is not covered until the next apply, unlike the
   DynamoDB aggregate alarm which re-resolves its query on every evaluation. Building the list from
   the same `for_each` map that creates the functions is what keeps it in step.
-- **Ten functions is the ceiling.** A CloudWatch alarm's metric math expression may reference at
-  most 10 metrics, and `lambda_function_names` validates that. Past 10 the log based alarm in
-  `error_log_groups` is the shape that scales, because its metric carries no dimensions and one
-  plain alarm sums any number of filters.
+- **Ten functions per alarm is the ceiling, and it is handled by chunking.** A CloudWatch alarm's
+  metric math expression may reference at most 10 metrics. Up to v2.1.0 that was a hard cap on
+  `lambda_function_names`. Since 2.2 the list is split into groups of at most 10 instead, and each
+  group gets its own alarm pair. See below.
 
-The list order is the order of the `m0`, `m1` ids in the expression, which is why the input is a
-list rather than a set. Reordering it rewrites the expression on the next plan. The alarm watches
-the same total either way, so the diff is cosmetic, but it is a diff.
+### Past ten functions the list chunks
 
-`tests/lambda_aggregate.tftest.hcl` pins all of this: the names, the one data-returning query, the
-`FunctionName` on every contributing query, and that the per function pair is unchanged and the
-aggregate pair absent when `lambda_aggregate_alarm` is false. `terraform test` in this directory
-runs it, and it needs no credentials.
+`lambda_function_names` has no length limit. The module chunks it into groups of at most 10 names,
+in list order, and builds one errors alarm and one throttles alarm per group:
+
+| Names | Groups | Errors alarm names |
+| --- | --- | --- |
+| 1 to 10 | 1 | `<prefix>-lambda-errors-aggregate` |
+| 11 to 20 | 2 | the above, plus `<prefix>-lambda-errors-aggregate-2` |
+| 21 to 30 | 3 | the above, plus `<prefix>-lambda-errors-aggregate-3` |
+
+Throttles alarms are named the same way on `-lambda-throttles-aggregate`. The first group keeps the
+unsuffixed name it has always had, so nothing renames when the module is upgraded; later groups are
+numbered from 2, which reads as "the second group" rather than as a zero-based index.
+
+The metric math ids restart at `m0` inside every group, because an id is scoped to the alarm it
+appears in. A full group of 10 is therefore byte-identical to what those same 10 names produced as
+a whole list before chunking, and each alarm's description counts its own group rather than the
+estate.
+
+`lambda_aggregate_threshold` applies **within a group**, not across the estate: with two groups and
+the default threshold of 0, one error in either group fires that group's alarm. At the default
+threshold that is the same behavior as one alarm. At a raised threshold it is not, because 3 errors
+in group 0 and 3 in group 1 no longer add up to 6 anywhere. An estate large enough to chunk and
+wanting one number for the whole thing wants the log based alarm in `error_log_groups`, whose metric
+carries no dimensions and whose single alarm sums any number of filters.
+
+### The list order is load bearing
+
+The order of `lambda_function_names` decides two things, so it is a list rather than a set:
+
+- **Which `m0`, `m1` id each function gets inside its group.** Reordering within a group rewrites
+  that group's expression on the next plan. The alarm watches the same total either way, so the
+  diff is cosmetic, but it is a diff.
+- **Which group each function lands in.** This one is not cosmetic. Inserting a name at the front
+  of a list of 15 shifts the tenth name out of group 0 and into group 1, which rewrites both
+  groups' expressions.
+
+**Appending never re-chunks an earlier group.** `chunklist` fills each group before starting the
+next, so the first 10 names are always group 0 whatever comes after them. Adding a domain at the end
+of the list changes only the last group, or opens a new one when the last group is full. That is the
+growth path to plan for: build the list from a stable source, in a stable order, and append.
+
+`tests/lambda_aggregate.tftest.hcl` pins the single-group shape: the names, the one data-returning
+query, the `FunctionName` on every contributing query, and that the per function pair is unchanged
+and the aggregate pair absent when `lambda_aggregate_alarm` is false.
+`tests/lambda_aggregate_chunking.tftest.hcl` pins the chunking: 12 names into two groups, 21 into
+three, and that 5 and exactly 10 stay one group at `[0]` with the unsuffixed name and the same
+expression v2.1.0 built. `terraform test` in this directory runs both, and neither needs
+credentials.
 
 ### Attribution, and why aggregate anyway
 
@@ -170,10 +214,10 @@ alarm itself is one number.
 
 ### Cost
 
-Two alarms at $0.10 a month each, plus the metrics the math references. An estate of four
-functions on the per function shape is 8 alarms; on this shape it is 2. The saving is real but
-small, and it is not the reason to choose this shape: the reason is one name to subscribe and one
-place to change a threshold.
+Two alarms at $0.10 a month each per group of 10 functions, plus the metrics the math references.
+An estate of four functions on the per function shape is 8 alarms; on this shape it is 2. At 25
+functions it is 50 against 6. The saving is real but small, and it is not the reason to choose this
+shape: the reason is one name to subscribe and one place to change a threshold.
 
 ## Watching the DynamoDB tables
 
@@ -432,6 +476,16 @@ alarm, and `error_log_groups = {}` drops every metric filter and the errors alar
 The topic is always created, so the module is also a reasonable way to own just the notification
 target while alarms live elsewhere: publish `sns_topic_arn` and point them at it.
 
+2.2 lifted the 10 name cap on `lambda_function_names` by chunking it, and that is a no-op for a
+consumer at 10 or fewer names. The chunk resources stayed on `count`, so a single group is still
+`lambda_aggregate_errors[0]` and `lambda_aggregate_throttles[0]`, the two addresses an existing
+state already holds, and a single group still gets the unsuffixed alarm names and the same
+`m0 + m1 + ...` expression. No `moved` block is needed, and none would help: `moved` requires a
+constant key, so a `count` index could not be moved to a computed `for_each` key anyway. That is why
+the shape kept `count`. `tests/lambda_aggregate_chunking.tftest.hcl` asserts the 5 name and the
+exactly-10 name cases produce the v2.1.0 alarm names at index 0, and the v2.1.0 suite
+`tests/lambda_aggregate.tftest.hcl` still passes unedited.
+
 Everything added in 2.1 is off unless asked for too. `lambda_function_names` defaults to `[]` and
 `lambda_aggregate_alarm` to `false`, so a consumer on `lambda_function_name` keeps exactly the two
 per function alarms it has: the aggregate resources have a `count` of 0 and nothing else in the
@@ -454,15 +508,15 @@ review. Both existing consumers were checked that way before the change was rele
 | `sns_topic_tags` | Extra tags on the topic only | `{}` |
 | `tags` | Tags on the topic and every alarm | `{}` |
 | `lambda_function_name` | One function form: `FunctionName` dimension of the per function alarm pair; null skips both. Not combinable with `lambda_function_names` | `null` |
-| `lambda_function_names` | Many function form: the functions the aggregate alarms sum over. Creates nothing on its own. Not combinable with `lambda_function_name`; at most 10 names | `[]` |
+| `lambda_function_names` | Many function form: the functions the aggregate alarms sum over. Creates nothing on its own. Not combinable with `lambda_function_name`. Any length; chunked into groups of at most 10, and the order is load bearing | `[]` |
 | `lambda_errors_threshold` | Sum of `Errors` per period that must be exceeded | `0` |
 | `lambda_errors_period` | Period in seconds | `300` |
 | `lambda_errors_evaluation_periods` | Periods evaluated | `1` |
 | `lambda_throttles_threshold` | Sum of `Throttles` per period that must be exceeded | `0` |
 | `lambda_throttles_period` | Period in seconds | `300` |
 | `lambda_throttles_evaluation_periods` | Periods evaluated | `1` |
-| `lambda_aggregate_alarm` | Create the `-lambda-errors-aggregate` and `-lambda-throttles-aggregate` pair summing `lambda_function_names` | `false` |
-| `lambda_aggregate_threshold` | Errors, or throttles, summed across every listed function per period to exceed. One value for both alarms | `0` |
+| `lambda_aggregate_alarm` | Create the `-lambda-errors-aggregate` and `-lambda-throttles-aggregate` pair summing `lambda_function_names`, plus a numbered pair per further group of 10 | `false` |
+| `lambda_aggregate_threshold` | Errors, or throttles, summed across the functions one alarm covers per period to exceed. One value for every aggregate alarm, applied within each group | `0` |
 | `lambda_aggregate_period` | Period in seconds of every metric feeding the aggregate alarms | `300` |
 | `lambda_aggregate_evaluation_periods` | Periods evaluated by each aggregate alarm | `1` |
 | `http_api_id` | `ApiId` dimension; null skips both API alarms | `null` |
@@ -507,10 +561,15 @@ is why its adoption passes none of them.
 | `alarm_names` | Every alarm name, sorted |
 | `alarm_arns` | Every alarm ARN, sorted |
 | `lambda_alarm_names` | Every `AWS/Lambda` alarm name the module created, empty when no function input is set |
-| `lambda_aggregate_alarm_names` | The two aggregate alarm names, errors first, empty when `lambda_aggregate_alarm` is false |
-| `lambda_aggregate_alarm_arns` | The two aggregate alarm ARNs, errors first, empty when `lambda_aggregate_alarm` is false |
-| `lambda_aggregate_errors_alarm_arn` | ARN of the aggregate errors alarm, `null` when it is off |
-| `lambda_aggregate_throttles_alarm_arn` | ARN of the aggregate throttles alarm, `null` when it is off |
+| `lambda_aggregate_alarm_names` | Every aggregate alarm name, all the errors ones first, each in chunk order; empty when `lambda_aggregate_alarm` is false |
+| `lambda_aggregate_alarm_arns` | Every aggregate alarm ARN, all the errors ones first, each in chunk order; empty when `lambda_aggregate_alarm` is false |
+| `lambda_aggregate_errors_alarm_names` | Names of every aggregate errors alarm, one per group, in chunk order |
+| `lambda_aggregate_throttles_alarm_names` | Names of every aggregate throttles alarm, one per group, in chunk order |
+| `lambda_aggregate_errors_alarm_arns` | ARNs of every aggregate errors alarm, one per group; the output to build a composite alarm or a dashboard on |
+| `lambda_aggregate_throttles_alarm_arns` | ARNs of every aggregate throttles alarm, one per group |
+| `lambda_aggregate_errors_alarm_arn` | ARN of the **first** aggregate errors alarm, `null` when it is off. Predates chunking; use the plural output past 10 functions |
+| `lambda_aggregate_throttles_alarm_arn` | ARN of the **first** aggregate throttles alarm, `null` when it is off. Predates chunking; use the plural output past 10 functions |
+| `lambda_aggregate_function_name_chunks` | The function names as the module grouped them, one list per alarm pair, for a runbook that has to say which alarm covers which function |
 | `api_alarm_names` | The two API alarm names, empty when there is no API |
 | `dynamodb_alarm_names` | Table alarm names keyed by their `dynamodb_tables` key |
 | `dynamodb_aggregate_alarm_name` | Name of the aggregate alarm, `null` when it is off |
@@ -663,6 +722,26 @@ anything referencing them. Adding the aggregate pair first, while `lambda_functi
 points at the monolith, is not possible in one module call because the two inputs are mutually
 exclusive; a second module call with its own `name_prefix` would do it at the cost of a second
 topic, which is not worth it for a gap of one evaluation period.
+
+#### Growing past ten domain functions
+
+CarModPicker lands on exactly 10 names, nine domain functions plus the monolith, which is one group
+and one alarm pair. The eleventh function is the one that opens group 1 and adds
+`<prefix>-lambda-errors-aggregate-2` and `<prefix>-lambda-throttles-aggregate-2`. That plan is 2 to
+add and 1 to change: the two new alarms, plus the expression on group 0 only if the new name was
+inserted rather than appended. Append, and group 0 does not move at all.
+
+Two operational consequences to write into the runbook before that happens:
+
+- There are now four alarm names, not two, and anything that lists them by hand needs the new pair.
+  `lambda_aggregate_errors_alarm_names` and `lambda_aggregate_alarm_names` already carry them.
+- `lambda_aggregate_threshold` is per group. At the default of 0 nothing changes. At a raised
+  threshold, errors split across two groups no longer add up.
+
+A consumer that wired `lambda_aggregate_errors_alarm_arn`, the singular output, into a composite
+alarm or a dashboard should move to `lambda_aggregate_errors_alarm_arns` at the same time. The
+singular output still resolves and reports group 0, which is deliberate so nothing breaks on
+upgrade, but a composite alarm built on it would silently cover only the first ten functions.
 
 ## Not covered
 

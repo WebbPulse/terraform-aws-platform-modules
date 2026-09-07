@@ -42,26 +42,28 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
 #
 # An application split into a function per domain wants one Errors alarm and one Throttles alarm
 # for the whole estate, not a pair per function. Each of these is a metric math alarm: one
-# metric_query per name in lambda_function_names carrying that function's FunctionName dimension
-# with return_data = false, plus a SUM expression that returns data to the alarm.
+# metric_query per name in the group carrying that function's FunctionName dimension with
+# return_data = false, plus a SUM expression that returns data to the alarm.
 #
 # Summing named metrics rather than alarming on AWS/Lambda Errors with no FunctionName dimension
 # is the deliberate choice. A dimensionless AWS/Lambda alarm is account wide, so it also counts
 # the access gate's authorizer function and anything else in the account, and the threshold stops
 # meaning what it says. These alarms cover exactly the listed functions.
 #
-# The trade is the metric math ceiling: an expression may reference at most 10 metrics, which
-# lambda_function_names validates. Past that the log based alarm in error_log_groups is the shape
-# that scales, because its metric carries no dimensions and one alarm sums any number of filters.
+# A CloudWatch alarm's metric math expression may reference at most 10 metrics. That used to cap
+# lambda_function_names at 10 names; it now chunks the list into groups of at most 10 instead, one
+# alarm pair per group. Group 0 keeps the unsuffixed alarm names and the [0] addresses, so a
+# consumer at 10 or fewer functions plans nothing. See locals.tf for why count survives here.
 #
-# The alarm names carry no function name, so adding a domain changes the expression on an existing
-# alarm rather than creating another alarm to subscribe and document.
+# Within a group the alarm names carry no function name, so adding a domain changes the expression
+# on an existing alarm rather than creating another alarm to subscribe and document, right up until
+# the group fills and the next one opens.
 
 resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_errors" {
   count = local.lambda_aggregate_count
 
-  alarm_name          = "${var.name_prefix}-lambda-errors-aggregate"
-  alarm_description   = "Lambda invocation errors across ${length(var.lambda_function_names)} function${length(var.lambda_function_names) == 1 ? "" : "s"}"
+  alarm_name          = "${var.name_prefix}-lambda-errors-aggregate${local.lambda_aggregate_name_suffixes[count.index]}"
+  alarm_description   = "Lambda invocation errors across ${length(local.lambda_aggregate_chunks[count.index])} function${length(local.lambda_aggregate_chunks[count.index]) == 1 ? "" : "s"}"
   evaluation_periods  = var.lambda_aggregate_evaluation_periods
   threshold           = var.lambda_aggregate_threshold
   comparison_operator = var.comparison_operator
@@ -72,13 +74,13 @@ resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_errors" {
 
   metric_query {
     id          = "errors"
-    expression  = local.lambda_aggregate_expression
+    expression  = local.lambda_aggregate_expressions[count.index]
     label       = "Errors"
     return_data = true
   }
 
   dynamic "metric_query" {
-    for_each = local.lambda_aggregate_metrics
+    for_each = local.lambda_aggregate_metrics[count.index]
 
     content {
       id          = metric_query.key
@@ -99,8 +101,8 @@ resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_errors" {
 resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_throttles" {
   count = local.lambda_aggregate_count
 
-  alarm_name          = "${var.name_prefix}-lambda-throttles-aggregate"
-  alarm_description   = "Lambda invocations throttled across ${length(var.lambda_function_names)} function${length(var.lambda_function_names) == 1 ? "" : "s"}"
+  alarm_name          = "${var.name_prefix}-lambda-throttles-aggregate${local.lambda_aggregate_name_suffixes[count.index]}"
+  alarm_description   = "Lambda invocations throttled across ${length(local.lambda_aggregate_chunks[count.index])} function${length(local.lambda_aggregate_chunks[count.index]) == 1 ? "" : "s"}"
   evaluation_periods  = var.lambda_aggregate_evaluation_periods
   threshold           = var.lambda_aggregate_threshold
   comparison_operator = var.comparison_operator
@@ -111,13 +113,13 @@ resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_throttles" {
 
   metric_query {
     id          = "throttles"
-    expression  = local.lambda_aggregate_expression
+    expression  = local.lambda_aggregate_expressions[count.index]
     label       = "Throttles"
     return_data = true
   }
 
   dynamic "metric_query" {
-    for_each = local.lambda_aggregate_metrics
+    for_each = local.lambda_aggregate_metrics[count.index]
 
     content {
       id          = metric_query.key

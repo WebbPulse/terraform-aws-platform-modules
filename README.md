@@ -24,6 +24,9 @@ A two-segment constraint such as `~> 1.1` or `~> 1.3` floats across all of 1.x, 
 every later minor release, not just patches on that minor. That is what the module READMEs
 intend. Write `~> 1.3.0` instead to hold a minor and take patch releases only.
 
+[`CHANGELOG.md`](CHANGELOG.md) records what each release changed and, for a minor, whether an
+existing consumer's plan stays empty.
+
 ## Modules
 
 | Module | What it is |

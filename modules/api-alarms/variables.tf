@@ -58,7 +58,7 @@ variable "lambda_function_name" {
 }
 
 variable "lambda_function_names" {
-  description = "Names of the Lambda functions behind the API, for an application split into a function per domain. It is the many function form of lambda_function_name and exactly one of the two may be set. On its own it creates nothing: it is the list the aggregate alarms sum over, so pair it with lambda_aggregate_alarm = true. Deliberately no per function alarms, because a per function alarm pair across a growing estate is what the aggregate shape exists to avoid."
+  description = "Names of the Lambda functions behind the API, for an application split into a function per domain. It is the many function form of lambda_function_name and exactly one of the two may be set. On its own it creates nothing: it is the list the aggregate alarms sum over, so pair it with lambda_aggregate_alarm = true. Deliberately no per function alarms, because a per function alarm pair across a growing estate is what the aggregate shape exists to avoid. There is no length limit: a CloudWatch alarm may reference at most 10 metrics, so the list is chunked into groups of at most 10 and each group gets its own alarm pair. The order is load bearing, both for the metric math ids inside a group and for which names land in which group, so build the list from a stable source and append rather than reorder."
   type        = list(string)
   default     = []
 
@@ -70,11 +70,6 @@ variable "lambda_function_names" {
   validation {
     condition     = length(distinct(var.lambda_function_names)) == length(var.lambda_function_names)
     error_message = "lambda_function_names must not repeat a name: each name becomes one metric_query id in the aggregate alarms."
-  }
-
-  validation {
-    condition     = length(var.lambda_function_names) <= 10
-    error_message = "lambda_function_names holds at most 10 names: the aggregate alarms are metric math, and a CloudWatch alarm's metric math expression may reference at most 10 metrics. An estate past 10 functions wants the log based alarm in error_log_groups, whose dimensionless metric has no such ceiling."
   }
 }
 
@@ -135,7 +130,7 @@ variable "lambda_throttles_evaluation_periods" {
 }
 
 variable "lambda_aggregate_alarm" {
-  description = "Create one <name_prefix>-lambda-errors-aggregate alarm and one <name_prefix>-lambda-throttles-aggregate alarm summing AWS/Lambda Errors and Throttles across every function in lambda_function_names, instead of a per function alarm pair. Each is a metric math alarm: one metric_query per function that returns no data, plus a SUM expression that does, so the alarms cover exactly the listed functions rather than every function in the account. The alarm names carry no function name, so adding a function changes the expression rather than the alarm set. false, the default, creates neither, which is what keeps an existing consumer byte identical."
+  description = "Create a <name_prefix>-lambda-errors-aggregate alarm and a <name_prefix>-lambda-throttles-aggregate alarm summing AWS/Lambda Errors and Throttles across the functions in lambda_function_names, instead of a per function alarm pair. Each is a metric math alarm: one metric_query per function that returns no data, plus a SUM expression that does, so the alarms cover exactly the listed functions rather than every function in the account. A CloudWatch alarm may reference at most 10 metrics, so a list longer than 10 is chunked into groups of at most 10 and each group past the first gets a numbered alarm pair, -lambda-errors-aggregate-2 and so on. The alarm names carry no function name, so adding a function changes the expression on an existing alarm rather than the alarm set, until the last group fills. false, the default, creates none, which is what keeps an existing consumer byte identical."
   type        = bool
   default     = false
 
@@ -146,7 +141,7 @@ variable "lambda_aggregate_alarm" {
 }
 
 variable "lambda_aggregate_threshold" {
-  description = "Sum of AWS/Lambda Errors, or of Throttles, across every function in lambda_function_names over one period that must be exceeded for the matching aggregate alarm to fire. One threshold covers both alarms, because both count the same kind of thing. The default of 0 with GreaterThanThreshold means any single error or throttle on any listed function alarms."
+  description = "Sum of AWS/Lambda Errors, or of Throttles, across the functions one aggregate alarm covers over one period that must be exceeded for that alarm to fire. One threshold covers every aggregate alarm, because they all count the same kind of thing, and when lambda_function_names is long enough to chunk the threshold applies within each group rather than across the estate. The default of 0 with GreaterThanThreshold means any single error or throttle on any listed function alarms."
   type        = number
   default     = 0
 }

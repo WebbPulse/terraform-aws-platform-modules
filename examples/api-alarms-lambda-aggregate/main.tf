@@ -11,12 +11,18 @@
 # a metric math SUM over one metric per listed function. Adding a fifth domain changes the
 # expression on the existing alarms rather than creating another pair.
 #
+# A CloudWatch alarm may reference at most 10 metrics, so a list longer than 10 is chunked into
+# groups of at most 10 and each group gets its own pair: the eleventh domain would add
+# "<prefix>-lambda-errors-aggregate-2" and "<prefix>-lambda-throttles-aggregate-2". The four domains
+# here are one group, which is the common case; the second module call at the bottom of this file
+# shows the chunked shape without creating twelve more Lambda functions to alarm on.
+#
 # Summing named metrics rather than alarming on AWS/Lambda with no FunctionName dimension is the
 # point: a dimensionless alarm is account wide, so it would also count the access gate's authorizer
 # function and anything else running in the account.
 #
 # Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-# with version = "~> 2.1"; the relative path here keeps the example runnable from the repository.
+# with version = "~> 2.2"; the relative path here keeps the example runnable from the repository.
 #
 # The HTTP API in front of these functions is left out: http_api_id is unrelated to the Lambda
 # shape and examples/api-alarms-basic already shows it.
@@ -45,9 +51,15 @@ provider "aws" {
 locals {
   name = "example-staging"
 
-  # One function per domain. The list order is the order of the metric math ids in the aggregate
-  # alarms, so keeping it stable keeps the alarm definition stable.
+  # One function per domain. The list order is load bearing twice over: it is the order of the
+  # metric math ids inside a group, and past ten names it decides which group each function lands
+  # in. Appending never re-chunks an earlier group, so grow this list at the end.
   domains = ["content", "resume", "identity", "public"]
+
+  # Twelve names for the chunked module call below. These are not real functions: the module takes
+  # names, not ARNs, so an example can show the chunking without twelve more aws_lambda_function
+  # resources. A real consumer builds this list from its own for_each map, as the call above does.
+  many_domains = [for i in range(1, 13) : format("%s-d%02d", local.name, i)]
 }
 
 # --- The per domain functions -----------------------------------------------------------------
@@ -129,8 +141,9 @@ module "alarms" {
   lambda_aggregate_evaluation_periods = 1
 
   # The other two aggregate shapes in the module, for the same reason: one alarm for the estate
-  # rather than one per resource. The log based alarm is the one that keeps working past 10
-  # functions, because its metric is dimensionless and carries no metric math ceiling.
+  # rather than one per resource. The log based alarm is the one that stays a single number however
+  # many functions there are, because its metric is dimensionless and carries no metric math
+  # ceiling, where the AWS/Lambda alarms above chunk into a pair per ten functions.
   error_log_groups = {
     for d in local.domains : d => aws_cloudwatch_log_group.domain[d].name
   }
@@ -148,6 +161,51 @@ output "lambda_aggregate_alarm_names" {
 }
 
 output "alarm_names" {
-  description = "Every alarm the module created. Two for Lambda however many domains there are."
+  description = "Every alarm the module created. Two for Lambda at this domain count."
   value       = module.alarms.alarm_names
+}
+
+# --- The same shape past the ten metric ceiling ------------------------------------------------
+#
+# Twelve function names is two groups, ten then two, so four alarms:
+#
+#   example-staging-many-lambda-errors-aggregate        m0 + ... + m9   over the first ten names
+#   example-staging-many-lambda-errors-aggregate-2      m0 + m1         over the remaining two
+#   example-staging-many-lambda-throttles-aggregate     the same split on Throttles
+#   example-staging-many-lambda-throttles-aggregate-2
+#
+# The first group keeps the unsuffixed name, which is what makes upgrading from a version that
+# capped the list at ten a zero-change plan for anyone at ten or fewer names. Groups past the first
+# are numbered from 2.
+#
+# One thing to know before relying on this: lambda_aggregate_threshold applies within a group, not
+# across the estate. At the default of 0 that is the same behavior as a single alarm. At a raised
+# threshold it is not, and the log based alarm in error_log_groups is the shape that keeps one
+# number for the whole estate.
+#
+# This call has its own name_prefix so its topic and alarm names do not collide with the call above.
+
+module "alarms_chunked" {
+  source = "../../modules/api-alarms"
+
+  name_prefix         = "${local.name}-many"
+  notification_emails = ["alerts@example.com"]
+
+  lambda_function_names  = local.many_domains
+  lambda_aggregate_alarm = true
+}
+
+output "chunked_errors_alarm_names" {
+  description = "One aggregate errors alarm per group of ten function names, in chunk order."
+  value       = module.alarms_chunked.lambda_aggregate_errors_alarm_names
+}
+
+output "chunked_throttles_alarm_names" {
+  description = "One aggregate throttles alarm per group of ten function names, in chunk order."
+  value       = module.alarms_chunked.lambda_aggregate_throttles_alarm_names
+}
+
+output "chunked_function_name_groups" {
+  description = "Which function names the module put in which group, in the same order as the alarm outputs. A runbook uses this to say which alarm covers which function."
+  value       = module.alarms_chunked.lambda_aggregate_function_name_chunks
 }
