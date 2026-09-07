@@ -22,6 +22,8 @@ output "alarm_names" {
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_throttles : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.errors : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.standalone_lambda_errors : a.alarm_name],
   ))
 }
 
@@ -34,14 +36,17 @@ output "alarm_arns" {
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.arn],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_throttles : a.arn],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.errors : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.standalone_lambda_errors : a.arn],
   ))
 }
 
 output "lambda_alarm_names" {
-  description = "Names of the two Lambda alarms, empty when lambda_function_name is null."
+  description = "Names of the AWS/Lambda metric alarms: the errors and throttles pair when lambda_function_name is set, or the single errors alarm when only lambda_errors_alarm_function_name is. Empty when neither input is set."
   value = concat(
     [for a in aws_cloudwatch_metric_alarm.lambda_errors : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.lambda_throttles : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.standalone_lambda_errors : a.alarm_name],
   )
 }
 
@@ -61,4 +66,22 @@ output "dynamodb_alarm_names" {
 output "dynamodb_aggregate_alarm_name" {
   description = "Name of the aggregate DynamoDB throttle alarm, null when dynamodb_aggregate_alarm is false."
   value       = one(aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles[*].alarm_name)
+}
+
+output "error_alarm_name" {
+  description = "Name of the application errors alarm, null when error_log_groups is empty."
+  value       = one(aws_cloudwatch_metric_alarm.errors[*].alarm_name)
+}
+
+output "error_metric_filter_names" {
+  description = "Metric filter names keyed by the error_log_groups key that produced them. Empty when error_log_groups is empty."
+  value       = { for k, f in aws_cloudwatch_log_metric_filter.errors : k => f.name }
+}
+
+output "error_metric" {
+  description = "Namespace and name of the metric every error filter publishes to, so a dashboard or a composite alarm can graph the same series the alarm watches. Both fields are null when error_log_groups is empty."
+  value = {
+    namespace = local.error_alarm_count > 0 ? var.error_metric_namespace : null
+    name      = local.error_alarm_count > 0 ? local.error_metric_name : null
+  }
 }

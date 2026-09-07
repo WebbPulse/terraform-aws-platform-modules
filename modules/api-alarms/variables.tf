@@ -264,6 +264,93 @@ variable "dynamodb_aggregate_evaluation_periods" {
   }
 }
 
+# --- Errors from the logs -----------------------------------------------------------------------
+
+variable "error_log_groups" {
+  description = "CloudWatch log groups to watch for structured error records, as a map of short name to log group name. The key is the for_each key and goes into the filter name, <name_prefix>-<key>-errors, so it should be the domain or service the function serves, for example \"posts\" or \"users\". The value is the full log group name, normally /aws/lambda/<function name>. Every filter publishes to one shared metric with no dimensions, so however many log groups this holds there is still exactly one alarm summing them. An empty map, the default, creates no filters and no alarm, which is why an existing consumer sees no diff."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.error_log_groups) : can(regex("^[A-Za-z0-9_-]{1,64}$", k))])
+    error_message = "Every key in error_log_groups must be 1 to 64 characters of letters, digits, hyphens or underscores: it is used verbatim in the metric filter name."
+  }
+
+  validation {
+    condition     = alltrue([for n in values(var.error_log_groups) : can(regex("^[A-Za-z0-9_./#-]{1,512}$", n))])
+    error_message = "Every value in error_log_groups must be a CloudWatch log group name, for example /aws/lambda/my-function."
+  }
+}
+
+variable "error_filter_pattern" {
+  description = "CloudWatch Logs filter pattern the metric filters match. The default { $.level = \"ERROR\" } matches a structured JSON record whose level field is exactly ERROR, which is what the shared observability package emits and what Lambda's own JSON log format writes. Override it to widen or narrow the match, for example { $.level = \"ERROR\" || $.level = \"CRITICAL\" }. A JSON pattern only matches log events that are valid JSON: see the README on log_format."
+  type        = string
+  default     = "{ $.level = \"ERROR\" }"
+
+  validation {
+    condition     = length(trimspace(var.error_filter_pattern)) > 0
+    error_message = "error_filter_pattern must not be empty: an empty pattern matches every log event, which would alarm on all logging rather than on errors."
+  }
+}
+
+variable "error_metric_namespace" {
+  description = "CloudWatch namespace the error metric is published in. It is a custom namespace, so it must not start with AWS/. One namespace across every application keeps the metric findable in the console."
+  type        = string
+  default     = "WebbPulse/Application"
+
+  validation {
+    condition     = can(regex("^[^:*$]{1,255}$", var.error_metric_namespace)) && !startswith(var.error_metric_namespace, "AWS/")
+    error_message = "error_metric_namespace must be 1 to 255 characters without :, * or $, and must not start with AWS/ because that prefix is reserved for AWS service namespaces."
+  }
+}
+
+variable "error_metric_name" {
+  description = "Name of the metric every filter publishes to, null for <name_prefix>-application-errors. Every log group in error_log_groups writes this one metric with no dimensions, so the alarm's Sum is the total across all of them. Two environments in one account must not share a name, which is why the default carries name_prefix."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.error_metric_name == null || can(regex("^[^:*$]{1,255}$", coalesce(var.error_metric_name, "x")))
+    error_message = "error_metric_name must be 1 to 255 characters and must not contain :, * or $."
+  }
+}
+
+variable "error_alarm_threshold" {
+  description = "Number of error records across every watched log group in one period that must be exceeded for the alarm to fire. The default of 0 with GreaterThanThreshold means any single logged error alarms, matching the Lambda Errors alarm. Raise it if the application logs expected errors."
+  type        = number
+  default     = 0
+}
+
+variable "error_alarm_period" {
+  description = "Period in seconds of the application errors alarm. CloudWatch accepts 10, 30, or any multiple of 60. The default 300 matches the rest of the module."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([10, 30], var.error_alarm_period) || (var.error_alarm_period >= 60 && var.error_alarm_period % 60 == 0)
+    error_message = "error_alarm_period must be 10, 30, or a multiple of 60."
+  }
+}
+
+variable "error_alarm_evaluation_periods" {
+  description = "Number of periods evaluated by the application errors alarm."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.error_alarm_evaluation_periods >= 1 && floor(var.error_alarm_evaluation_periods) == var.error_alarm_evaluation_periods
+    error_message = "error_alarm_evaluation_periods must be a whole number of at least 1."
+  }
+}
+
+variable "lambda_errors_alarm_function_name" {
+  description = "Create a <name_prefix>-lambda-errors alarm on this function without also creating the throttles alarm that lambda_function_name brings. It is for a consumer that wants the errors alarm on its own, alongside the log based alarm above. It is ignored when lambda_function_name is set, because that input already creates an alarm of exactly that name and two alarms cannot share a name in a Region; setting both is therefore safe rather than a conflict. It reuses lambda_errors_threshold, lambda_errors_period and lambda_errors_evaluation_periods. null, the default, creates nothing."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
 # --- Shared alarm behaviour ---------------------------------------------------------------------
 
 variable "comparison_operator" {
