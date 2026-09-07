@@ -99,8 +99,9 @@ variable "viewer_request_handler_js" {
 }
 
 variable "cloudfront_distribution_arn" {
-  description = "ARN of the distribution that fronts the login Lambda. Only this distribution may invoke the function URL."
+  description = "Optional ARN of the distribution that fronts the login Lambda, used to narrow the function URL invoke permission to that one distribution. Leave null when the same distribution consumes this module's outputs: referencing it here would be a dependency cycle, so the permission then admits any distribution in the account (arn:aws:cloudfront::<account>:distribution/*), which in a single-application staging account is the same set."
   type        = string
+  default     = null
 }
 
 variable "http_api_id" {

@@ -11,8 +11,10 @@ module "gate" {
   site_host      = "www.staging.example.com"
   allowed_emails = ["someone@example.com"]
 
-  cloudfront_distribution_arn = aws_cloudfront_distribution.frontend.arn
-  http_api_id                 = aws_apigatewayv2_api.api.id
+  # cloudfront_distribution_arn is left unset on purpose: the distribution below consumes this
+  # module's outputs, so naming it here would be a cycle. The invoke permission then covers any
+  # distribution in the account.
+  http_api_id = aws_apigatewayv2_api.api.id
 
   viewer_request_handler_js = file("${path.module}/app_handler.js")
 }
