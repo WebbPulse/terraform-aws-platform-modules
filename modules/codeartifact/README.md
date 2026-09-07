@@ -356,6 +356,21 @@ external packages the estate actually depends on becomes enumerable in one place
   `consumer_policy_statements` for the consumer account's own stack to attach, because that role
   lives in a different account and usually a different workspace.
 
+## Fixed
+
+- **v2.0.1: unknown publisher ARNs no longer fail the plan.** Before this release, passing
+  `publisher_principal_arns` values that are unknown at plan time, an ARN read off an
+  `aws_iam_role` or another module's output rather than written as a literal, failed the plan with
+  `Call to function "concat" failed: panic in function implementation: inconsistent list element
+  types` at `locals.tf`. The repository policy built its statement list by `concat`-ing the read
+  and publish statements as objects, and `concat` has to unify their types: `Principal.AWS` is a
+  string or a tuple of strings on the read side and an unknown of no settled type on the publish
+  side, and those do not unify. The two statements are now `jsonencode`d before the `concat` and
+  `jsondecode`d after, so `concat` only ever unifies strings. The rendered policy is byte-identical,
+  so upgrading shows no policy diff. It only reproduces with more than one reader principal, which
+  is why `examples/codeartifact-basic` and its literal ARNs stayed green;
+  `tests/unknown_publisher_arns.tftest.hcl` now covers the failing shape.
+
 ## Adoption
 
 There is nothing to adopt. Unlike the other modules in this repository, this one does not take over
