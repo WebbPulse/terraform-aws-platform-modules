@@ -62,7 +62,7 @@ resource "aws_lambda_function" "login" {
   environment {
     variables = {
       COGNITO_DOMAIN      = local.hosted_ui_domain
-      COGNITO_ISSUER      = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${aws_cognito_user_pool.this.id}"
+      COGNITO_ISSUER      = "https://cognito-idp.${local.region}.amazonaws.com/${aws_cognito_user_pool.this.id}"
       CLIENT_ID           = aws_cognito_user_pool_client.login.id
       CLIENT_SECRET_PARAM = aws_ssm_parameter.client_secret.name
       SIGNING_KEY_PARAM   = aws_ssm_parameter.signing_key.name

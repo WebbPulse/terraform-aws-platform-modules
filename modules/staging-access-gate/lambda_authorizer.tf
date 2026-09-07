@@ -86,7 +86,7 @@ resource "aws_lambda_permission" "authorizer" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.authorizer.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "arn:${data.aws_partition.current.partition}:execute-api:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${var.http_api_id}/authorizers/${aws_apigatewayv2_authorizer.origin_verify[0].id}"
+  source_arn    = "arn:${data.aws_partition.current.partition}:execute-api:${local.region}:${data.aws_caller_identity.current.account_id}:${var.http_api_id}/authorizers/${aws_apigatewayv2_authorizer.origin_verify[0].id}"
 }
 
 data "aws_partition" "current" {}
