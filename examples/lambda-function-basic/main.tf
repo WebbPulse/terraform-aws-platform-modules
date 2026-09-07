@@ -12,7 +12,8 @@
 #   }
 #
 # Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-function"
-# with version = "~> 1.6"; the relative paths here keep the example runnable from the repository.
+# with version = "~> 1.6", and the http-api module in front of it with version = "~> 2.0" for the
+# integrations map; the relative paths here keep the example runnable from the repository.
 
 terraform {
   required_version = ">= 1.10"
@@ -93,7 +94,12 @@ resource "aws_iam_role_policy" "runtime" {
 module "api" {
   source = "../../modules/http-api"
 
-  name                 = "example-production-api"
-  lambda_invoke_arn    = module.api_lambda.invoke_arn
-  lambda_function_name = module.api_lambda.function_name
+  name = "example-production-api"
+
+  integrations = {
+    legacy = {
+      lambda_function_name = module.api_lambda.function_name
+      lambda_invoke_arn    = module.api_lambda.invoke_arn
+    }
+  }
 }
