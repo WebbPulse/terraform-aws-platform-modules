@@ -118,6 +118,12 @@ for. After that the site behaves normally for `session_hours`; API calls ride on
 - Callers that are not browsers (a Chrome extension, a deploy pipeline health check) cannot
   complete the hosted UI flow. They call `api.staging.<domain>` directly with the origin-verify
   header, read from SSM.
+- A gate failure is easy to mistake for a working site. If CloudFront cannot invoke the login
+  function (a missing resource-policy grant, for example), the origin returns 403 and the
+  consumer's SPA custom error response turns that into the shell page with status 200. The tell is
+  `/_auth/login` answering with `index.html` and `x-cache: Error from cloudfront` instead of a 302 to
+  the hosted UI. The module grants CloudFront both `lambda:InvokeFunctionUrl` and
+  `lambda:InvokeFunction`; both are required.
 
 ## Tests
 
