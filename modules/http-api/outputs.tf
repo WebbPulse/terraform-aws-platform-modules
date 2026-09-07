@@ -28,14 +28,29 @@ output "stage_arn" {
   value       = aws_apigatewayv2_stage.default.arn
 }
 
-output "integration_id" {
-  description = "Id of the Lambda proxy integration."
-  value       = aws_apigatewayv2_integration.lambda.id
+output "integration_ids" {
+  description = "Integration ids keyed by integrations key."
+  value       = { for k, i in aws_apigatewayv2_integration.this : k => i.id }
+}
+
+output "default_integration_id" {
+  description = "Id of the integration behind $default, null when default_integration is null or names no integration. The 1.x integration_id under its new name."
+  value       = try(aws_apigatewayv2_integration.this[var.default_integration].id, null)
 }
 
 output "route_ids" {
-  description = "Route ids keyed by route key."
+  description = "Route ids keyed by route key, $default included."
   value       = { for k, r in aws_apigatewayv2_route.this : k => r.id }
+}
+
+output "route_integrations" {
+  description = "Which integration serves each route key, so a consumer can assert the strangler split in a test or print it in a plan."
+  value       = { for k, r in local.resolved_routes : k => r.integration }
+}
+
+output "lambda_permission_statement_ids" {
+  description = "statement_id of each invoke permission, keyed by integrations key. Useful when adopting: the default_integration entry must match the statement id already in state."
+  value       = { for k, p in aws_lambda_permission.this : k => p.statement_id }
 }
 
 output "access_log_group_name" {

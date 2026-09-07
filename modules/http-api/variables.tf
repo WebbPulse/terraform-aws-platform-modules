@@ -14,49 +14,155 @@ variable "description" {
   default     = null
 }
 
-variable "lambda_invoke_arn" {
-  description = "invoke_arn of the Lambda function the API proxies to (aws_lambda_function.<name>.invoke_arn). The function itself is owned by the consumer."
-  type        = string
+variable "integrations" {
+  description = <<-EOT
+    The Lambda backends behind this API, keyed by a short stable name such as "legacy", "posts" or
+    "users". Each entry creates one AWS_PROXY integration and one aws_lambda_permission, both
+    addressed by that key, so adding or removing one backend never touches another.
+
+    Per entry:
+      lambda_function_name           name of the function, for the resource-based invoke permission
+      lambda_invoke_arn              the function's invoke_arn, not its plain arn
+      payload_format_version         optional, defaults to var.payload_format_version
+      timeout_milliseconds           optional, 50 to 30000; null leaves the service default (30000)
+                                     unset, which is what an integration that never set it has in state
+      lambda_permission_statement_id optional. The default is var.lambda_permission_statement_id when
+                                     this is the only integration or the default_integration, and
+                                     "<var.lambda_permission_statement_id>-<key>" otherwise
+
+    The key is a Terraform address. Renaming a key destroys and recreates that integration and its
+    permission, so pick names you can live with.
+  EOT
+
+  type = map(object({
+    lambda_function_name           = string
+    lambda_invoke_arn              = string
+    payload_format_version         = optional(string)
+    timeout_milliseconds           = optional(number)
+    lambda_permission_statement_id = optional(string)
+  }))
 
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:apigateway:[a-z0-9-]+:lambda:path/2015-03-31/functions/arn:aws[a-z-]*:lambda:", var.lambda_invoke_arn))
-    error_message = "lambda_invoke_arn must be the function's invoke_arn (arn:aws:apigateway:<region>:lambda:path/2015-03-31/functions/<function arn>/invocations), not its plain arn."
+    condition     = length(var.integrations) > 0
+    error_message = "integrations must name at least one Lambda backend."
+  }
+
+  validation {
+    condition     = alltrue([for k, _ in var.integrations : can(regex("^[a-zA-Z0-9_-]{1,64}$", k))])
+    error_message = "Every integrations key must be 1 to 64 characters of letters, digits, hyphens or underscores; it is a Terraform resource address."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, i in var.integrations :
+      can(regex("^arn:aws[a-z-]*:apigateway:[a-z0-9-]+:lambda:path/2015-03-31/functions/arn:aws[a-z-]*:lambda:", i.lambda_invoke_arn))
+    ])
+    error_message = "Every integrations entry's lambda_invoke_arn must be the function's invoke_arn (arn:aws:apigateway:<region>:lambda:path/2015-03-31/functions/<function arn>/invocations), not its plain arn."
+  }
+
+  validation {
+    condition     = alltrue([for k, i in var.integrations : length(i.lambda_function_name) > 0])
+    error_message = "Every integrations entry needs a non-empty lambda_function_name."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, i in var.integrations :
+      i.payload_format_version == null || contains(["1.0", "2.0"], coalesce(i.payload_format_version, "2.0"))
+    ])
+    error_message = "An integrations entry's payload_format_version must be 1.0 or 2.0."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, i in var.integrations :
+      i.timeout_milliseconds == null || (coalesce(i.timeout_milliseconds, 30000) >= 50 && coalesce(i.timeout_milliseconds, 30000) <= 30000)
+    ])
+    error_message = "An integrations entry's timeout_milliseconds must be between 50 and 30000 when set."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, i in var.integrations :
+      i.lambda_permission_statement_id == null || can(regex("^[a-zA-Z0-9-_]+$", coalesce(i.lambda_permission_statement_id, "x")))
+    ])
+    error_message = "An integrations entry's lambda_permission_statement_id may contain only letters, digits, hyphens and underscores."
   }
 }
 
-variable "lambda_function_name" {
-  description = "Name of that Lambda function, used for the resource-based invoke permission."
-  type        = string
+variable "default_integration" {
+  description = <<-EOT
+    Key in integrations that serves the $default route: every request no other route claims. During
+    a strangler migration this is the monolith, and each prefix moved off it is one more routes
+    entry, so the monolith keeps answering everything not yet carved out.
+
+    Set it to null to create no $default route at all, which makes the API answer 404 for anything
+    the explicit routes do not match. Only do that once the migration is finished.
+  EOT
+
+  type    = string
+  default = "legacy"
 
   validation {
-    condition     = length(var.lambda_function_name) > 0
-    error_message = "lambda_function_name must not be empty."
+    condition     = var.default_integration == null || can(regex("^[a-zA-Z0-9_-]{1,64}$", var.default_integration))
+    error_message = "default_integration must be null or an integrations key."
   }
 }
 
-variable "route_keys" {
-  description = "Route keys that target the Lambda integration, one route per entry. Each is also the for_each key of its aws_apigatewayv2_route, so the address of a route is stable as long as its key is. Either [\"$default\"] (everything to the function) or explicit keys such as [\"ANY /{proxy+}\", \"ANY /\"]."
-  type        = list(string)
-  default     = ["$default"]
+variable "routes" {
+  description = <<-EOT
+    Explicit routes in front of $default, keyed by route key. The key is the API Gateway route key
+    ("ANY /api/v1/posts/{proxy+}", "GET /health") and is also the Terraform address of the route, so
+    a route's address is stable as long as its key is.
+
+    Per entry:
+      integration        key in integrations that serves this route
+      authorization_type optional override, NONE, CUSTOM, AWS_IAM or JWT. Null means the module's
+                         own choice: CUSTOM when authorizer_id is set, NONE when it is not. Set it
+                         to "NONE" only to deliberately punch a hole in the access gate, for example
+                         a health check that has to answer without the gate's cookies
+      authorizer_id      optional override, null means var.authorizer_id
+      authorization_scopes optional JWT scopes, only meaningful with a JWT authorizer
+
+    API Gateway picks the most specific match, so an explicit route always wins over $default.
+
+    Note the two keys a resource collection needs. "ANY /api/v1/posts" does not match
+    /api/v1/posts/123, and "ANY /api/v1/posts/{proxy+}" does not match the bare collection path.
+    Both are needed to carve a prefix off the monolith cleanly.
+  EOT
+
+  type = map(object({
+    integration          = string
+    authorization_type   = optional(string)
+    authorizer_id        = optional(string)
+    authorization_scopes = optional(list(string))
+  }))
+  default = {}
 
   validation {
-    condition     = length(var.route_keys) > 0
-    error_message = "route_keys must list at least one route key, otherwise the API answers nothing."
+    condition     = !contains(keys(var.routes), "$default")
+    error_message = "Do not list $default in routes; name the integration that serves it with default_integration instead, so the access gate's authorizer reaches it the same way it reaches every other route."
   }
 
   validation {
-    condition     = length(distinct(var.route_keys)) == length(var.route_keys)
-    error_message = "route_keys contains a duplicate; each key can exist once on an API."
+    condition = alltrue([
+      for k, _ in var.routes :
+      can(regex("^(ANY|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /", k))
+    ])
+    error_message = "Every routes key must be <METHOD> <path> where METHOD is ANY, GET, POST, PUT, PATCH, DELETE, HEAD or OPTIONS and the path starts with /."
   }
 
   validation {
-    condition     = alltrue([for k in var.route_keys : k == "$default" || can(regex("^(ANY|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /", k))])
-    error_message = "Every route key must be $default or <METHOD> <path> where METHOD is ANY, GET, POST, PUT, PATCH, DELETE, HEAD or OPTIONS and the path starts with /."
+    condition = alltrue([
+      for k, r in var.routes :
+      r.authorization_type == null || contains(["NONE", "CUSTOM", "AWS_IAM", "JWT"], coalesce(r.authorization_type, "NONE"))
+    ])
+    error_message = "A routes entry's authorization_type must be NONE, CUSTOM, AWS_IAM or JWT."
   }
 }
 
 variable "payload_format_version" {
-  description = "Lambda proxy payload format version the integration sends the function. 2.0 is the HTTP API native format."
+  description = "Default Lambda proxy payload format version for integrations that do not set their own. 2.0 is the HTTP API native format."
   type        = string
   default     = "2.0"
 
@@ -66,19 +172,8 @@ variable "payload_format_version" {
   }
 }
 
-variable "integration_timeout_milliseconds" {
-  description = "Integration timeout in milliseconds, 50 to 30000. Null leaves the API Gateway default (30000) in place without writing it into the configuration, which is what an integration that never set a timeout has in state."
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.integration_timeout_milliseconds == null || (var.integration_timeout_milliseconds >= 50 && var.integration_timeout_milliseconds <= 30000)
-    error_message = "integration_timeout_milliseconds must be between 50 and 30000 when set."
-  }
-}
-
 variable "throttling_burst_limit" {
-  description = "Default route throttling burst limit on the $default stage."
+  description = "Default route throttling burst limit on the $default stage: layer 1 of the estate's rate limiting, applied to every route that has no route_settings override."
   type        = number
   default     = 50
 
@@ -89,7 +184,7 @@ variable "throttling_burst_limit" {
 }
 
 variable "throttling_rate_limit" {
-  description = "Default route steady-state requests per second on the $default stage."
+  description = "Default route steady-state requests per second on the $default stage, applied to every route that has no route_settings override."
   type        = number
   default     = 25
 
@@ -99,8 +194,48 @@ variable "throttling_rate_limit" {
   }
 }
 
+variable "route_settings" {
+  description = <<-EOT
+    Per-route stage settings, keyed by route key exactly as routes is, plus "$default" for the
+    default route. An entry here overrides the stage's default_route_settings for that one route,
+    which is how an expensive path gets a tighter limit than the rest of the API without lowering
+    the whole stage.
+
+    Per entry, every field optional:
+      throttling_burst_limit   burst for this route only
+      throttling_rate_limit    requests per second for this route only
+      detailed_metrics_enabled per-route CloudWatch metrics for this route only
+
+    A key that names no route is rejected: API Gateway accepts the setting and then silently
+    applies it to nothing.
+  EOT
+
+  type = map(object({
+    throttling_burst_limit   = optional(number)
+    throttling_rate_limit    = optional(number)
+    detailed_metrics_enabled = optional(bool)
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for k, s in var.route_settings :
+      s.throttling_burst_limit == null || (coalesce(s.throttling_burst_limit, 0) >= 0 && floor(coalesce(s.throttling_burst_limit, 0)) == coalesce(s.throttling_burst_limit, 0))
+    ])
+    error_message = "A route_settings throttling_burst_limit must be a non-negative whole number."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.route_settings :
+      s.throttling_rate_limit == null || coalesce(s.throttling_rate_limit, 0) >= 0
+    ])
+    error_message = "A route_settings throttling_rate_limit must be non-negative."
+  }
+}
+
 variable "detailed_metrics_enabled" {
-  description = "Publish per-route CloudWatch metrics from the $default stage. Off by default; each route becomes its own metric dimension when on."
+  description = "Publish per-route CloudWatch metrics from the $default stage. Off by default; each route becomes its own metric dimension when on, which with a per-prefix API is one dimension per prefix."
   type        = bool
   default     = false
 }
@@ -154,7 +289,7 @@ variable "access_log_format" {
 }
 
 variable "lambda_permission_statement_id" {
-  description = "statement_id of the aws_lambda_permission that lets API Gateway invoke the function. Changing it replaces the permission (a moment with no permission at all), so an adopting consumer passes whatever its existing permission uses."
+  description = "Default statement_id of the aws_lambda_permission that lets API Gateway invoke a function. Used verbatim when there is only one integration, and otherwise for the default_integration entry, with every other integration getting \"<this>-<key>\". That keeps an adopting consumer's existing permission at the statement id it already has in state, whether or not it names a default_integration. Changing it replaces the permission, a moment with no permission at all."
   type        = string
   default     = "AllowHttpApiInvoke"
 
@@ -176,9 +311,36 @@ variable "disable_execute_api_endpoint" {
 }
 
 variable "authorizer_id" {
-  description = "Id of an aws_apigatewayv2_authorizer on this API, typically staging-access-gate's http_api_authorizer_id. When set, every route gets authorization_type CUSTOM with this authorizer; when null, every route is open (NONE)."
+  description = "Id of an aws_apigatewayv2_authorizer on this API, typically staging-access-gate's http_api_authorizer_id. When set, every route the module creates gets authorization_type CUSTOM with this authorizer, $default included, unless that one route overrides it in routes. When null, every route is NONE."
   type        = string
   default     = null
+}
+
+variable "cors_configuration" {
+  description = <<-EOT
+    CORS the API answers preflight with itself, instead of the function doing it. Null, the default,
+    creates no cors_configuration block at all, which is what an API that handles CORS in the
+    function has in state.
+
+    Setting this makes API Gateway answer OPTIONS for every route without invoking any integration,
+    so an application that already sets CORS headers in the function should leave it null rather
+    than configure both and have them disagree.
+  EOT
+
+  type = object({
+    allow_credentials = optional(bool)
+    allow_headers     = optional(list(string))
+    allow_methods     = optional(list(string))
+    allow_origins     = optional(list(string))
+    expose_headers    = optional(list(string))
+    max_age           = optional(number)
+  })
+  default = null
+
+  validation {
+    condition     = var.cors_configuration == null || !coalesce(try(var.cors_configuration.allow_credentials, false), false) || !contains(coalesce(try(var.cors_configuration.allow_origins, []), []), "*")
+    error_message = "cors_configuration cannot set allow_credentials = true together with allow_origins = [\"*\"]; browsers reject that pair and API Gateway will not send the header."
+  }
 }
 
 variable "domain_name" {

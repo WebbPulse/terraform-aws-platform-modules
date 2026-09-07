@@ -144,10 +144,16 @@ module "api" {
 
   name = "${local.name}-api"
 
-  lambda_invoke_arn    = aws_lambda_function.api.invoke_arn
-  lambda_function_name = aws_lambda_function.api.function_name
+  integrations = {
+    legacy = {
+      lambda_function_name = aws_lambda_function.api.function_name
+      lambda_invoke_arn    = aws_lambda_function.api.invoke_arn
+    }
+  }
 
-  route_keys             = ["ANY /{proxy+}", "ANY /"]
+  # $default catches everything, so there is no route on this API the gate's authorizer misses.
+  default_integration = "legacy"
+
   throttling_burst_limit = 200
   throttling_rate_limit  = 100
 
@@ -155,6 +161,8 @@ module "api" {
   certificate_arn = aws_acm_certificate_validation.api.certificate_arn
   zone_id         = data.aws_route53_zone.this.zone_id
 
+  # authorizer_id is applied by the module to every route it creates, $default included. A route
+  # is never written without an authorization_type, so the gate cannot be forgotten on one path.
   disable_execute_api_endpoint = var.staging_access_gate
   authorizer_id                = var.staging_access_gate ? module.gate[0].http_api_authorizer_id : null
 }
