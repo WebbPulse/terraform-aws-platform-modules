@@ -2,7 +2,8 @@
 
 The alarm set for a Lambda-backed HTTP API on DynamoDB: one SNS topic with email subscribers,
 Lambda `Errors` and `Throttles` alarms, HTTP API `5xx` and integration latency percentile alarms,
-and one read plus write throttle alarm per DynamoDB table. It is the shape CarModPicker already
+and DynamoDB read plus write throttle alarms, either one for the whole environment or one per
+table. It is the shape CarModPicker already
 runs by hand, lifted into one place so the next application gets the same coverage without
 retyping it, and so a change to a threshold reaches every application on its next plan.
 
@@ -20,6 +21,7 @@ aws_cloudwatch_metric_alarm.lambda_throttles[0]        only with lambda_function
 aws_cloudwatch_metric_alarm.api_5xx[0]                 only with http_api_id
 aws_cloudwatch_metric_alarm.api_integration_latency[0] only with http_api_id
 aws_cloudwatch_metric_alarm.dynamodb_throttles["<key>"] one per dynamodb_tables entry
+aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles[0]  only with dynamodb_aggregate_alarm
 ```
 
 Alarm names:
@@ -31,13 +33,14 @@ Alarm names:
 | `api_5xx` | `<name_prefix>-api-5xx` |
 | `api_integration_latency` | `<name_prefix>-api-integration-latency-<api_latency_statistic>` |
 | `dynamodb_throttles["<key>"]` | `<table name>-throttles` |
+| `dynamodb_aggregate_throttles[0]` | `<name_prefix>-dynamodb-throttles` |
 
 ## Usage
 
 ```hcl
 module "alarms" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-  version = "~> 1.6"
+  version = "~> 1.7"
 
   name_prefix         = local.prefix
   notification_emails = ["alerts@example.com"]
@@ -47,7 +50,10 @@ module "alarms" {
   # { for k, t in aws_dynamodb_table.tables : k => t.name } instead.
   lambda_function_name = module.lambda_api.function_name
   http_api_id          = module.api.api_id
-  dynamodb_tables      = module.dynamodb.table_names
+
+  # One alarm for every table in the environment. It needs no table list; pass
+  # dynamodb_tables = module.dynamodb.table_names instead for the per table shape.
+  dynamodb_aggregate_alarm = true
 }
 ```
 
@@ -68,6 +74,73 @@ create, and the new address gets a fresh confirmation email.
 
 ## Watching the DynamoDB tables
 
+There are two shapes, and an application picks one. `dynamodb_aggregate_alarm = true` is the
+recommended one: a single alarm for the whole environment. `dynamodb_tables` is the original per
+table shape, kept so an application that wants an alarm named after each table can still have one.
+Setting both is allowed and gives you both sets, which is normally a mistake.
+
+### One alarm for the environment
+
+```hcl
+dynamodb_aggregate_alarm = true
+dynamodb_tables          = {}
+```
+
+That creates `<name_prefix>-dynamodb-throttles` and nothing else. It is two CloudWatch Metrics
+Insights queries added by metric math:
+
+```
+throttles = reads + writes    # returned to the alarm
+reads     = SELECT SUM(ReadThrottleEvents)  FROM SCHEMA("AWS/DynamoDB", TableName)
+writes    = SELECT SUM(WriteThrottleEvents) FROM SCHEMA("AWS/DynamoDB", TableName)
+```
+
+Three things follow from that:
+
+- **No table list.** The queries are resolved on every evaluation, so a table added after the
+  apply is covered without a Terraform change and a dropped table falls out on its own. This is
+  the main reason to prefer it: the per table shape silently stops covering a new table until
+  someone re-applies.
+- **Account wide, not prefix filtered.** `SCHEMA("AWS/DynamoDB", TableName)` matches every table
+  in the account and Region, not only the ones named after `name_prefix`. That is right for these
+  applications, where an environment is its own account. An account holding two environments would
+  see one environment's throttling raise the other's alarm, and wants the per table shape or a
+  `WHERE` clause the module does not expose yet.
+- **The two metrics are the table level ones.** Naming only `TableName` in `SCHEMA` matches the
+  series carrying exactly that dimension, which excludes the per index series that also carry
+  `GlobalSecondaryIndexName`. An index throttling still shows up, because it is charged to the
+  table's own `ReadThrottleEvents`, and it is not double counted.
+
+`ReadThrottleEvents` plus `WriteThrottleEvents` is deliberate, rather than the single
+`ThrottledRequests` metric that would need only one query. `ThrottledRequests` is incremented only
+when *every* event in a request is throttled, so a `BatchWriteItem` where nine of ten writes are
+throttled increments nothing, while `WriteThrottleEvents` counts all nine. The throttle event
+metrics are also the ones the per table alarms already use, so the two shapes agree on what
+counts as throttling.
+
+`dynamodb_aggregate_period` defaults to 60, not the 300 the rest of the module uses. A Metrics
+Insights alarm is standard resolution and evaluates every 60 seconds, so 60 is the only period
+AWS documents for it. The validation accepts multiples of 60 and rejects the 10 and 30 the other
+periods allow.
+
+### Cost
+
+Both shapes cost the same in us-west-2 today, and the aggregate one is not the cheaper of the
+two. CloudWatch bills a Metrics Insights alarm per *metric the query matches*, at the same $0.10
+per month as an ordinary alarm metric, so an environment with 25 tables pays 25 tables x 2
+metrics x $0.10 = $5.00 a month either way. What the aggregate shape buys is one alarm resource
+instead of 25, no table list to keep in step, and a bill that no longer grows a line per table
+per environment. What it costs is per table attribution in the alarm itself: the notification
+says the environment throttled, not which table did, and CloudWatch Metrics is where you find
+out which.
+
+The cost does depend on the metrics matched, so the query matters. `ThrottledRequests` carries an
+`Operation` dimension, so a query over it matches a series per table *per operation* and can cost
+several times more; it is also the less sensitive metric, which is the other reason this module
+does not use it.
+
+### One alarm per table
+
 `dynamodb_tables` is a map of `for_each` key to table name, not a list, and the two halves do
 different jobs. The key is the alarm's Terraform address, so an application adopting alarms it
 already has keys the map exactly the way its `aws_dynamodb_table` resource is keyed. The value is
@@ -84,10 +157,20 @@ reads     = AWS/DynamoDB ReadThrottleEvents  Sum over dynamodb_throttles_period
 writes    = AWS/DynamoDB WriteThrottleEvents Sum over dynamodb_throttles_period
 ```
 
+### Migrating from the per table shape
+
+Setting `dynamodb_aggregate_alarm = true` and emptying `dynamodb_tables` in the same change plans
+one add and one destroy per table. The destroys are alarms, so nothing but the alarms is at risk,
+but the environment is uncovered between the destroy and the new alarm reaching `OK`, and the
+`<table name>-throttles` names disappear from anything that referenced them, such as a dashboard
+or a runbook. Applying the aggregate alarm first and emptying `dynamodb_tables` in a second apply
+avoids the gap at the price of a short overlap where both fire.
+
 ## Turning parts off
 
 `lambda_function_name = null` drops both Lambda alarms, `http_api_id = null` drops both API
-alarms, and `dynamodb_tables = {}` drops the table alarms. The topic is always created, so the
+alarms, and `dynamodb_tables = {}` with `dynamodb_aggregate_alarm = false` drops every DynamoDB
+alarm. The topic is always created, so the
 module is also a reasonable way to own just the notification target while alarms live elsewhere:
 publish `sns_topic_arn` and point them at it.
 
@@ -119,6 +202,10 @@ publish `sns_topic_arn` and point them at it.
 | `dynamodb_throttles_threshold` | Read plus write throttle events per period to exceed | `0` |
 | `dynamodb_throttles_period` | Period in seconds of both metrics | `300` |
 | `dynamodb_throttles_evaluation_periods` | Periods evaluated | `1` |
+| `dynamodb_aggregate_alarm` | Create one `<name_prefix>-dynamodb-throttles` alarm over every table | `false` |
+| `dynamodb_aggregate_threshold` | Read plus write throttle events across all tables per period to exceed | `0` |
+| `dynamodb_aggregate_period` | Period in seconds of both queries; 60 or a multiple of it | `60` |
+| `dynamodb_aggregate_evaluation_periods` | Periods evaluated | `1` |
 | `comparison_operator` | Comparison on every alarm | `"GreaterThanThreshold"` |
 | `treat_missing_data` | Missing data handling on every alarm | `"notBreaching"` |
 | `notify_on_ok` | Put the topic in `ok_actions` as well as `alarm_actions` | `true` |
@@ -139,6 +226,7 @@ is why its adoption passes none of them.
 | `lambda_alarm_names` | The two Lambda alarm names, empty when there is no function |
 | `api_alarm_names` | The two API alarm names, empty when there is no API |
 | `dynamodb_alarm_names` | Table alarm names keyed by their `dynamodb_tables` key |
+| `dynamodb_aggregate_alarm_name` | Name of the aggregate alarm, `null` when it is off |
 
 ## Adoption
 
@@ -152,7 +240,7 @@ nothing else in the repository changes. The speculative plan on `CarModPicker-st
 ```hcl
 module "alarms" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-  version = "~> 1.6"
+  version = "~> 1.7"
 
   name_prefix         = local.prefix
   notification_emails = ["tyler@webbpulse.com", "tylert2610@gmail.com"]
@@ -223,12 +311,23 @@ Three details are what make that plan clean:
 
 The `moved` blocks can be deleted after one apply in each environment.
 
+Since v1.7.0 CarModPicker runs the aggregate alarm instead, so its block is now
+
+```hcl
+  dynamodb_aggregate_alarm = true
+  dynamodb_tables          = {}
+```
+
+which replaced its 25 per table alarms with one. The `moved` blocks above are still the right
+first step for an application adopting the module with per table alarms already in state; switch
+to the aggregate shape afterwards, as its own change, so the moves and the replacements are two
+readable plans rather than one.
+
 ### WebbPulse-Portfolio
 
-WebbPulse-Portfolio has no alarms today, so there is nothing to move. Its plan is **all adds**,
-17 of them with the block below: one topic, two email subscriptions, the two Lambda alarms, the
-two API alarms, and one alarm per DynamoDB table, which with the current `local.dynamodb_tables`
-is ten tables (nine entity tables plus `meta`). Applying it also sends a confirmation email to
+WebbPulse-Portfolio had no alarms before it adopted this module, so there was nothing to move.
+Starting from nothing the block below is **all adds**, eight of them: one topic, two email
+subscriptions, the two Lambda alarms, the two API alarms, and the one aggregate DynamoDB alarm. Applying it also sends a confirmation email to
 each address in `notification_emails`, and the alarms deliver nothing to an address until that
 address clicks the link.
 
@@ -237,7 +336,7 @@ Add this as `terraform/monitoring.tf`:
 ```hcl
 module "alarms" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-  version = "~> 1.6"
+  version = "~> 1.7"
 
   name_prefix         = local.prefix
   notification_emails = ["tyler@webbpulse.com", "tylert2610@gmail.com"]
@@ -245,10 +344,8 @@ module "alarms" {
   lambda_function_name = module.lambda_api.function_name
   http_api_id          = module.api.api_id
 
-  # module.dynamodb.table_names is keyed by entity and each table is named
-  # "${local.prefix}-${key}", so this is the same shape CarModPicker passes. Before adopting
-  # dynamodb-tables this was { for k, t in aws_dynamodb_table.this : k => t.name }.
-  dynamodb_tables = module.dynamodb.table_names
+  # One alarm across every table in the environment, so there is no table list to keep in step.
+  dynamodb_aggregate_alarm = true
 }
 ```
 
