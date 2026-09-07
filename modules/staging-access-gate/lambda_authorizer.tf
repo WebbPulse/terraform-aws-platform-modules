@@ -45,7 +45,7 @@ resource "aws_iam_role_policy" "authorizer" {
 
 resource "aws_lambda_function" "authorizer" {
   function_name = "${var.name}-access-gate-authorizer"
-  description   = "HTTP API REQUEST authorizer for the ${var.name} access gate: admits only requests carrying the CloudFront origin verification header."
+  description   = "HTTP API REQUEST authorizer for the ${var.name} access gate: admits CORS preflights, requests carrying the origin verification header, and browsers presenting the gate's own valid CloudFront signed cookies."
   role          = aws_iam_role.authorizer.arn
 
   filename         = data.archive_file.authorizer.output_path
@@ -60,6 +60,12 @@ resource "aws_lambda_function" "authorizer" {
     variables = {
       HEADER_NAME         = lower(var.origin_verify_header_name)
       ORIGIN_VERIFY_PARAM = aws_ssm_parameter.origin_verify.name
+      COOKIE_DOMAIN       = var.cookie_domain
+      KEY_PAIR_ID         = aws_cloudfront_public_key.signing.id
+
+      # The public half of the signing key pair. Not a secret: CloudFront publishes it, and it only
+      # verifies signatures, so an environment variable is the right place for it.
+      SIGNING_PUBLIC_KEY_PEM = tls_private_key.signing.public_key_pem
     }
   }
 
@@ -75,8 +81,14 @@ resource "aws_apigatewayv2_authorizer" "origin_verify" {
   authorizer_uri                    = aws_lambda_function.authorizer.invoke_arn
   authorizer_payload_format_version = "2.0"
   enable_simple_responses           = true
-  identity_sources                  = ["$request.header.${var.origin_verify_header_name}"]
-  authorizer_result_ttl_in_seconds  = 300
+  # No identity sources: the authorizer has two accepted credentials (the origin verification
+  # header and the gate's signed cookies), and API Gateway requires every listed identity source to
+  # be present or it answers 401 without invoking the function. Identity sources are optional, and
+  # dropping them means the answer cannot be cached ("To enable caching, your authorizer must have
+  # at least one identity source"), so the TTL is 0 and the function runs on every request. It is a
+  # 128 MB Node function whose only remote call is an SSM read cached per execution environment.
+  identity_sources                 = []
+  authorizer_result_ttl_in_seconds = 0
 }
 
 resource "aws_lambda_permission" "authorizer" {
