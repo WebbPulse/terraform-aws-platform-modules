@@ -6,16 +6,17 @@ locals {
   # jsonencode() of hand-built maps that used a string for single values and a list otherwise, so
   # this module does the same: the JSON it produces is byte-identical to what is in state today,
   # and the plan after the move is empty rather than "equivalent". jsondecode() is the only way to
-  # make one expression yield either a string or a list.
+  # make one expression yield either a string or a list, which is why every one-or-many field goes
+  # through the same jsonencode/jsondecode pair.
   trust_subjects = jsondecode(length(var.subjects) == 1 ? jsonencode(var.subjects[0]) : jsonencode(var.subjects))
 
   policy_statements = [
     for s in var.policy_statements : merge(
-      {
-        Effect   = s.effect
-        Action   = s.actions
-        Resource = jsondecode(length(s.resources) == 1 ? jsonencode(s.resources[0]) : jsonencode(s.resources))
-      },
+      { Effect = s.effect },
+      s.actions == null ? {} : { Action = jsondecode(length(s.actions) == 1 ? jsonencode(s.actions[0]) : jsonencode(s.actions)) },
+      s.not_actions == null ? {} : { NotAction = jsondecode(length(s.not_actions) == 1 ? jsonencode(s.not_actions[0]) : jsonencode(s.not_actions)) },
+      s.resources == null ? {} : { Resource = jsondecode(length(s.resources) == 1 ? jsonencode(s.resources[0]) : jsonencode(s.resources)) },
+      s.not_resources == null ? {} : { NotResource = jsondecode(length(s.not_resources) == 1 ? jsonencode(s.not_resources[0]) : jsonencode(s.not_resources)) },
       s.sid == null ? {} : { Sid = s.sid },
       s.condition == null ? {} : {
         Condition = {

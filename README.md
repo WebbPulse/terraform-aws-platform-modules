@@ -20,6 +20,10 @@ pin `~> MAJOR.0` and pick up minor and patch releases on their next plan. That c
 deliberate. The application repositories are meant to be near-identical, so a fix to a shared
 pattern should reach all of them, and the place to notice a behavior change is the plan.
 
+A two-segment constraint such as `~> 1.1` or `~> 1.3` floats across all of 1.x, so it picks up
+every later minor release, not just patches on that minor. That is what the module READMEs
+intend. Write `~> 1.3.0` instead to hold a minor and take patch releases only.
+
 ## Modules
 
 | Module | What it is |

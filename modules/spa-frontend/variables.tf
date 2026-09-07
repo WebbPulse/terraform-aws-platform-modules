@@ -156,6 +156,34 @@ variable "cache_mode" {
   }
 }
 
+variable "index_cache_mode" {
+  description = "How the SPA shell behavior at /<default_root_object> configures caching. Defaults to cache_mode, so a consumer that never sets it sees no change. Set it when the live distribution mixes the two models, which is what happens when a hand-written default behavior kept its legacy forwarded_values block while the SPA shell behavior was added later with a managed cache policy. Only meaningful when access_gate is set, because the SPA shell behavior exists only then."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.index_cache_mode == null || contains(["policies", "forwarded_values"], var.index_cache_mode)
+    error_message = "index_cache_mode must be policies or forwarded_values, or null to follow cache_mode."
+  }
+}
+
+variable "index_cache_policies" {
+  description = "Cache, origin request and response headers policies for the SPA shell behavior when its effective cache mode is policies. Leave it null and the behavior reuses cache_policy_id, origin_request_policy_id and response_headers_policy_id, which is what every consumer written before this input got. Set it to pin the SPA shell behavior on its own, including to none: { cache_policy_id = \"658327ea-f89d-4fab-a63d-7e88639e58f6\" } gives that behavior a cache policy and no origin request or response headers policy, which is the shape a hand-written SPA shell behavior usually has."
+  type = object({
+    cache_policy_id            = optional(string)
+    origin_request_policy_id   = optional(string)
+    response_headers_policy_id = optional(string)
+  })
+  default  = null
+  nullable = true
+
+  validation {
+    condition     = var.index_cache_policies == null || var.index_cache_policies.cache_policy_id != null
+    error_message = "index_cache_policies.cache_policy_id is required when index_cache_policies is set; CloudFront needs a cache policy on a behavior that uses the policy model."
+  }
+}
+
 variable "cache_policy_id" {
   description = "Cache policy for the S3 behaviors when cache_mode is policies. Defaults to the AWS managed CachingOptimized policy."
   type        = string
@@ -239,7 +267,7 @@ variable "viewer_request_function_arn" {
 # ---------------------------------------------------------------------------
 
 variable "access_gate" {
-  description = "Outputs of a staging-access-gate module instance. When set, the distribution gains the login origin, the API origin with the origin verification header, ordered behaviors for the auth and API path patterns, an unsigned behavior for the SPA shell, trusted_key_groups on the default and API behaviors, and the gate's viewer-request function on every behavior. Pass module.gate.origin_verify_header_value straight through so its sensitive mark survives; the variable as a whole is deliberately not sensitive so path patterns and origin names stay readable in plans."
+  description = "Outputs of a staging-access-gate module instance, minus the origin verification header value, which is a separate input. When set, the distribution gains the login origin, the API origin with the origin verification header, ordered behaviors for the auth and API path patterns, an unsigned behavior for the SPA shell, trusted_key_groups on the default and API behaviors, and the gate's viewer-request function on every behavior. The secret is kept out of this object on purpose: an object with one sensitive member is sensitive as a whole at the module boundary, which would redact every path pattern, origin id and TTL read out of it and make the distribution plan a spurious in-place update where only the sensitivity marks differ."
   type = object({
     key_group_id                                           = string
     viewer_request_function_arn                            = string
@@ -249,7 +277,6 @@ variable "access_gate" {
     api_origin_domain_name                                 = string
     api_path_pattern                                       = string
     origin_verify_header_name                              = string
-    origin_verify_header_value                             = string
     cache_policy_id_caching_disabled                       = string
     origin_request_policy_id_all_viewer_except_host_header = string
     login_origin_id                                        = optional(string, "access-gate-login")
@@ -266,6 +293,19 @@ variable "access_gate" {
   validation {
     condition     = var.access_gate == null || (var.access_gate.login_origin_id != var.origin_id && var.access_gate.api_origin_id != var.origin_id && var.access_gate.login_origin_id != var.access_gate.api_origin_id)
     error_message = "access_gate.login_origin_id, access_gate.api_origin_id and origin_id must be three different strings."
+  }
+}
+
+variable "access_gate_origin_verify_header_value" {
+  description = "Value of the origin verification header CloudFront sends to the API origin, normally module.gate.origin_verify_header_value. Required when access_gate is set and ignored otherwise. It is a top-level input rather than a member of access_gate so that its sensitive mark stays on this one value instead of spreading to every attribute of the object."
+  type        = string
+  default     = null
+  sensitive   = true
+  nullable    = true
+
+  validation {
+    condition     = var.access_gate == null || var.access_gate_origin_verify_header_value != null
+    error_message = "access_gate_origin_verify_header_value is required when access_gate is set: the API origin needs the header the gate's authorizer checks."
   }
 }
 

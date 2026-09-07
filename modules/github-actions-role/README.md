@@ -37,7 +37,8 @@ aws_iam_role <role_name>
   `repo:ORG/REPO:ref:refs/heads/main` admits only pushes to `main`. GitHub also issues the
   rename-proof form `repo:ORG@ORG_ID/REPO@REPO_ID:...` when the repository is configured for it.
 - **Permissions.** `policy_statements` is rendered into one inline policy. Statements are plain
-  objects (`actions`, `resources`, optional `sid`, `effect`, `condition`) so the consumer keeps
+  objects (`actions` or `not_actions`, `resources` or `not_resources`, optional `sid`, `effect`,
+  `condition`) so the consumer keeps
   its statements next to the resources they name, with real ARN references, and the module never
   has to know what a frontend bucket is. Managed policy attachments and extra inline policies can
   be added from outside with `role_name`.
@@ -48,7 +49,7 @@ aws_iam_role <role_name>
 | --- | --- | --- |
 | `role_name` | Full role name, e.g. `carmodpicker-production-github-actions-deploy` | required |
 | `subjects` | `sub` claims allowed to assume the role, `StringLike` matched | required |
-| `policy_statements` | List of `{ actions, resources, sid?, effect?, condition? }` for the inline policy; empty creates none | `[]` |
+| `policy_statements` | List of `{ actions \| not_actions, resources \| not_resources, sid?, effect?, condition? }` for the inline policy; empty creates none | `[]` |
 | `inline_policy_name` | Name of the inline policy | `deploy-permissions` |
 | `audience` | Required `aud` claim and the provider's client id | `sts.amazonaws.com` |
 | `create_oidc_provider` | Create the account's `token.actions.githubusercontent.com` provider here | `true` |
@@ -74,13 +75,18 @@ aws_iam_role <role_name>
 ## Rendering guarantees
 
 IAM accepts a bare string where a list has one element, and both estates were written with
-`jsonencode()` of hand-built maps that used a string for a single `sub` or `Resource` and a list
-otherwise. The module renders the same way: one subject is a string, several are a list; one
-resource is a string, several are a list; `Action` is always a list; `Sid` and `Condition` are
-present only when given. Combined with `jsonencode()`'s sorted keys, the trust policy and the
-inline policy come out byte-identical to what is in state, so the plan after the `moved` blocks
-is empty rather than relying on the provider's semantic policy comparison (which would also hide
-the difference, but would leave the stored document unchanged until the next real edit).
+`jsonencode()` of hand-built maps that used a string for a single value and a list otherwise. The
+module renders the same way, and it applies the rule to every one-or-many field rather than to
+some of them: one subject is a string, several are a list, and the same holds for `Action`,
+`NotAction`, `Resource`, `NotResource` and each condition key's values. `Sid`, `Condition` and the
+`Not` forms are present only when given. Combined with `jsonencode()`'s sorted keys, the trust
+policy and the inline policy come out byte-identical to what is in state, so the plan after the
+`moved` blocks is empty rather than relying on the provider's semantic policy comparison (which
+would also hide the difference, but would leave the stored document unchanged until the next real
+edit).
+
+A statement whose `actions` holds one entry therefore renders as `"Action": "ssm:GetParameter"`,
+not `"Action": ["ssm:GetParameter"]`, which is what both estates have in state today.
 
 `tags = {}` is passed to the provider as `null`, which is the same as omitting the argument; the
 role and the provider then carry `default_tags` only, exactly as today.
@@ -93,14 +99,14 @@ old resources. The role ARN does not change, so the `AWS_DEPLOY_ROLE_ARN` GitHub
 workflows stay as they are. Land it on `staging` first and read the speculative plan: it must
 show only the moves, `0 to add, 0 to change, 0 to destroy`.
 
-The module ships in the release after 1.1.0, so consumers need `version = "~> 1.2"`.
+The module ships from 1.2.0; the single-value rendering fix and the not_actions / not_resources fields land in 1.4.0, so consumers need `version = "~> 1.4"`.
 
 ### CarModPicker
 
 ```hcl
 module "github_actions_role" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   role_name = "${local.prefix}-github-actions-deploy"
   subjects  = ["repo:WebbPulse/CarModPicker:*"]
@@ -167,7 +173,7 @@ byte-identical.
 ```hcl
 module "github_actions_role" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   role_name = "${local.prefix}-github-actions-deploy"
   subjects  = ["repo:WebbPulse@185014056/WebbPulse-Portfolio@1029410045:*"]

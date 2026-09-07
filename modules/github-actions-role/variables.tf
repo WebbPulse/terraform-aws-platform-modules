@@ -127,13 +127,15 @@ variable "inline_policy_name" {
 }
 
 variable "policy_statements" {
-  description = "Statements of the inline deploy policy, one object per IAM statement: actions and resources are required, effect defaults to Allow, sid and condition are optional. condition is operator -> key -> values, for example { StringEquals = { \"aws:ResourceTag/Project\" = [\"x\"] } }. An empty list creates no inline policy, for roles whose permissions are attached from outside using role_name."
+  description = "Statements of the inline deploy policy, one object per IAM statement. Give either actions or not_actions, and either resources or not_resources; effect defaults to Allow, sid and condition are optional. condition is operator -> key -> values, for example { StringEquals = { \"aws:ResourceTag/Project\" = [\"x\"] } }. Every one-or-many field renders as a bare JSON string when it holds exactly one element and as a list otherwise, which is how hand-written policies are usually written. An empty list creates no inline policy, for roles whose permissions are attached from outside using role_name."
   type = list(object({
-    sid       = optional(string)
-    effect    = optional(string, "Allow")
-    actions   = list(string)
-    resources = list(string)
-    condition = optional(map(map(list(string))))
+    sid           = optional(string)
+    effect        = optional(string, "Allow")
+    actions       = optional(list(string))
+    not_actions   = optional(list(string))
+    resources     = optional(list(string))
+    not_resources = optional(list(string))
+    condition     = optional(map(map(list(string))))
   }))
   default = []
 
@@ -143,8 +145,13 @@ variable "policy_statements" {
   }
 
   validation {
-    condition     = alltrue([for s in var.policy_statements : length(s.actions) > 0 && length(s.resources) > 0])
-    error_message = "Every statement needs at least one action and at least one resource. Use \"*\" as the resource for actions that do not support resource-level permissions."
+    condition     = alltrue([for s in var.policy_statements : length(coalesce(s.actions, [])) > 0 != (length(coalesce(s.not_actions, [])) > 0)])
+    error_message = "Every statement needs exactly one of actions or not_actions, with at least one entry. IAM rejects a statement that carries both Action and NotAction."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.policy_statements : length(coalesce(s.resources, [])) > 0 != (length(coalesce(s.not_resources, [])) > 0)])
+    error_message = "Every statement needs exactly one of resources or not_resources, with at least one entry. Use \"*\" as the resource for actions that do not support resource-level permissions."
   }
 
   validation {
@@ -153,7 +160,7 @@ variable "policy_statements" {
   }
 
   validation {
-    condition     = length(distinct(compact([for s in var.policy_statements : coalesce(s.sid, "")]))) == length(compact([for s in var.policy_statements : coalesce(s.sid, "")]))
-    error_message = "Statement sids must be unique within the policy."
+    condition     = length(distinct(compact([for s in var.policy_statements : s.sid == null ? "" : s.sid]))) == length(compact([for s in var.policy_statements : s.sid == null ? "" : s.sid]))
+    error_message = "Statement sids must be unique within the policy. Statements without a sid are ignored by this check; IAM only requires sids to be unique among the statements that have one."
   }
 }
