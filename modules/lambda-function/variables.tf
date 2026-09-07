@@ -64,23 +64,65 @@ variable "role_tags" {
   default     = {}
 }
 
-variable "runtime" {
-  description = "Lambda managed runtime identifier, for example python3.13 or nodejs22.x."
+variable "package_type" {
+  description = "How the function's code is packaged, Zip or Image. Zip is the default and takes runtime, handler and a code object naming a local zip or an S3 object. Image takes code.image_uri and must leave runtime and handler null, because the container image supplies both."
   type        = string
+  default     = "Zip"
 
   validation {
-    condition     = length(var.runtime) > 0
-    error_message = "runtime must not be empty."
+    condition     = contains(["Zip", "Image"], var.package_type)
+    error_message = "package_type must be Zip or Image."
+  }
+}
+
+variable "runtime" {
+  description = "Lambda managed runtime identifier, for example python3.13 or nodejs22.x. Required when package_type is Zip; must be null when it is Image."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.runtime == null || length(coalesce(var.runtime, "x")) > 0
+    error_message = "runtime must not be empty; leave it null for an Image function."
+  }
+
+  validation {
+    condition     = var.package_type == "Image" ? var.runtime == null : var.runtime != null
+    error_message = "runtime is required when package_type is Zip and must be null when it is Image, where the container image supplies the runtime."
   }
 }
 
 variable "handler" {
-  description = "Entry point in the deployment package, for example app.lambda_handler.handler."
+  description = "Entry point in the deployment package, for example app.lambda_handler.handler. Required when package_type is Zip; must be null when it is Image, where the image's CMD or the image_config block plays the same role."
   type        = string
+  default     = null
 
   validation {
-    condition     = length(var.handler) > 0
-    error_message = "handler must not be empty."
+    condition     = var.handler == null || length(coalesce(var.handler, "x")) > 0
+    error_message = "handler must not be empty; leave it null for an Image function."
+  }
+
+  validation {
+    condition     = var.package_type == "Image" ? var.handler == null : var.handler != null
+    error_message = "handler is required when package_type is Zip and must be null when it is Image, where the image's CMD or image_config plays the same role."
+  }
+}
+
+variable "image_config" {
+  description = "Overrides for a container image's own ENTRYPOINT, CMD and WORKDIR, all optional. Null, the default, leaves the block out entirely and the image's own Dockerfile settings stand, which is the right answer for an image that already declares a CMD. Only meaningful when package_type is Image."
+  type = object({
+    command           = optional(list(string))
+    entry_point       = optional(list(string))
+    working_directory = optional(string)
+  })
+  default = null
+
+  validation {
+    condition = var.image_config == null || anytrue([
+      try(var.image_config.command, null) != null,
+      try(var.image_config.entry_point, null) != null,
+      try(var.image_config.working_directory, null) != null,
+    ])
+    error_message = "image_config must set at least one of command, entry_point or working_directory; leave the whole object null to keep the image's own settings."
   }
 }
 
@@ -140,12 +182,6 @@ variable "reserved_concurrent_executions" {
   }
 }
 
-variable "environment_variables" {
-  description = "Environment variables for the function. An empty map leaves the environment block out entirely, which is not the same as an empty environment block, so pass the variables you want rather than filtering to nothing."
-  type        = map(string)
-  default     = {}
-}
-
 variable "tracing_mode" {
   description = "X-Ray tracing mode, Active or PassThrough. Null leaves the tracing_config block out, which the service reads as PassThrough."
   type        = string
@@ -157,13 +193,33 @@ variable "tracing_mode" {
   }
 }
 
+variable "attach_xray_write_policy" {
+  description = "Attach a small inline policy granting xray:PutTraceSegments and xray:PutTelemetryRecords to the execution role whenever tracing_mode is Active. Without it a function with Active tracing emits nothing: the service samples the invoke, the runtime tries to publish the segment, and the call is denied silently, so the traces never appear. Set it to false only when the application already grants those two actions in a policy of its own, which is the case for an estate that carried them in its runtime policy before this module owned them."
+  type        = bool
+  default     = true
+}
+
+variable "environment_variables" {
+  description = "Environment variables for the function. An empty map leaves the environment block out entirely, which is not the same as an empty environment block, so pass the variables you want rather than filtering to nothing. otel_environment_variables is merged on top of this map."
+  type        = map(string)
+  default     = {}
+}
+
+variable "otel_environment_variables" {
+  description = "OpenTelemetry and Lambda Web Adapter environment variables, merged over environment_variables. It is a separate input purely so an application can keep its own configuration and its tracing configuration apart in the module call; the two maps end up in the same environment block, and a key set in both takes the value from this one. Empty by default, so a consumer that does not set it sees exactly the environment it has today."
+  type        = map(string)
+  default     = {}
+}
+
 variable "code" {
   description = <<-EOT
-    Where the deployment package comes from, in one of two shapes. A local zip:
+    Where the deployment package comes from, in one of three shapes. A local zip:
     { filename = data.archive_file.placeholder.output_path, source_code_hash = data.archive_file.placeholder.output_base64sha256 }.
     An object in S3:
     { s3_bucket = aws_s3_bucket.artifacts.id, s3_key = aws_s3_object.placeholder.key, s3_object_version = null, source_code_hash = data.archive_file.placeholder.output_base64sha256 }.
-    Set filename or s3_bucket and s3_key, never both. This is only the seed package: the code
+    A container image, which needs package_type = "Image":
+    { image_uri = "<account>.dkr.ecr.<region>.amazonaws.com/<repo>@sha256:<digest>" }.
+    Set exactly one of filename, s3_bucket and s3_key, or image_uri. This is only the seed package: the code
     attributes named in ignore_code_changes are ignored afterwards, so a deployment pipeline that
     calls UpdateFunctionCode is not undone by the next plan. The archive_file or S3 object that
     produces the seed stays with the application, because one builds it from a directory in the
@@ -191,6 +247,11 @@ variable "code" {
   validation {
     condition     = (var.code.s3_bucket == null) == (var.code.s3_key == null)
     error_message = "code.s3_bucket and code.s3_key must be set together."
+  }
+
+  validation {
+    condition     = (var.package_type == "Image") == (var.code.image_uri != null)
+    error_message = "code.image_uri and package_type = \"Image\" go together: an Image function needs an image_uri, and a Zip function must not carry one."
   }
 }
 
