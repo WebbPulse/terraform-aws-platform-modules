@@ -46,10 +46,36 @@ variable "tags" {
 # --- Lambda -------------------------------------------------------------------------------------
 
 variable "lambda_function_name" {
-  description = "Name of the Lambda function behind the API, the FunctionName dimension of the Errors and Throttles alarms. null skips both Lambda alarms."
+  description = "Name of the single Lambda function behind the API, the FunctionName dimension of the per function Errors and Throttles alarms. It is the one function form of the input; an application with a function per domain passes lambda_function_names instead, and exactly one of the two forms may be set. null skips both per function Lambda alarms."
   type        = string
   default     = null
   nullable    = true
+
+  validation {
+    condition     = var.lambda_function_name == null || length(var.lambda_function_names) == 0
+    error_message = "Set lambda_function_name or lambda_function_names, not both. lambda_function_name is the one function form and creates a per function alarm pair; lambda_function_names is the many function form and feeds the aggregate alarms."
+  }
+}
+
+variable "lambda_function_names" {
+  description = "Names of the Lambda functions behind the API, for an application split into a function per domain. It is the many function form of lambda_function_name and exactly one of the two may be set. On its own it creates nothing: it is the list the aggregate alarms sum over, so pair it with lambda_aggregate_alarm = true. Deliberately no per function alarms, because a per function alarm pair across a growing estate is what the aggregate shape exists to avoid."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for n in var.lambda_function_names : can(regex("^[A-Za-z0-9_-]{1,140}$", n))])
+    error_message = "Every entry in lambda_function_names must be a Lambda function name: 1 to 140 characters of letters, digits, hyphens or underscores."
+  }
+
+  validation {
+    condition     = length(distinct(var.lambda_function_names)) == length(var.lambda_function_names)
+    error_message = "lambda_function_names must not repeat a name: each name becomes one metric_query id in the aggregate alarms."
+  }
+
+  validation {
+    condition     = length(var.lambda_function_names) <= 10
+    error_message = "lambda_function_names holds at most 10 names: the aggregate alarms are metric math, and a CloudWatch alarm's metric math expression may reference at most 10 metrics. An estate past 10 functions wants the log based alarm in error_log_groups, whose dimensionless metric has no such ceiling."
+  }
 }
 
 variable "lambda_errors_threshold" {
@@ -105,6 +131,45 @@ variable "lambda_throttles_evaluation_periods" {
   validation {
     condition     = var.lambda_throttles_evaluation_periods >= 1 && floor(var.lambda_throttles_evaluation_periods) == var.lambda_throttles_evaluation_periods
     error_message = "lambda_throttles_evaluation_periods must be a whole number of at least 1."
+  }
+}
+
+variable "lambda_aggregate_alarm" {
+  description = "Create one <name_prefix>-lambda-errors-aggregate alarm and one <name_prefix>-lambda-throttles-aggregate alarm summing AWS/Lambda Errors and Throttles across every function in lambda_function_names, instead of a per function alarm pair. Each is a metric math alarm: one metric_query per function that returns no data, plus a SUM expression that does, so the alarms cover exactly the listed functions rather than every function in the account. The alarm names carry no function name, so adding a function changes the expression rather than the alarm set. false, the default, creates neither, which is what keeps an existing consumer byte identical."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.lambda_aggregate_alarm || length(var.lambda_function_names) > 0
+    error_message = "lambda_aggregate_alarm = true needs at least one name in lambda_function_names: the alarms sum a metric per listed function, so an empty list has nothing to sum."
+  }
+}
+
+variable "lambda_aggregate_threshold" {
+  description = "Sum of AWS/Lambda Errors, or of Throttles, across every function in lambda_function_names over one period that must be exceeded for the matching aggregate alarm to fire. One threshold covers both alarms, because both count the same kind of thing. The default of 0 with GreaterThanThreshold means any single error or throttle on any listed function alarms."
+  type        = number
+  default     = 0
+}
+
+variable "lambda_aggregate_period" {
+  description = "Period in seconds of every metric feeding the aggregate Lambda alarms. CloudWatch accepts 10, 30, or any multiple of 60. The default 300 matches the per function alarms."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([10, 30], var.lambda_aggregate_period) || (var.lambda_aggregate_period >= 60 && var.lambda_aggregate_period % 60 == 0)
+    error_message = "lambda_aggregate_period must be 10, 30, or a multiple of 60."
+  }
+}
+
+variable "lambda_aggregate_evaluation_periods" {
+  description = "Number of periods evaluated by each aggregate Lambda alarm."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.lambda_aggregate_evaluation_periods >= 1 && floor(var.lambda_aggregate_evaluation_periods) == var.lambda_aggregate_evaluation_periods
+    error_message = "lambda_aggregate_evaluation_periods must be a whole number of at least 1."
   }
 }
 

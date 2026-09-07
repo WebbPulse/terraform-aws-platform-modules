@@ -18,6 +18,8 @@ output "alarm_names" {
   value = sort(concat(
     [for a in aws_cloudwatch_metric_alarm.lambda_errors : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.lambda_throttles : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.api_5xx : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_throttles : a.alarm_name],
@@ -32,6 +34,8 @@ output "alarm_arns" {
   value = sort(concat(
     [for a in aws_cloudwatch_metric_alarm.lambda_errors : a.arn],
     [for a in aws_cloudwatch_metric_alarm.lambda_throttles : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.arn],
     [for a in aws_cloudwatch_metric_alarm.api_5xx : a.arn],
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.arn],
     [for a in aws_cloudwatch_metric_alarm.dynamodb_throttles : a.arn],
@@ -42,12 +46,40 @@ output "alarm_arns" {
 }
 
 output "lambda_alarm_names" {
-  description = "Names of the AWS/Lambda metric alarms: the errors and throttles pair when lambda_function_name is set, or the single errors alarm when only lambda_errors_alarm_function_name is. Empty when neither input is set."
+  description = "Names of every AWS/Lambda metric alarm the module created: the per function errors and throttles pair when lambda_function_name is set, the aggregate pair when lambda_aggregate_alarm is true, and the single errors alarm when only lambda_errors_alarm_function_name is. Empty when none of those inputs is set."
   value = concat(
     [for a in aws_cloudwatch_metric_alarm.lambda_errors : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.lambda_throttles : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.standalone_lambda_errors : a.alarm_name],
   )
+}
+
+output "lambda_aggregate_alarm_names" {
+  description = "Names of the two aggregate Lambda alarms, the errors one first. Empty when lambda_aggregate_alarm is false."
+  value = concat(
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.alarm_name],
+  )
+}
+
+output "lambda_aggregate_alarm_arns" {
+  description = "ARNs of the two aggregate Lambda alarms, the errors one first, for a composite alarm or a dashboard built next to the module. Empty when lambda_aggregate_alarm is false."
+  value = concat(
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.arn],
+  )
+}
+
+output "lambda_aggregate_errors_alarm_arn" {
+  description = "ARN of the aggregate Lambda errors alarm, null when lambda_aggregate_alarm is false."
+  value       = one(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].arn)
+}
+
+output "lambda_aggregate_throttles_alarm_arn" {
+  description = "ARN of the aggregate Lambda throttles alarm, null when lambda_aggregate_alarm is false."
+  value       = one(aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[*].arn)
 }
 
 output "api_alarm_names" {
