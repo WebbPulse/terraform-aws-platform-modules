@@ -1,7 +1,8 @@
 # terraform-aws-api-alarms
 
 The alarm set for a Lambda-backed HTTP API on DynamoDB: one SNS topic with email subscribers,
-Lambda `Errors` and `Throttles` alarms, HTTP API `5xx` and integration latency percentile alarms,
+Lambda `Errors` and `Throttles` alarms, either one pair per function or one pair summed across a
+function per domain, HTTP API `5xx` and integration latency percentile alarms,
 DynamoDB throttle alarms, either one for the whole environment or one per table, and an optional
 CloudWatch Logs metric filter alarm on the errors the application itself logs. It is the
 shape CarModPicker already runs by hand, lifted into one place so the next application gets the
@@ -19,6 +20,8 @@ aws_sns_topic.alarms                                   <name_prefix>-alarms
 aws_sns_topic_subscription.email["<address>"]          one per notification_emails entry
 aws_cloudwatch_metric_alarm.lambda_errors[0]           only with lambda_function_name
 aws_cloudwatch_metric_alarm.lambda_throttles[0]        only with lambda_function_name
+aws_cloudwatch_metric_alarm.lambda_aggregate_errors[0]      only with lambda_aggregate_alarm
+aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[0]   only with lambda_aggregate_alarm
 aws_cloudwatch_metric_alarm.api_5xx[0]                 only with http_api_id
 aws_cloudwatch_metric_alarm.api_integration_latency[0] only with http_api_id
 aws_cloudwatch_metric_alarm.dynamodb_throttles["<key>"] one per dynamodb_tables entry
@@ -35,6 +38,8 @@ Alarm names:
 | --- | --- |
 | `lambda_errors` | `<name_prefix>-lambda-errors` |
 | `lambda_throttles` | `<name_prefix>-lambda-throttles` |
+| `lambda_aggregate_errors[0]` | `<name_prefix>-lambda-errors-aggregate` |
+| `lambda_aggregate_throttles[0]` | `<name_prefix>-lambda-throttles-aggregate` |
 | `api_5xx` | `<name_prefix>-api-5xx` |
 | `api_integration_latency` | `<name_prefix>-api-integration-latency-<api_latency_statistic>` |
 | `dynamodb_throttles["<key>"]` | `<table name>-throttles` |
@@ -67,6 +72,8 @@ module "alarms" {
 `examples/api-alarms-basic` at the repository root is the complete version of that, with the
 function, the API and the tables around it. `examples/api-alarms-log-errors` is the other shape: a
 function per domain, one metric filter each, and one alarm on the errors they log.
+`examples/api-alarms-lambda-aggregate` is the same function-per-domain estate with the aggregate
+`AWS/Lambda` alarms, which is the section below.
 
 ## Email subscriptions send a confirmation email
 
@@ -79,6 +86,94 @@ should expect one confirmation email per address per environment.
 Keying the subscriptions by address means removing one address from the list destroys only that
 subscription and leaves the others alone. It also means changing an address is a destroy plus a
 create, and the new address gets a fresh confirmation email.
+
+## Watching the Lambda functions
+
+There are two forms of the function input and **exactly one of them may be set**. A plan that sets
+both is rejected by a variable validation rather than silently preferring one, because the two
+build different alarms and a consumer that passes both has not decided which it wants.
+
+| Input | Shape | Alarms |
+| --- | --- | --- |
+| `lambda_function_name` | one function | `<prefix>-lambda-errors` and `<prefix>-lambda-throttles`, each on that function's `FunctionName` dimension |
+| `lambda_function_names` plus `lambda_aggregate_alarm = true` | a function per domain | `<prefix>-lambda-errors-aggregate` and `<prefix>-lambda-throttles-aggregate`, each summing every listed function |
+
+`lambda_function_names` on its own creates nothing. It is the list the aggregate alarms sum over,
+so it needs `lambda_aggregate_alarm = true` to do anything, and there is deliberately no per
+function alarm pair behind it: a pair per function across a growing estate is exactly what the
+aggregate shape exists to avoid.
+
+### One pair of alarms for a function per domain
+
+```hcl
+lambda_function_names = [for k, m in module.lambda_api : m.function_name]
+
+lambda_aggregate_alarm = true
+```
+
+Two alarms, whatever the function count. Each is a metric math alarm: one `metric_query` per
+function carrying that function's `FunctionName` dimension with `return_data = false`, plus a SUM
+expression that returns data to the alarm.
+
+```
+errors = m0 + m1 + m2 + m3     # returned to the alarm
+m0     = AWS/Lambda Errors  FunctionName = <first name>   Sum over lambda_aggregate_period
+m1     = AWS/Lambda Errors  FunctionName = <second name>  Sum over lambda_aggregate_period
+...
+```
+
+The throttles alarm is the same expression over `Throttles`. Both share
+`lambda_aggregate_threshold`, because both count the same kind of thing, and both share
+`lambda_aggregate_period` and `lambda_aggregate_evaluation_periods`.
+
+Four things follow from that construction:
+
+- **It covers the listed functions, not the account.** The obvious alternative is one alarm on
+  `AWS/Lambda` `Errors` with no `FunctionName` dimension, which is account wide and needs no list
+  at all. That was rejected here: an application account also runs the staging access gate's
+  authorizer function and anything else that lands in it, so a dimensionless alarm counts errors
+  the application does not own and its threshold stops meaning what it says. The DynamoDB
+  aggregate alarm accepts that trade because a Metrics Insights query is the only way to sum
+  throttles without a table list; `AWS/Lambda` has no such constraint at these counts.
+- **The names carry no function name.** They are `<name_prefix>-lambda-errors-aggregate` and
+  `<name_prefix>-lambda-throttles-aggregate`. Adding a domain changes the expression on an alarm
+  that already exists rather than creating another alarm to subscribe, dashboard and document.
+- **The list must be maintained.** This is the price of the previous two points. A function added
+  to the estate but not to `lambda_function_names` is not covered until the next apply, unlike the
+  DynamoDB aggregate alarm which re-resolves its query on every evaluation. Building the list from
+  the same `for_each` map that creates the functions is what keeps it in step.
+- **Ten functions is the ceiling.** A CloudWatch alarm's metric math expression may reference at
+  most 10 metrics, and `lambda_function_names` validates that. Past 10 the log based alarm in
+  `error_log_groups` is the shape that scales, because its metric carries no dimensions and one
+  plain alarm sums any number of filters.
+
+The list order is the order of the `m0`, `m1` ids in the expression, which is why the input is a
+list rather than a set. Reordering it rewrites the expression on the next plan. The alarm watches
+the same total either way, so the diff is cosmetic, but it is a diff.
+
+`tests/lambda_aggregate.tftest.hcl` pins all of this: the names, the one data-returning query, the
+`FunctionName` on every contributing query, and that the per function pair is unchanged and the
+aggregate pair absent when `lambda_aggregate_alarm` is false. `terraform test` in this directory
+runs it, and it needs no credentials.
+
+### Attribution, and why aggregate anyway
+
+An aggregate alarm says the estate had errors, not which function did. That is the same trade the
+log based alarm and the DynamoDB aggregate alarm make, and it is made on purpose: the alarm's job
+is to page someone, and CloudWatch Metrics is where they find out which function. What it buys is
+worth the trade at a function per domain. Two alarms instead of two per function means two names
+in the runbook however many domains there are, two billable alarm metrics instead of two per
+function, and no alarm silently missing from an estate because a new domain's module call was
+copied without its alarms. Each `metric_query` carries the function name as its `label`, so the
+per function series are named on the alarm graph and in the notification body even though the
+alarm itself is one number.
+
+### Cost
+
+Two alarms at $0.10 a month each, plus the metrics the math references. An estate of four
+functions on the per function shape is 8 alarms; on this shape it is 2. The saving is real but
+small, and it is not the reason to choose this shape: the reason is one name to subscribe and one
+place to change a threshold.
 
 ## Watching the DynamoDB tables
 
@@ -329,12 +424,20 @@ application that has tuned those keeps them.
 
 ## Turning parts off
 
-`lambda_function_name = null` drops both Lambda alarms, `http_api_id = null` drops both API
+`lambda_function_name = null` with `lambda_aggregate_alarm = false` drops every `AWS/Lambda`
+alarm, `http_api_id = null` drops both API
 alarms, `dynamodb_tables = {}` with `dynamodb_aggregate_alarm = false` drops every DynamoDB
 alarm, and `error_log_groups = {}` drops every metric filter and the errors alarm with them.
 
 The topic is always created, so the module is also a reasonable way to own just the notification
 target while alarms live elsewhere: publish `sns_topic_arn` and point them at it.
+
+Everything added in 2.1 is off unless asked for too. `lambda_function_names` defaults to `[]` and
+`lambda_aggregate_alarm` to `false`, so a consumer on `lambda_function_name` keeps exactly the two
+per function alarms it has: the aggregate resources have a `count` of 0 and nothing else in the
+module reads either input. Both existing estates were checked by rendering the plan for their
+current module block against the module before and after the change and diffing the result, which
+came out identical.
 
 Everything added in 1.8 is off unless asked for. `error_log_groups` defaults to `{}` and
 `lambda_errors_alarm_function_name` to `null`, so an application that upgrades without changing its
@@ -350,13 +453,18 @@ review. Both existing consumers were checked that way before the change was rele
 | `sns_topic_name` | Topic name, null for `<name_prefix>-alarms` | `null` |
 | `sns_topic_tags` | Extra tags on the topic only | `{}` |
 | `tags` | Tags on the topic and every alarm | `{}` |
-| `lambda_function_name` | `FunctionName` dimension; null skips both Lambda alarms | `null` |
+| `lambda_function_name` | One function form: `FunctionName` dimension of the per function alarm pair; null skips both. Not combinable with `lambda_function_names` | `null` |
+| `lambda_function_names` | Many function form: the functions the aggregate alarms sum over. Creates nothing on its own. Not combinable with `lambda_function_name`; at most 10 names | `[]` |
 | `lambda_errors_threshold` | Sum of `Errors` per period that must be exceeded | `0` |
 | `lambda_errors_period` | Period in seconds | `300` |
 | `lambda_errors_evaluation_periods` | Periods evaluated | `1` |
 | `lambda_throttles_threshold` | Sum of `Throttles` per period that must be exceeded | `0` |
 | `lambda_throttles_period` | Period in seconds | `300` |
 | `lambda_throttles_evaluation_periods` | Periods evaluated | `1` |
+| `lambda_aggregate_alarm` | Create the `-lambda-errors-aggregate` and `-lambda-throttles-aggregate` pair summing `lambda_function_names` | `false` |
+| `lambda_aggregate_threshold` | Errors, or throttles, summed across every listed function per period to exceed. One value for both alarms | `0` |
+| `lambda_aggregate_period` | Period in seconds of every metric feeding the aggregate alarms | `300` |
+| `lambda_aggregate_evaluation_periods` | Periods evaluated by each aggregate alarm | `1` |
 | `http_api_id` | `ApiId` dimension; null skips both API alarms | `null` |
 | `api_5xx_threshold` | Sum of `5xx` per period that must be exceeded | `0` |
 | `api_5xx_period` | Period in seconds | `300` |
@@ -398,7 +506,11 @@ is why its adoption passes none of them.
 | `subscription_arns` | Email subscription ARNs keyed by address |
 | `alarm_names` | Every alarm name, sorted |
 | `alarm_arns` | Every alarm ARN, sorted |
-| `lambda_alarm_names` | The `AWS/Lambda` alarm names, empty when no function input is set |
+| `lambda_alarm_names` | Every `AWS/Lambda` alarm name the module created, empty when no function input is set |
+| `lambda_aggregate_alarm_names` | The two aggregate alarm names, errors first, empty when `lambda_aggregate_alarm` is false |
+| `lambda_aggregate_alarm_arns` | The two aggregate alarm ARNs, errors first, empty when `lambda_aggregate_alarm` is false |
+| `lambda_aggregate_errors_alarm_arn` | ARN of the aggregate errors alarm, `null` when it is off |
+| `lambda_aggregate_throttles_alarm_arn` | ARN of the aggregate throttles alarm, `null` when it is off |
 | `api_alarm_names` | The two API alarm names, empty when there is no API |
 | `dynamodb_alarm_names` | Table alarm names keyed by their `dynamodb_tables` key |
 | `dynamodb_aggregate_alarm_name` | Name of the aggregate alarm, `null` when it is off |
@@ -531,6 +643,26 @@ Every threshold keeps its default, so Portfolio starts on the same numbers CarMo
 its API is noisier, `api_latency_threshold_ms` and the `*_evaluation_periods` inputs are the two
 places to loosen first, and `notify_on_ok = false` is the way to stop the OK emails without
 losing the alarms.
+
+#### Moving Portfolio to the aggregate Lambda alarms
+
+Portfolio is splitting its one API function into a function per domain, which is what the
+aggregate alarms are for. The change is to swap the one function input for the list plus the flag:
+
+```hcl
+  lambda_function_names = [for k, m in module.lambda_api : m.function_name]
+
+  lambda_aggregate_alarm = true
+```
+
+That plans two destroys and two adds. The destroys are `<prefix>-lambda-errors` and
+`<prefix>-lambda-throttles`, the adds are the two `-aggregate` names, and no alarm is replaced in
+place because the names differ. Nothing outside the alarms is touched, but the estate is uncovered
+between the destroy and the new alarms reaching `OK`, and the two old names disappear from
+anything referencing them. Adding the aggregate pair first, while `lambda_function_name` still
+points at the monolith, is not possible in one module call because the two inputs are mutually
+exclusive; a second module call with its own `name_prefix` would do it at the cost of a second
+topic, which is not worth it for a gap of one evaluation period.
 
 ## Not covered
 

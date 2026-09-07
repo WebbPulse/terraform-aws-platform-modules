@@ -7,6 +7,25 @@ locals {
   lambda_count = var.lambda_function_name == null ? 0 : 1
   api_count    = var.http_api_id == null ? 0 : 1
 
+  # The aggregate Lambda alarms exist only when asked for, and the variable's own validation makes
+  # lambda_function_names non-empty whenever they do.
+  lambda_aggregate_count = var.lambda_aggregate_alarm ? 1 : 0
+
+  # A metric math id must start with a lowercase letter and hold only letters, digits and
+  # underscores, which a function name does not: it may contain hyphens, and two different
+  # functions could differ only by a character the id cannot carry. So the id is positional,
+  # "m0", "m1" and so on, and the function name rides in the metric_query label instead, where
+  # CloudWatch shows it on the alarm graph and in the notification. Positional ids are stable as
+  # long as the list order is, which is why the input is a list rather than a set.
+  lambda_aggregate_metrics = {
+    for i, name in var.lambda_function_names : "m${i}" => name
+  }
+
+  # "m0 + m1 + m2" over the ids above, built from the list rather than from keys() so the order is
+  # the input's order and not a lexicographic accident. One expression string is shared by both
+  # aggregate alarms, because both sum the same set of functions on a different metric name.
+  lambda_aggregate_expression = join(" + ", [for i, _ in var.lambda_function_names : "m${i}"])
+
   # Every filter in error_log_groups publishes to this one metric, with no dimensions, so the
   # alarm below is a plain metric alarm whose Sum is the total across all of them. See the README
   # section "Errors from the logs" for why the metric carries no dimensions.

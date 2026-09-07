@@ -38,6 +38,103 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
   tags                = var.tags
 }
 
+# --- Lambda, aggregated over a function per domain ---------------------------------------------
+#
+# An application split into a function per domain wants one Errors alarm and one Throttles alarm
+# for the whole estate, not a pair per function. Each of these is a metric math alarm: one
+# metric_query per name in lambda_function_names carrying that function's FunctionName dimension
+# with return_data = false, plus a SUM expression that returns data to the alarm.
+#
+# Summing named metrics rather than alarming on AWS/Lambda Errors with no FunctionName dimension
+# is the deliberate choice. A dimensionless AWS/Lambda alarm is account wide, so it also counts
+# the access gate's authorizer function and anything else in the account, and the threshold stops
+# meaning what it says. These alarms cover exactly the listed functions.
+#
+# The trade is the metric math ceiling: an expression may reference at most 10 metrics, which
+# lambda_function_names validates. Past that the log based alarm in error_log_groups is the shape
+# that scales, because its metric carries no dimensions and one alarm sums any number of filters.
+#
+# The alarm names carry no function name, so adding a domain changes the expression on an existing
+# alarm rather than creating another alarm to subscribe and document.
+
+resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_errors" {
+  count = local.lambda_aggregate_count
+
+  alarm_name          = "${var.name_prefix}-lambda-errors-aggregate"
+  alarm_description   = "Lambda invocation errors across ${length(var.lambda_function_names)} function${length(var.lambda_function_names) == 1 ? "" : "s"}"
+  evaluation_periods  = var.lambda_aggregate_evaluation_periods
+  threshold           = var.lambda_aggregate_threshold
+  comparison_operator = var.comparison_operator
+  treat_missing_data  = var.treat_missing_data
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.ok_actions
+  tags                = var.tags
+
+  metric_query {
+    id          = "errors"
+    expression  = local.lambda_aggregate_expression
+    label       = "Errors"
+    return_data = true
+  }
+
+  dynamic "metric_query" {
+    for_each = local.lambda_aggregate_metrics
+
+    content {
+      id          = metric_query.key
+      label       = metric_query.value
+      return_data = false
+
+      metric {
+        namespace   = "AWS/Lambda"
+        metric_name = "Errors"
+        dimensions  = { FunctionName = metric_query.value }
+        stat        = "Sum"
+        period      = var.lambda_aggregate_period
+      }
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_throttles" {
+  count = local.lambda_aggregate_count
+
+  alarm_name          = "${var.name_prefix}-lambda-throttles-aggregate"
+  alarm_description   = "Lambda invocations throttled across ${length(var.lambda_function_names)} function${length(var.lambda_function_names) == 1 ? "" : "s"}"
+  evaluation_periods  = var.lambda_aggregate_evaluation_periods
+  threshold           = var.lambda_aggregate_threshold
+  comparison_operator = var.comparison_operator
+  treat_missing_data  = var.treat_missing_data
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.ok_actions
+  tags                = var.tags
+
+  metric_query {
+    id          = "throttles"
+    expression  = local.lambda_aggregate_expression
+    label       = "Throttles"
+    return_data = true
+  }
+
+  dynamic "metric_query" {
+    for_each = local.lambda_aggregate_metrics
+
+    content {
+      id          = metric_query.key
+      label       = metric_query.value
+      return_data = false
+
+      metric {
+        namespace   = "AWS/Lambda"
+        metric_name = "Throttles"
+        dimensions  = { FunctionName = metric_query.value }
+        stat        = "Sum"
+        period      = var.lambda_aggregate_period
+      }
+    }
+  }
+}
+
 # --- HTTP API -------------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "api_5xx" {
