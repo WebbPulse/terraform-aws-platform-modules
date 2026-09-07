@@ -5,7 +5,7 @@
 
 module "github_actions_role" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   role_name = "example-production-github-actions-deploy"
   subjects  = ["repo:WebbPulse/example:*"]
@@ -51,7 +51,7 @@ module "github_actions_role" {
 #
 # module "other_repo_role" {
 #   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
-#   version = "~> 1.2"
+#   version = "~> 1.4"
 #
 #   role_name            = "other-production-github-actions-deploy"
 #   subjects             = ["repo:WebbPulse/other:environment:production"]

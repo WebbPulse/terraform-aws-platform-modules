@@ -66,6 +66,12 @@ TTLs. Both are kept because switching a live distribution from one to the other,
 in-place update, changes caching behavior and is a decision for the application, not for the
 module release.
 
+A live distribution can also mix them. WebbPulse-Portfolio's default behavior kept its legacy
+`forwarded_values` block while the `/index.html` behavior, added later with the access gate, was
+written with a managed cache policy. `index_cache_mode` and `index_cache_policies` let the SPA
+shell behavior pick its own model and its own policies; both default to whatever the default
+behavior uses, so a consumer that sets neither plans exactly what it planned before they existed.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -83,6 +89,8 @@ module release.
 | `ipv6_enabled` | `is_ipv6_enabled` on the distribution | `true` |
 | `comment` | Distribution comment | `null` |
 | `cache_mode` | `policies` or `forwarded_values` | `policies` |
+| `index_cache_mode` | Cache model for the SPA shell behavior alone; null follows `cache_mode` | `null` |
+| `index_cache_policies` | `{ cache_policy_id, origin_request_policy_id, response_headers_policy_id }` for the SPA shell behavior; null reuses the default behavior's three | `null` |
 | `cache_policy_id` | Cache policy in `policies` mode | CachingOptimized `658327ea-f89d-4fab-a63d-7e88639e58f6` |
 | `origin_request_policy_id` | Origin request policy in `policies` mode | `null` |
 | `response_headers_policy_id` | Response headers policy in `policies` mode | `null` |
@@ -91,6 +99,7 @@ module release.
 | `error_caching_min_ttl` | Seconds the fallback is cached | `0` |
 | `viewer_request_function_arn` | CloudFront Function for the default behavior | `null` |
 | `access_gate` | staging-access-gate outputs, see below | `null` |
+| `access_gate_origin_verify_header_value` | The gate's origin verification header value, sensitive; required with `access_gate` | `null` |
 | `create_dns_records` | Create alias records in `zone_id` | `false` |
 | `zone_id` | Hosted zone for the records | `null` |
 | `dns_records` | `{ label = hostname }`, every hostname also in `aliases` | `{}` |
@@ -112,20 +121,28 @@ access_gate = var.staging_access_gate ? {
   api_origin_domain_name                                 = "api.staging.example.com"
   api_path_pattern                                       = module.gate[0].api_path_pattern
   origin_verify_header_name                              = module.gate[0].origin_verify_header_name
-  origin_verify_header_value                             = module.gate[0].origin_verify_header_value
   cache_policy_id_caching_disabled                       = module.gate[0].cache_policy_id_caching_disabled
   origin_request_policy_id_all_viewer_except_host_header = module.gate[0].origin_request_policy_id_all_viewer_except_host_header
 } : null
+
+access_gate_origin_verify_header_value = one(module.gate[*].origin_verify_header_value)
 ```
 
 Optional keys `login_origin_id` (`access-gate-login`) and `api_origin_id` (`api`) name the two
 extra origins. When set, the module adds exactly what the gate README's consumer checklist lists:
 both origins, `trusted_key_groups` on the default and API behaviors, ordered behaviors for the
 auth pattern, the API pattern and `/<default_root_object>` (the last one without the key group),
-and the gate function as viewer-request on all four behaviors. The variable is not declared
-`sensitive` because that would redact every path pattern and origin name in plans; pass
-`module.gate.origin_verify_header_value` straight through and Terraform keeps the sensitive mark on
-that one attribute. Passing `null` removes all of it again, so a production workspace that passes
+and the gate function as viewer-request on all four behaviors.
+
+The origin verification header value is deliberately **not** a member of this object. It is the
+separate `access_gate_origin_verify_header_value` input, declared `sensitive`. An object with one
+sensitive member is sensitive as a whole at the module boundary, so every attribute read out of it
+inside the module (path patterns, origin ids, policy ids, TTLs) would carry the mark, and the
+distribution would plan an in-place update where only the sensitivity differs. Splitting the secret
+out keeps the mark on the one value that needs it and leaves the rest readable in plans. The
+`access_gate` object itself is not `sensitive` for the same reason.
+
+Passing `null` for `access_gate` removes all of it again, so a production workspace that passes
 `null` plans a no-op. Do not pass the distribution ARN back to the gate's
 `cloudfront_distribution_arn`: that is a cycle.
 
@@ -164,7 +181,7 @@ Function (`cloudfront_function.tf`) stay where they are.
 ```hcl
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   name                       = "${local.prefix}-frontend"     # bucket carmodpicker-<env>-frontend
   origin_access_control_name = "${local.prefix}-frontend-oac"
@@ -239,9 +256,12 @@ resources and the two records they replace, plus `local.frontend_origin_id`, and
 - `locals.tf`: `frontend_url = module.frontend.frontend_url` (same value as today).
 
 With the staging access gate on, pass the `access_gate` object shown above with
-`api_origin_domain_name = "api.${local.domain_name}"`, and give the gate
-`viewer_request_handler_js` built from `cloudfront_functions/uri_rewrite.js.tftpl` with `handler`
-renamed to `appHandler`.
+`api_origin_domain_name = "api.${local.domain_name}"`, pass
+`access_gate_origin_verify_header_value = one(module.staging_access_gate[*].origin_verify_header_value)`,
+and give the gate `viewer_request_handler_js` built from
+`cloudfront_functions/uri_rewrite.js.tftpl` with `handler` renamed to `appHandler`. CarModPicker
+runs `cache_mode = "policies"` on every behavior, so it leaves `index_cache_mode` and
+`index_cache_policies` unset.
 
 ### WebbPulse-Portfolio
 
@@ -253,7 +273,7 @@ cannot do that with the provider that owns the bucket. Point them at the module'
 ```hcl
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   name = "${local.prefix}-frontend" # bucket and OAC webbpulse-<env>-frontend
   # origin_id = "s3-frontend" and bucket_policy_sid = "AllowCloudFrontServicePrincipal" are the defaults.
@@ -266,6 +286,12 @@ module "frontend" {
   cache_mode = "forwarded_values"
   # forwarded_values defaults: query_string false, cookies none, TTLs 0 / 86400 / 31536000.
   error_caching_min_ttl = 10
+
+  # The live distribution mixes the two cache models: the default behavior kept its legacy
+  # forwarded_values block, while the /index.html behavior was added later with the managed
+  # CachingOptimized policy and nothing else. These two inputs reproduce that exactly.
+  index_cache_mode     = "policies"
+  index_cache_policies = { cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6" }
 
   create_dns_records = false
 }
@@ -307,10 +333,13 @@ Repoint:
 - `locals.tf`: `frontend_url = module.frontend.frontend_url`.
 
 With the staging access gate on, pass the `access_gate` object with
-`api_origin_domain_name = local.api_host` and hand the apex redirect code to the gate as
-`viewer_request_handler_js` (rename `handler` to `appHandler`); `aws_cloudfront_function.apex_redirect`
-can then be gated off in staging, since the module ignores `viewer_request_function_arn` while the
-gate is attached.
+`api_origin_domain_name = local.api_host`, pass
+`access_gate_origin_verify_header_value = one(module.staging_access_gate[*].origin_verify_header_value)`,
+and hand the apex redirect code to the gate as `viewer_request_handler_js` (rename `handler` to
+`appHandler`); `aws_cloudfront_function.apex_redirect` can then be gated off in staging, since the
+module ignores `viewer_request_function_arn` while the gate is attached. Keep
+`index_cache_mode = "policies"` and the one-key `index_cache_policies` above: the SPA shell
+behavior only exists while the gate is on, and those two inputs are what make it match.
 
 ### What could still show a diff
 
@@ -321,6 +350,10 @@ gate is attached.
   change is planned. If a plan ever shows them, set `cache_mode = "forwarded_values"` only if the
   live distribution really has a forwarded_values block; otherwise report it as a module bug.
 - `trusted_key_groups` is computed and left null without a gate; adding a gate later sets it.
+- The SPA shell behavior inherits `cache_mode` and the default behavior's three policy ids unless
+  `index_cache_mode` and `index_cache_policies` are set. A live distribution that mixes the two
+  models plans an update on that one behavior until they are; set them to whatever the console
+  shows for `/index.html`.
 
 ## Examples
 

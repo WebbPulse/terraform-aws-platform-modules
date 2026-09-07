@@ -104,7 +104,7 @@ resource "aws_cloudfront_function" "apex_redirect" {
 
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   name = local.name
 

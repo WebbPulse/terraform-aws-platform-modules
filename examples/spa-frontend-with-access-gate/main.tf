@@ -140,7 +140,7 @@ module "gate" {
 
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
-  version = "~> 1.2"
+  version = "~> 1.4"
 
   name = local.name
 
@@ -159,10 +159,14 @@ module "frontend" {
     api_origin_domain_name                                 = local.api_host
     api_path_pattern                                       = module.gate[0].api_path_pattern
     origin_verify_header_name                              = module.gate[0].origin_verify_header_name
-    origin_verify_header_value                             = module.gate[0].origin_verify_header_value
     cache_policy_id_caching_disabled                       = module.gate[0].cache_policy_id_caching_disabled
     origin_request_policy_id_all_viewer_except_host_header = module.gate[0].origin_request_policy_id_all_viewer_except_host_header
   } : null
+
+  # The secret is its own input, not a member of access_gate: an object with one sensitive member
+  # is sensitive as a whole at the module boundary, which would redact every path pattern and
+  # origin id read out of it and make the distribution plan a spurious in-place update.
+  access_gate_origin_verify_header_value = one(module.gate[*].origin_verify_header_value)
 
   create_dns_records = true
   zone_id            = aws_route53_zone.staging.zone_id

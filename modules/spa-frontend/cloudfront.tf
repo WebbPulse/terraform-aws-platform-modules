@@ -50,7 +50,7 @@ resource "aws_cloudfront_distribution" "this" {
 
       custom_header {
         name  = var.access_gate.origin_verify_header_name
-        value = var.access_gate.origin_verify_header_value
+        value = var.access_gate_origin_verify_header_value
       }
     }
   }
@@ -139,7 +139,8 @@ resource "aws_cloudfront_distribution" "this" {
 
   # The SPA shell must stay reachable without signed cookies, because CloudFront's own
   # custom_error_response fetch carries none. The gate function still turns away browsers that
-  # ask for it directly without a session. Caching mirrors the default behavior.
+  # ask for it directly without a session. Caching mirrors the default behavior unless
+  # index_cache_mode or index_cache_policies says otherwise.
   dynamic "ordered_cache_behavior" {
     for_each = local.gate_enabled ? [1] : []
 
@@ -151,12 +152,12 @@ resource "aws_cloudfront_distribution" "this" {
       cached_methods         = ["GET", "HEAD"]
       compress               = true
 
-      cache_policy_id            = local.use_policies ? var.cache_policy_id : null
-      origin_request_policy_id   = local.use_policies ? var.origin_request_policy_id : null
-      response_headers_policy_id = local.use_policies ? var.response_headers_policy_id : null
+      cache_policy_id            = local.index_use_policies ? local.index_cache_policy_id : null
+      origin_request_policy_id   = local.index_use_policies ? local.index_origin_request_policy_id : null
+      response_headers_policy_id = local.index_use_policies ? local.index_response_headers_policy_id : null
 
       dynamic "forwarded_values" {
-        for_each = local.use_policies ? [] : [var.forwarded_values]
+        for_each = local.index_use_policies ? [] : [var.forwarded_values]
 
         content {
           query_string = forwarded_values.value.query_string
@@ -168,9 +169,9 @@ resource "aws_cloudfront_distribution" "this" {
         }
       }
 
-      min_ttl     = local.use_policies ? null : var.forwarded_values.min_ttl
-      default_ttl = local.use_policies ? null : var.forwarded_values.default_ttl
-      max_ttl     = local.use_policies ? null : var.forwarded_values.max_ttl
+      min_ttl     = local.index_use_policies ? null : var.forwarded_values.min_ttl
+      default_ttl = local.index_use_policies ? null : var.forwarded_values.default_ttl
+      max_ttl     = local.index_use_policies ? null : var.forwarded_values.max_ttl
 
       function_association {
         event_type   = "viewer-request"
