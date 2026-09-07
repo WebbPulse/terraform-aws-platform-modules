@@ -4,7 +4,7 @@ The scaffolding every application Lambda function needs before it can do anythin
 execution role with a service assume role policy, a CloudWatch log group with a retention you
 choose, and the function itself with its tracing, logging, environment, architecture, memory and
 timeout, seeded with a placeholder package whose code attributes are then ignored so a deployment
-pipeline owns the code. It is the shape both application estates already run by hand, lifted into
+pipeline owns the code. The package is a zip by default and can be a container image instead. It is the shape both application estates already run by hand, lifted into
 one place so a change to the pattern reaches every application on its next plan.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-function`. Pair it
@@ -16,6 +16,7 @@ with [`http-api`](../http-api/), which takes this module's `invoke_arn` and `fun
 aws_iam_role.this                 execution role, assume role policy for the service principals
 aws_cloudwatch_log_group.this     /aws/lambda/<function_name> by default, retention you choose
 aws_lambda_function.this          the function, code attributes under lifecycle ignore_changes
+aws_iam_role_policy.xray_write    xray:PutTraceSegments and PutTelemetryRecords, when tracing is Active
 ```
 
 ## What it deliberately does not create
@@ -47,9 +48,10 @@ Neither is expressible as the other, `path.module` inside a module resolves to t
 directory rather than the application's, and a `data` source is not in state so no `moved` block
 could relocate it anyway. The application keeps the archive and passes the result through `code`.
 
-## Two ways to deliver code
+## Three ways to deliver code
 
-`code` is one object with two shapes, so one variable covers both applications.
+`code` is one object with three shapes, so one variable covers a local zip, an object in S3 and a
+container image.
 
 A local zip, which is CarModPicker:
 
@@ -70,17 +72,126 @@ code = {
 }
 ```
 
-Exactly one of `filename`, `s3_bucket` or `image_uri` may be set, and `s3_bucket` and `s3_key` go
-together; both rules are validations, so a wrong combination fails at plan time rather than apply
-time.
+A container image, which is the shape described under [Image deploy](#image-deploy) below:
 
-Either way this is only the seed. `filename`, `source_code_hash`, `s3_bucket`, `s3_key` and
-`s3_object_version` are all in the function's `lifecycle` `ignore_changes` list, so once a
-deployment pipeline has called `UpdateFunctionCode` the next plan leaves the running code alone.
+```hcl
+package_type = "Image"
+
+code = {
+  image_uri = "${data.aws_caller_identity.current.account_id}.dkr.ecr.us-west-2.amazonaws.com/app@sha256:..."
+}
+```
+
+Exactly one of `filename`, `s3_bucket` or `image_uri` may be set, `s3_bucket` and `s3_key` go
+together, and `image_uri` and `package_type = "Image"` imply each other; all of them are
+validations, so a wrong combination fails before anything is applied.
+
+Whichever shape it is, this is only the seed. `filename`, `source_code_hash`, `s3_bucket`,
+`s3_key`, `s3_object_version` and `image_uri` are all in the function's `lifecycle`
+`ignore_changes` list, so once a deployment pipeline has called `UpdateFunctionCode` the next plan
+leaves the running code alone.
 That list is fixed rather than an input: Terraform requires `ignore_changes` to be a static list of
 attribute names, so it cannot be driven by a variable. It is the union of what the two applications
 ignore today, and ignoring an attribute that is not drifting is a no-op, which is why
-WebbPulse-Portfolio picks up `filename` and `s3_bucket` for free without a diff.
+WebbPulse-Portfolio picks up `filename` and `s3_bucket` for free without a diff. `image_uri` joined
+that list the same way: a zip function never sets it, so ignoring it costs an existing consumer
+nothing.
+
+## Image deploy
+
+`package_type = "Image"` runs the function from a container image in ECR instead of a zip. The
+trade the module cares about is narrow: an Image function takes `code.image_uri` and takes neither
+`runtime` nor `handler`, because both of those live in the image. Passing either one alongside
+`package_type = "Image"`, or leaving them out of a `Zip` function, is a validation error before
+anything reaches AWS.
+
+```hcl
+package_type  = "Image"
+architectures = ["arm64"]
+
+code = {
+  image_uri = "111122223333.dkr.ecr.us-west-2.amazonaws.com/example-production/api@sha256:..."
+}
+```
+
+Seed the URI with a digest rather than a tag. A tag can be repointed underneath a running
+function, and the digest is the thing that makes the deploy recorded in state mean something. As
+with a zip, this is only a seed: `image_uri` is under `ignore_changes`, so CI owns the deployed
+image from the first `UpdateFunctionCode` onward.
+
+`image_config` is available for an image whose `ENTRYPOINT`, `CMD` or `WORKDIR` needs overriding
+from Terraform. Leave it null, which is the default, for an image that already declares its own
+`CMD`; that is the ordinary case and the one the example uses.
+
+Two constraints that are not the module's to enforce but bite first if missed. **The function and
+its ECR repository must be in the same region**, because Lambda cannot pull an image across one.
+And **Lambda pulls as the service, not as the execution role**, so the grant goes in the
+repository policy naming `lambda.amazonaws.com`, not in a policy on the role. The
+[image example](../../examples/lambda-function-image/) carries both.
+
+### The Web Adapter
+
+The pattern this module is built for puts the [AWS Lambda Web
+Adapter](https://github.com/awslabs/aws-lambda-web-adapter) in the image and runs the application
+as an ordinary HTTP server. The adapter is a Lambda external extension that translates an invoke
+event into an HTTP request against `127.0.0.1`, so nothing in the application imports the Lambda
+programming model and the same image runs unchanged on Fargate, App Runner or a laptop. It also
+means a non-AWS base image is fine, and preferable: the adapter ships the Runtime Interface Client
+itself.
+
+The adapter is configured entirely through environment variables. They are ordinary function
+environment variables, so they go through `environment_variables`, or through
+`otel_environment_variables` if it reads better to keep application configuration and tracing
+configuration apart in the module call. The two maps are merged into the same environment block.
+
+| Variable | Suggested value | Why |
+| --- | --- | --- |
+| `AWS_LWA_PORT` | `8080` | The port the adapter forwards to, and the port the application must listen on. Defaults to `8080`, so the two only have to agree; set it explicitly anyway, because a mismatch here presents as a timeout rather than as an error |
+| `AWS_LWA_READINESS_CHECK_PATH` | `/health` | The path the adapter polls before it declares the sandbox ready. The default is `/`, which on an API that has no route at `/` never succeeds |
+| `AWS_LWA_READINESS_CHECK_PROTOCOL` | `http` | The default. `tcp` is the escape hatch if the health endpoint gets expensive enough to matter during init |
+| `AWS_LWA_ASYNC_INIT` | `true` | Lets a slow import finish inside the 10 second init window instead of counting against the first invoke. Worth having for anything that builds models or clients at import time |
+
+`AWS_LWA_REMOVE_BASE_PATH` is deliberately absent from that table. Leave it unset when the route on
+the API and the prefix the application mounts at are the same string, which is the lower risk
+choice: the path arrives intact and matches. It is only needed if the application is restructured
+to mount at `/`.
+
+The `AWS_LWA_` prefix is the current spelling. The unprefixed forms still work but are deprecated,
+so write the prefixed ones.
+
+Setting these variables does not by itself make the image correct. The image has to actually carry
+the adapter and listen on the agreed port. The
+[example Dockerfile](../../examples/lambda-function-image/Dockerfile) shows the shape.
+
+## Tracing
+
+`tracing_mode` defaults to `Active`, and the module attaches a small inline policy to the execution
+role to go with it. This closes a trap: Active tracing without X-Ray write permission is a function
+that samples invocations, tries to publish each segment, is denied, and reports nothing. No error
+surfaces in the application, no alarm fires, and the traces are simply absent, which reads like a
+tracing configuration problem rather than a permissions one.
+
+The policy grants exactly two actions:
+
+```json
+{ "Action": ["xray:PutTraceSegments", "xray:PutTelemetryRecords"], "Effect": "Allow", "Resource": "*" }
+```
+
+**Inline rather than the AWS managed `AWSXRayDaemonWriteAccess`,** which is the same two actions
+plus `xray:GetSamplingRules`, `xray:GetSamplingTargets` and
+`xray:GetSamplingStatisticSummaries`. Those three matter to a process that runs its own X-Ray
+sampler and asks the service which requests to record. A Lambda function does not: the service
+makes the sampling decision before the invoke and hands the runtime a trace header that already
+carries it. Attaching the managed policy would grant three permissions no function here uses, so
+the smaller statement is the one that ships. `Resource` is `"*"` because neither action takes
+resource-level permissions; that is a property of the X-Ray IAM surface, not a wildcard chosen for
+convenience.
+
+`attach_xray_write_policy` turns it off. Set it to `false` when the application already grants those
+two actions in a policy of its own, which is the case for an estate that carried them in its runtime
+policy before this module owned them. Leaving both in place is harmless, just redundant. The policy
+is skipped automatically whenever `tracing_mode` is not `Active`, so `PassThrough` and `null` need
+no opt out. `xray_write_policy_attached` reports which way it went.
 
 ## Logging
 
@@ -127,9 +238,11 @@ proved with the `depends_on` simply dropped, and both are clean.
 | Name | Description | Default |
 | --- | --- | --- |
 | `function_name` | Function name as-is, not a prefix | required |
-| `runtime` | Managed runtime identifier, for example `python3.13` | required |
-| `handler` | Entry point in the package | required |
 | `code` | Where the seed package comes from; see above | required |
+| `package_type` | `Zip` or `Image` | `"Zip"` |
+| `runtime` | Managed runtime identifier, for example `python3.13`. Required for `Zip`, must be null for `Image` | `null` |
+| `handler` | Entry point in the package. Required for `Zip`, must be null for `Image` | `null` |
+| `image_config` | `{ command, entry_point, working_directory }` overriding the image's own; null keeps the image's | `null` |
 | `role_name` | Execution role name, null for `<function_name>-role` | `null` |
 | `role_path` | IAM path of the role | `"/"` |
 | `role_description` | Description on the role, null for none | `null` |
@@ -143,7 +256,9 @@ proved with the `depends_on` simply dropped, and both are clean.
 | `publish` | Publish a numbered version on every change | `false` |
 | `reserved_concurrent_executions` | Reserved concurrency, null for none | `null` |
 | `environment_variables` | Environment variables; an empty map omits the block | `{}` |
+| `otel_environment_variables` | Tracing and Web Adapter variables, merged over `environment_variables` | `{}` |
 | `tracing_mode` | `Active`, `PassThrough`, or null to omit the block | `"Active"` |
+| `attach_xray_write_policy` | Attach the inline X-Ray write policy when tracing is `Active` | `true` |
 | `layers` | Layer ARNs, at most 5 | `[]` |
 | `log_group_name` | Log group name, null for `/aws/lambda/<function_name>` | `null` |
 | `log_retention_days` | Retention, a value CloudWatch Logs accepts; 0 never expires | `14` |
@@ -173,6 +288,9 @@ proved with the `depends_on` simply dropped, and both are clean.
 | `role_unique_id` | Stable unique id of the role |
 | `log_group_name` | Log group name |
 | `log_group_arn` | Log group ARN; a logs policy appends `:*` to it |
+| `package_type` | `Zip` or `Image`, echoing the input |
+| `image_uri` | Seed image the function was created with, empty for a `Zip` function |
+| `xray_write_policy_attached` | Whether the module attached its inline X-Ray write policy |
 
 ## Adoption
 
@@ -180,6 +298,30 @@ Both applications move their three resources into the module with `moved` blocks
 reproduce every attribute each application has in state today, so both adoption plans are
 "3 moved, 0 to add, 0 to change, 0 to destroy". Both were proved with a speculative plan on the
 staging workspace before this module was released.
+
+### Upgrading an existing consumer
+
+Nothing in the image support changes an existing zip function. `package_type` defaults to `"Zip"`,
+which is the value the API already held, `runtime` and `handler` became optional but stay required
+for `Zip`, and `image_uri` joins `ignore_changes` on an attribute a zip function never sets. Both
+applications' plans were compared attribute by attribute against the previous release and every
+pre-existing resource matches exactly.
+
+The one thing that does show up is **one new resource**,
+`module.<name>.aws_iam_role_policy.xray_write[0]`, because both applications run with
+`tracing_mode = "Active"`. It grants the same two X-Ray actions both of them already grant in their
+own runtime policy, so it changes no effective permission; it moves the grant into the module that
+turned tracing on. Two ways to take it:
+
+- **Accept it and drop the duplicate.** Remove the `xray:PutTraceSegments` and
+  `xray:PutTelemetryRecords` statement from the application's own runtime policy on the next pass,
+  and the module's policy is the only one left. This is the tidier end state, and it is why the
+  grant moved.
+- **Set `attach_xray_write_policy = false`.** The plan is then exactly zero diff and the application
+  keeps owning the grant.
+
+Either is fine. Do not do neither and then also delete the application's statement in the same
+change, which is the one combination that leaves the function with no X-Ray write permission at all.
 
 One attribute is worth knowing about. The two applications write their assume role policy
 differently, CarModPicker through `data.aws_iam_policy_document`, WebbPulse-Portfolio through

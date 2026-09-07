@@ -57,3 +57,18 @@ output "log_group_arn" {
   description = "ARN of the function's CloudWatch log group. A runtime policy granting logs:CreateLogStream and logs:PutLogEvents appends :* to this value."
   value       = aws_cloudwatch_log_group.this.arn
 }
+
+output "package_type" {
+  description = "How the function is packaged, Zip or Image. Echoes the input, so a caller composing on top of this module does not have to repeat the decision."
+  value       = aws_lambda_function.this.package_type
+}
+
+output "image_uri" {
+  description = "Container image the function currently runs, empty for a Zip function. This is the seed value Terraform set: image_uri is under ignore_changes, so once CI has deployed an image the value here is the one in state rather than the one running."
+  value       = aws_lambda_function.this.image_uri
+}
+
+output "xray_write_policy_attached" {
+  description = "Whether the module attached its inline X-Ray write policy to the execution role. False when tracing_mode is not Active or attach_xray_write_policy is off, in which case the application owns that grant."
+  value       = local.attach_xray_write_policy
+}
