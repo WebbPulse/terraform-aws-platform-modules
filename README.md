@@ -25,10 +25,14 @@ pattern should reach all of them, and the place to notice a behavior change is t
 | Module | What it is |
 | --- | --- |
 | [`modules/staging-access-gate`](modules/staging-access-gate/) | Cognito sign-in plus CloudFront signed cookies and an HTTP API origin-verify authorizer, gating a staging site to an allow-list of emails. |
+| [`modules/spa-frontend`](modules/spa-frontend/) | Private S3 bucket behind a CloudFront distribution with OAC, optional alias records, and an optional `access_gate` object that wires in the staging access gate's origins and behaviors. |
+| [`modules/http-api`](modules/http-api/) | API Gateway HTTP API in front of a Lambda: routes, access logging, default stage, optional custom domain, and the gate's authorizer plus execute-api shutoff when asked. |
+| [`modules/github-actions-role`](modules/github-actions-role/) | GitHub Actions OIDC provider and deploy role with a statement-list inline policy rendered byte-identically to the hand-written originals. |
+| [`modules/staging-dns`](modules/staging-dns/) | A `staging.<domain>` hosted zone plus its NS delegation in the parent zone through an `aws.parent` provider alias. |
 
-Planned, once the production estates can absorb the state moves: `spa-frontend` (S3 + CloudFront),
-`http-api` (HTTP API + Lambda), `github-actions-role` (OIDC deploy role), and a root composite
-that calls all of them so a new project is one module block.
+Each module README carries an "Adoption" section with the `moved` blocks and variable values that
+take over an application's existing resources with zero destroy or replace. Planned next: a root
+composite that calls all of them so a new project is one module block.
 
 ## Layout
 
