@@ -2,8 +2,11 @@
 # certificate and the hosted zone belong to the consumer; the module owns the API, its stage,
 # access log, routes, invoke permission, custom domain, mapping and the alias record.
 #
+# This is the single-integration shape, the 2.0 equivalent of what 1.x did with lambda_invoke_arn:
+# one backend named "legacy" and default_integration pointing at it, so $default carries everything.
+#
 # Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/http-api"
-# with version = "~> 1.2"; the relative path here keeps the example runnable from the repository.
+# with version = "~> 2.0"; the relative path here keeps the example runnable from the repository.
 
 terraform {
   required_version = ">= 1.10"
@@ -119,14 +122,22 @@ module "api" {
   name        = "${local.name}-api"
   description = "Example ${local.name} API (Lambda proxy)"
 
-  lambda_invoke_arn    = aws_lambda_function.api.invoke_arn
-  lambda_function_name = aws_lambda_function.api.function_name
+  # One backend. Naming it "legacy" is what lets the module's own moved blocks take over a 1.x
+  # integration and permission without destroying either.
+  integrations = {
+    legacy = {
+      lambda_function_name = aws_lambda_function.api.function_name
+      lambda_invoke_arn    = aws_lambda_function.api.invoke_arn
+      timeout_milliseconds = 29000
+    }
+  }
 
-  route_keys                       = ["$default"]
-  integration_timeout_milliseconds = 29000
-  throttling_burst_limit           = 50
-  throttling_rate_limit            = 25
-  access_log_retention_days        = 14
+  default_integration = "legacy"
+
+  # Layer 1 of the rate limiting: the stage's default route settings cover every route.
+  throttling_burst_limit    = 50
+  throttling_rate_limit     = 25
+  access_log_retention_days = 14
 
   # Pass the validation's certificate_arn, not the certificate's arn, so the custom domain is
   # created only after the certificate is issued.
