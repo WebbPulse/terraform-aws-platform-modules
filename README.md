@@ -40,6 +40,7 @@ intend. Write `~> 1.3.0` instead to hold a minor and take patch releases only.
 | [`modules/dynamodb-tables`](modules/dynamodb-tables/) | An application's DynamoDB tables as one map: keys, GSIs, TTL, PITR, deletion protection, optional streams and encryption. |
 | [`modules/api-alarms`](modules/api-alarms/) | SNS topic with email subscriptions plus CloudWatch alarms for Lambda errors and throttles, HTTP API 5xx and integration latency, and DynamoDB throttles either as one alarm per environment or one per table. |
 | [`modules/app-secrets`](modules/app-secrets/) | A map of Secrets Manager secrets in five shapes (generated, given, JSON, placeholder, empty) with a ready-made read policy for the app role. |
+| [`modules/codeartifact`](modules/codeartifact/) | One CodeArtifact domain and its repositories, with the domain and repository policies that let CI in the application accounts read and two publisher roles write, plus ready-made IAM statements for the consumer side. |
 
 Each module README carries an "Adoption" section with the `moved` blocks and variable values that
 take over an application's existing resources with zero destroy or replace. Planned next: a root

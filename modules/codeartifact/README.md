@@ -43,11 +43,17 @@ outputs: domain, domain_owner, domain_arn, repository_arns, repository_names,
   converging on a retry. The module splits the map into three `aws_codeartifact_repository`
   resources by upstream depth and chains them with `depends_on`. A validation caps chains at three
   tiers, which covers store to internal to fan-in and rejects anything deeper as a mistake.
-- **A store repository has an external connection and nothing else.** CodeArtifact allows at most
-  one external connection per repository and forbids combining one with upstreams. That constraint
-  is what produces the store-plus-internal split rather than it being a stylistic choice, and both
-  halves are validated so the plan fails with the rule rather than the API failing with a block
-  count.
+- **A store repository has an external connection and nothing else.** Two separate rules produce
+  this. "Each CodeArtifact repository can only have one external connection" is stated flatly and
+  repeatedly ([External connections][external-connection]). Combining an external connection with
+  upstreams is a weaker rule: the `AssociateExternalConnection` reference notes that "a repository
+  can have one or more upstream repositories, or an external connection"
+  ([AssociateExternalConnection][associate-external-connection]), but no error is documented for
+  violating it, and `CreateRepository` does not repeat the note. The module validates both anyway,
+  because the store-plus-internal split is what the user guide calls "the intended way to use
+  external connections" regardless: one repository per domain holds the connection to a given
+  public registry and everything else upstreams to it, so a fetched asset is stored once rather
+  than re-fetched per repository.
 - **Publishers never reach a store repository.** `publisher_repository_keys` defaults to every
   repository without an external connection, and naming a store repository explicitly fails a
   precondition. A first-party package published into the repository that proxies PyPI would shadow
@@ -90,12 +96,14 @@ matter what the resource policies say. `consumer_policy_statements` includes it,
 [domain-overview]: https://docs.aws.amazon.com/codeartifact/latest/ug/domain-overview.html
 [domain-policies]: https://docs.aws.amazon.com/codeartifact/latest/ug/domain-policies.html
 [repo-policies]: https://docs.aws.amazon.com/codeartifact/latest/ug/repo-policies.html
+[external-connection]: https://docs.aws.amazon.com/codeartifact/latest/ug/external-connection.html
+[associate-external-connection]: https://docs.aws.amazon.com/codeartifact/latest/APIReference/API_AssociateExternalConnection.html
 
 ## Inputs
 
 | Name | Description | Default |
 | --- | --- | --- |
-| `domain` | Domain name, 2 to 50 lowercase characters | required |
+| `domain` | Domain name, 2 to 50 lowercase characters, no trailing hyphen | required |
 | `repositories` | Map of repository name to definition, see below | required |
 | `encryption_key` | Symmetric KMS key ARN or id for every asset in the domain; immutable after create | `null` |
 | `reader_account_ids` | AWS account ids granted read on the domain and every repository | `[]` |
@@ -116,7 +124,7 @@ Each entry in `repositories`:
 | --- | --- | --- |
 | `description` | Shown in the console and the API | `null` |
 | `external_connections` | Public registries to proxy, for example `["public:pypi"]`; at most one, and never alongside upstreams | `[]` |
-| `upstreams` | Keys of other repositories in the same map, searched in order | `[]` |
+| `upstreams` | Keys of other repositories in the same map, searched in list order; at most 10 | `[]` |
 | `tags` | Extra tags for this repository | `{}` |
 
 Action defaults:
@@ -316,12 +324,89 @@ external packages the estate actually depends on becomes enumerable in one place
   validation says so at plan time.
 - **Moving a repository between tiers replaces it.** Adding a first upstream to a repository that
   had none moves it from `aws_codeartifact_repository.tier0` to `.tier1`, which Terraform sees as a
-  destroy and a create. Packages published to it would be lost. Use a `moved` block between the two
-  addresses when reshaping an existing layout.
+  destroy and a create. Packages published to it would be lost. A `moved` block in the calling
+  stack fixes it: the block goes in the root module, names both addresses through the module, and
+  turns the replace back into a no-op.
+
+  ```hcl
+  # "python" gained its first upstream, so it moves from tier0 to tier1.
+  moved {
+    from = module.codeartifact.aws_codeartifact_repository.tier0["python"]
+    to   = module.codeartifact.aws_codeartifact_repository.tier1["python"]
+  }
+  ```
+
+  The tier a repository lands in is a function of its upstream depth: no upstreams is `tier0`,
+  upstreams only into tier0 is `tier1`, anything deeper is `tier2`. Adding `shared` above an
+  existing `python` therefore moves nothing that already existed, but giving `python` its first
+  upstream moves `python`. Read the plan before applying: it must show the move and
+  `0 to add, 0 to change, 0 to destroy` for that repository.
 - **`ReadFromRepository` cannot be narrowed to a subset of packages.** Per-package read control is
   not something a repository policy can express; a repository is the unit of read access.
 - **One external connection per repository.** Enforced by CodeArtifact, and validated here so the
-  plan fails with the reason rather than with a block count.
+  plan fails with the reason rather than with a block count. The module additionally refuses to
+  combine an external connection with upstreams on one repository; that second rule is the API
+  reference's note rather than a documented error, so it is the module being deliberately stricter
+  than the service.
+- **Upstream order is significant, and the whole list is replaced on update.** CodeArtifact
+  searches direct upstreams in list order, so reordering the `upstreams` list is a real change, not
+  a cosmetic one. AWS caps a repository at 10 direct upstreams and stops after searching 25
+  repositories in one resolution.
 - **The module does not create the consumer's IAM role.** It hands back
   `consumer_policy_statements` for the consumer account's own stack to attach, because that role
   lives in a different account and usually a different workspace.
+
+## Adoption
+
+There is nothing to adopt. Unlike the other modules in this repository, this one does not take over
+existing resources: the CodeArtifact domain does not exist yet in any account, so the first apply
+is a create, not a move. There are no `moved` blocks to write.
+
+The module ships from 1.8.0, so consumers pin `version = "~> 1.8"`.
+
+### WebbPulse Platform account
+
+The domain and its repositories live in the platform account, called once from that account's
+stack. The example under [`examples/codeartifact-basic`](../../examples/codeartifact-basic/) is the
+shape the estate runs, reader account ids included. Apply it there first and read the plan: five
+repositories, one domain, one domain policy and five repository policies, and nothing else.
+
+### The four application accounts
+
+Each application account attaches the other half of the grant to its own deploy role. Nothing in
+this module runs in those accounts; they consume two outputs.
+
+```hcl
+data "terraform_remote_state" "platform" {
+  backend = "remote"
+  config = {
+    organization = "WebbPulse"
+    workspaces = { name = "WebbPulse-Platform-production" }
+  }
+}
+
+module "deploy_role" {
+  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
+  version = "~> 1.8"
+
+  role_name = "carmodpicker-production-github-actions-deploy"
+  subjects  = ["repo:WebbPulse/CarModPicker:*"]
+
+  policy_statements = concat(
+    local.existing_deploy_statements,
+    [for s in data.terraform_remote_state.platform.outputs.codeartifact_consumer_policy_statements : {
+      sid       = s.Sid
+      actions   = s.Action
+      resources = s.Resource
+      condition = try(s.Condition, null)
+    }],
+  )
+}
+```
+
+Order matters across the two applies. The domain and repository policies name the reader accounts,
+and the consumer roles name the domain and repository ARNs, so the platform account applies first
+and the application accounts pick the ARNs up on their next plan. A consumer that applies before
+the platform account reads an empty remote state and drops the CodeArtifact statements from its
+role, which fails closed rather than open: builds keep working against the public registries until
+the role is reapplied.

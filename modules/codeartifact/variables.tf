@@ -2,9 +2,12 @@ variable "domain" {
   description = "Name of the CodeArtifact domain. Storage is billed once per domain, deduplicated across every repository in it, so an estate wants exactly one. The name only has to be unique within the owning account, which is why every cross-account call also carries the domain owner."
   type        = string
 
+  # CreateDomain's own pattern is [a-z][a-z0-9\-]{0,48}[a-z0-9]: it must start with a letter and
+  # end alphanumeric, so a trailing hyphen is rejected by the API. Matching it here rather than
+  # allowing one and failing on apply.
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{1,49}$", var.domain))
-    error_message = "domain must be 2 to 50 characters, start with a lowercase letter and hold only lowercase letters, digits and hyphens."
+    condition     = can(regex("^[a-z][a-z0-9-]{0,48}[a-z0-9]$", var.domain))
+    error_message = "domain must be 2 to 50 characters, start with a lowercase letter, end with a lowercase letter or digit, and hold only lowercase letters, digits and hyphens."
   }
 }
 
@@ -49,11 +52,13 @@ variable "repositories" {
     tags                 = optional(map(string), {})
   }))
 
+  # CreateRepository's pattern is [A-Za-z0-9][A-Za-z0-9._\-]{1,99}, so the effective minimum is two
+  # characters, not one.
   validation {
     condition = alltrue([
-      for k, _ in var.repositories : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", k))
+      for k, _ in var.repositories : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$", k))
     ])
-    error_message = "Every repository name must be 1 to 100 characters, start with a letter or digit and hold only letters, digits and the characters . _ - which are what CodeArtifact accepts."
+    error_message = "Every repository name must be 2 to 100 characters, start with a letter or digit and hold only letters, digits and the characters . _ - which are what CodeArtifact accepts."
   }
 
   # CodeArtifact allows at most one external connection per repository. The provider models
