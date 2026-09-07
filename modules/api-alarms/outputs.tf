@@ -57,7 +57,7 @@ output "lambda_alarm_names" {
 }
 
 output "lambda_aggregate_alarm_names" {
-  description = "Names of the two aggregate Lambda alarms, the errors one first. Empty when lambda_aggregate_alarm is false."
+  description = "Names of every aggregate Lambda alarm, every errors alarm first and then every throttles alarm, each in chunk order. Two entries for a list of 10 or fewer function names, two more for each further group of 10. Empty when lambda_aggregate_alarm is false."
   value = concat(
     [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.alarm_name],
@@ -65,21 +65,51 @@ output "lambda_aggregate_alarm_names" {
 }
 
 output "lambda_aggregate_alarm_arns" {
-  description = "ARNs of the two aggregate Lambda alarms, the errors one first, for a composite alarm or a dashboard built next to the module. Empty when lambda_aggregate_alarm is false."
+  description = "ARNs of every aggregate Lambda alarm, every errors alarm first and then every throttles alarm, each in chunk order, for a composite alarm or a dashboard built next to the module. Empty when lambda_aggregate_alarm is false."
   value = concat(
     [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors : a.arn],
     [for a in aws_cloudwatch_metric_alarm.lambda_aggregate_throttles : a.arn],
   )
 }
 
+# The two singular outputs below predate chunking, when there was at most one alarm of each kind.
+# They keep their names and their meaning for the estate they were written for, a list of 10 or
+# fewer functions, and report the first group's alarm once the list is long enough to chunk rather
+# than failing or silently changing which alarm they name. A consumer past 10 functions wants the
+# plural outputs instead; a composite alarm built on the singular one would cover only group 0.
 output "lambda_aggregate_errors_alarm_arn" {
-  description = "ARN of the aggregate Lambda errors alarm, null when lambda_aggregate_alarm is false."
-  value       = one(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].arn)
+  description = "ARN of the first aggregate Lambda errors alarm, which is the only one until lambda_function_names passes 10 names. null when lambda_aggregate_alarm is false. Use lambda_aggregate_errors_alarm_arns to cover every group."
+  value       = try(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[0].arn, null)
 }
 
 output "lambda_aggregate_throttles_alarm_arn" {
-  description = "ARN of the aggregate Lambda throttles alarm, null when lambda_aggregate_alarm is false."
-  value       = one(aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[*].arn)
+  description = "ARN of the first aggregate Lambda throttles alarm, which is the only one until lambda_function_names passes 10 names. null when lambda_aggregate_alarm is false. Use lambda_aggregate_throttles_alarm_arns to cover every group."
+  value       = try(aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[0].arn, null)
+}
+
+output "lambda_aggregate_errors_alarm_arns" {
+  description = "ARNs of every aggregate Lambda errors alarm, one per group of at most 10 function names, in chunk order. Empty when lambda_aggregate_alarm is false. This is the output a composite alarm or a dashboard should use: it stays correct as the estate grows past 10 functions."
+  value       = aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].arn
+}
+
+output "lambda_aggregate_throttles_alarm_arns" {
+  description = "ARNs of every aggregate Lambda throttles alarm, one per group of at most 10 function names, in chunk order. Empty when lambda_aggregate_alarm is false."
+  value       = aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[*].arn
+}
+
+output "lambda_aggregate_errors_alarm_names" {
+  description = "Names of every aggregate Lambda errors alarm, one per group of at most 10 function names, in chunk order. The first is <name_prefix>-lambda-errors-aggregate and each later group appends its number, -2, -3 and so on. Empty when lambda_aggregate_alarm is false."
+  value       = aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].alarm_name
+}
+
+output "lambda_aggregate_throttles_alarm_names" {
+  description = "Names of every aggregate Lambda throttles alarm, one per group of at most 10 function names, in chunk order. The first is <name_prefix>-lambda-throttles-aggregate and each later group appends its number. Empty when lambda_aggregate_alarm is false."
+  value       = aws_cloudwatch_metric_alarm.lambda_aggregate_throttles[*].alarm_name
+}
+
+output "lambda_aggregate_function_name_chunks" {
+  description = "The function names as the module grouped them, one list per aggregate alarm pair, in the same order as the alarm outputs. Group 0 is the first 10 names in lambda_function_names order. Useful for a runbook that has to say which alarm covers which function. Empty when lambda_aggregate_alarm is false."
+  value       = local.lambda_aggregate_chunks
 }
 
 output "api_alarm_names" {
