@@ -33,6 +33,13 @@ intend. Write `~> 1.3.0` instead to hold a minor and take patch releases only.
 | [`modules/http-api`](modules/http-api/) | API Gateway HTTP API in front of a Lambda: routes, access logging, default stage, optional custom domain, and the gate's authorizer plus execute-api shutoff when asked. |
 | [`modules/github-actions-role`](modules/github-actions-role/) | GitHub Actions OIDC provider and deploy role with a statement-list inline policy rendered byte-identically to the hand-written originals. |
 | [`modules/staging-dns`](modules/staging-dns/) | A `staging.<domain>` hosted zone plus its NS delegation in the parent zone through an `aws.parent` provider alias. |
+| [`modules/app-baseline`](modules/app-baseline/) | Per-application account baseline: a resource group, a Cost Explorer anomaly monitor and subscription, and a map of monthly budgets with email notifications. |
+| [`modules/lambda-artifacts-bucket`](modules/lambda-artifacts-bucket/) | Versioned private S3 bucket for CI-built Lambda zips with noncurrent-version expiry, optional SSE, and an optional placeholder object. |
+| [`modules/lambda-function`](modules/lambda-function/) | An API Lambda's role, log group and function with tracing, logging config and code-drift ignore rules; code arrives as a local zip or an S3 object, IAM attachments stay in the app. |
+| [`modules/acm-certificate`](modules/acm-certificate/) | DNS validated ACM certificate whose validation records are written through a separate `aws.records` provider, so cross-account zones work. |
+| [`modules/dynamodb-tables`](modules/dynamodb-tables/) | An application's DynamoDB tables as one map: keys, GSIs, TTL, PITR, deletion protection, optional streams and encryption. |
+| [`modules/api-alarms`](modules/api-alarms/) | SNS topic with email subscriptions plus CloudWatch alarms for Lambda errors and throttles, HTTP API 5xx and integration latency, and per-table DynamoDB throttles. |
+| [`modules/app-secrets`](modules/app-secrets/) | A map of Secrets Manager secrets in five shapes (generated, given, JSON, placeholder, empty) with a ready-made read policy for the app role. |
 
 Each module README carries an "Adoption" section with the `moved` blocks and variable values that
 take over an application's existing resources with zero destroy or replace. Planned next: a root
