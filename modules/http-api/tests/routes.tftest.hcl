@@ -177,3 +177,47 @@ run "no_default_route_when_default_integration_is_null" {
     error_message = "default_integration_id should be null when there is no default integration."
   }
 }
+
+# A routes entry naming an integration that does not exist fails with a message that names the
+# route and the bad key, instead of a raw "Invalid index" on the target expression.
+run "an_unknown_integration_fails_by_name" {
+  command = plan
+
+  variables {
+    integrations = {
+      legacy = {
+        lambda_function_name = "example-test-legacy"
+        lambda_invoke_arn    = "arn:aws:apigateway:us-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:us-west-2:123456789012:function:example-test-legacy/invocations"
+      }
+    }
+
+    default_integration = "legacy"
+
+    routes = {
+      "GET /posts" = { integration = "typo_posts" }
+    }
+  }
+
+  expect_failures = [aws_apigatewayv2_route.this]
+}
+
+# default_integration still defaults to "legacy". A consumer that names its backend something else
+# and forgets the input gets the named precondition, not an Invalid index inside an output.
+run "a_default_integration_that_names_nothing_fails_by_name" {
+  command = plan
+
+  variables {
+    integrations = {
+      monolith = {
+        lambda_function_name = "example-test-monolith"
+        lambda_invoke_arn    = "arn:aws:apigateway:us-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:us-west-2:123456789012:function:example-test-monolith/invocations"
+      }
+    }
+
+    routes = {
+      "GET /health" = { integration = "monolith" }
+    }
+  }
+
+  expect_failures = [aws_apigatewayv2_route.this]
+}

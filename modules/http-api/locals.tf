@@ -63,11 +63,6 @@ locals {
 
   # Cross-variable checks. These are locals rather than variable validations so that the error
   # message can name the offending key, and so that a consumer sees every problem at once.
-  unknown_route_integrations = [
-    for k, r in local.all_routes : "${k} -> ${r.integration}"
-    if !contains(keys(var.integrations), r.integration)
-  ]
-
   unknown_route_settings = [
     for k, _ in var.route_settings : k
     if !contains(keys(local.all_routes), k)
@@ -81,22 +76,13 @@ locals {
   api_url = local.custom_domain ? "https://${var.domain_name}" : aws_apigatewayv2_api.this.api_endpoint
 }
 
-# The checks run at plan time and name what is wrong, instead of surfacing as a for_each key error
-# or, worse, as a route that answers nothing.
-check "routes_target_known_integrations" {
-  assert {
-    condition     = length(local.unknown_route_integrations) == 0
-    error_message = "These routes name an integration that is not in var.integrations: ${join(", ", local.unknown_route_integrations)}."
-  }
-}
-
-check "default_integration_exists" {
-  assert {
-    condition     = var.default_integration == null || contains(keys(var.integrations), var.default_integration)
-    error_message = "default_integration is \"${coalesce(var.default_integration, "null")}\", which is not a key in var.integrations. Set it to the integration that should serve $default, or to null to create no $default route."
-  }
-}
-
+# A route naming an unknown integration, and a default_integration that names nothing, are both
+# caught by the precondition on aws_apigatewayv2_route.this in api.tf. That precondition fires
+# before the route's target expression is evaluated, so it reports the offending route key by name
+# rather than letting a raw "Invalid index" escape, and it stops the plan rather than only warning.
+#
+# The checks below cover the two problems no precondition catches, because they are about
+# resources that would otherwise plan perfectly cleanly while doing nothing.
 check "route_settings_name_real_routes" {
   assert {
     condition     = length(local.unknown_route_settings) == 0

@@ -34,8 +34,8 @@ output "integration_ids" {
 }
 
 output "default_integration_id" {
-  description = "Id of the integration behind $default, null when default_integration is null. The 1.x integration_id under its new name."
-  value       = var.default_integration == null ? null : aws_apigatewayv2_integration.this[var.default_integration].id
+  description = "Id of the integration behind $default, null when default_integration is null or names no integration. The 1.x integration_id under its new name."
+  value       = try(aws_apigatewayv2_integration.this[var.default_integration].id, null)
 }
 
 output "route_ids" {

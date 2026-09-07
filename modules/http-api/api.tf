@@ -51,6 +51,19 @@ resource "aws_apigatewayv2_route" "this" {
   authorizer_id      = each.value.authorizer_id
 
   authorization_scopes = each.value.authorization_scopes
+
+  # A route naming an integration that does not exist would otherwise surface only as a raw
+  # "Invalid index" on the target expression above, which names neither the route nor the key that
+  # is wrong. This covers both var.routes entries and the synthesised $default, so a
+  # default_integration that names no integration is reported here too. It is a precondition and
+  # not a check block because a check only warns: the plan would still fail, on the unreadable
+  # error, and the readable one would be the diagnostic nobody acts on.
+  lifecycle {
+    precondition {
+      condition     = contains(keys(var.integrations), each.value.integration)
+      error_message = "Route \"${each.key}\" names integration \"${each.value.integration}\", which is not a key in var.integrations (${join(", ", keys(var.integrations))})."
+    }
+  }
 }
 
 resource "aws_apigatewayv2_stage" "default" {
