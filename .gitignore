@@ -5,3 +5,7 @@ modules/*/test/node_modules/
 modules/*/test/package*.json
 modules/*/test/gate.rendered.js
 .claude/
+
+# Terraform init artifacts inside modules and examples
+.terraform/
+.terraform.lock.hcl
