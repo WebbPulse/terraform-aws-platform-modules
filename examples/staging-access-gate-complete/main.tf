@@ -22,7 +22,17 @@ module "gate" {
 }
 
 resource "aws_cloudfront_distribution" "frontend" {
-  # ... existing S3 origin, aliases, certificate ...
+  enabled             = true
+  default_root_object = "index.html"
+  aliases             = ["www.staging.example.com"]
+
+  # The SPA's own origin. A real consumer already has this bucket and an origin access
+  # control on it; only the gate specific blocks below are new.
+  origin {
+    domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
+    origin_id                = "s3-frontend"
+    origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
+  }
 
   origin {
     domain_name              = module.gate.login_origin_domain_name
@@ -82,7 +92,41 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  # ... custom_error_response 403/404 -> /index.html, restrictions, viewer_certificate ...
+  # SPA fallback: CloudFront serves the app shell for client side routes.
+  custom_error_response {
+    error_code         = 403
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  # A real consumer points this at the ACM certificate covering the alias above, issued in
+  # us-east-1. The default certificate keeps this example free of cross region plumbing.
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+resource "aws_s3_bucket" "frontend" {
+  bucket = "example-staging-frontend"
+}
+
+resource "aws_cloudfront_origin_access_control" "frontend" {
+  name                              = "example-staging-frontend"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
 }
 
 resource "aws_apigatewayv2_api" "api" {
@@ -100,6 +144,36 @@ resource "aws_apigatewayv2_api" "api" {
     allow_credentials = true
     max_age           = 300
   }
+}
+
+# The application Lambda behind the API, and the integration the route below targets. A real
+# consumer already has these, usually from the lambda-function module.
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.api.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_lambda_function" "api" {
+  function_name = "example-staging-api"
+  role          = aws_iam_role.api.arn
+  runtime       = "python3.13"
+  handler       = "app.handler"
+  filename      = "app.zip"
+}
+
+resource "aws_iam_role" "api" {
+  name = "example-staging-api"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 }
 
 # Every route carries the gate authorizer. It admits CORS preflights, the origin verification

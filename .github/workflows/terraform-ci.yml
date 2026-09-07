@@ -1,0 +1,179 @@
+# Static Terraform checks for every module and example in this repository.
+#
+# The repository publishes to the HCP Terraform private registry, where a bad module or a
+# drifted example is only discovered by the consumer who hits it. Three examples broke
+# terraform validate across two minor releases before this workflow existed, so everything
+# here runs on every pull request and on every push to main.
+#
+# No cloud credentials are used anywhere in this workflow, and none are needed:
+#   * terraform init runs with -backend=false, so no state backend is contacted.
+#   * Provider plugins come from the public registry, which needs no authentication.
+#   * Examples that reference the published registry address are rewritten to point at
+#     this checkout first; see the override step below for why.
+#   * The terraform test suites are plan-only against mocked providers.
+# There is no aws-actions/configure-aws-credentials step and no secrets: block on purpose.
+# If a future test or example needs real credentials that should be reported and discussed,
+# not fixed by adding a secret here.
+name: Terraform CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # versions.tf declares required_version = ">= 1.10", a floor rather than a pin. CI pins one
+  # exact version so a Terraform release cannot change the result of a run that touched no
+  # files. Raise this deliberately.
+  TERRAFORM_VERSION: "1.13.1"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt -recursive -check
+        run: terraform fmt -recursive -check -diff
+
+  # Enumerates the directories to check so the matrices pick up new modules, new examples
+  # and new test suites with no edit to this file.
+  discover:
+    name: Discover directories
+    runs-on: ubuntu-latest
+    outputs:
+      validate: ${{ steps.find.outputs.validate }}
+      test: ${{ steps.find.outputs.test }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - id: find
+        name: Build the validate and test matrices
+        env:
+          # These two modules declare configuration_aliases (aws.records and aws.parent
+          # respectively), so the caller must pass a second, aliased aws provider through the
+          # providers meta-argument. Terraform cannot validate such a module standalone:
+          # there is no caller to supply the alias, so validate fails with a missing provider
+          # configuration error no matter what the module contains.
+          #
+          # Their examples do supply the aliases (acm-certificate-basic,
+          # acm-certificate-cross-account-dns, staging-dns-basic), so this workflow still
+          # covers the module code through those examples rather than directly.
+          #
+          # Remove a module from this list only when its configuration_aliases block goes away.
+          VALIDATE_SKIP: "modules/acm-certificate modules/staging-dns"
+        run: |
+          set -euo pipefail
+
+          validate=()
+          for d in modules/*/ examples/*/; do
+            d="${d%/}"
+            skip=false
+            for s in $VALIDATE_SKIP; do
+              [ "$d" = "$s" ] && skip=true
+            done
+            if [ "$skip" = true ]; then
+              echo "skip $d (needs a caller supplied provider alias)"
+              continue
+            fi
+            validate+=("$d")
+          done
+
+          tests=()
+          for d in modules/*/tests; do
+            [ -d "$d" ] || continue
+            tests+=("$(dirname "$d")")
+          done
+
+          {
+            printf 'validate=%s\n' "$(printf '%s\n' "${validate[@]}" | jq -R . | jq -sc .)"
+            printf 'test=%s\n' "$(printf '%s\n' "${tests[@]}" | jq -R . | jq -sc .)"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "validate: ${#validate[@]} directories"
+          echo "test: ${#tests[@]} modules"
+
+  validate:
+    name: validate ${{ matrix.dir }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every failing directory by name rather than stopping at the first one.
+      # That is the whole point of running this as a matrix.
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJson(needs.discover.outputs.validate) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # Examples reference the published address
+      # app.terraform.io/WebbPulse/platform-modules/aws//modules/<name>, because that is what
+      # a real consumer writes. Resolving it needs an HCP Terraform API token, and this
+      # workflow holds no credentials. A generated override file repoints those sources at
+      # this checkout, which is also more useful: the pull request gets validated against the
+      # module code it changes rather than against the last published release.
+      - name: Point registry module sources at this checkout
+        run: python3 .github/scripts/local_module_override.py "${{ matrix.dir }}" .
+
+      - name: terraform init
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false -no-color
+
+      - name: terraform validate
+        working-directory: ${{ matrix.dir }}
+        run: terraform validate -no-color
+
+  test:
+    name: test ${{ matrix.dir }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJson(needs.discover.outputs.test) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false -no-color
+
+      # These suites are plan-only (every run block is command = plan against a mocked
+      # provider), so they reach no AWS API and need no credentials. A suite that switched to
+      # command = apply would need real credentials and must not be added without deciding
+      # separately how CI would obtain them.
+      - name: terraform test
+        working-directory: ${{ matrix.dir }}
+        run: terraform test -no-color
