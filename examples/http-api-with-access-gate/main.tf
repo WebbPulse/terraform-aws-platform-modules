@@ -11,8 +11,10 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.100, < 7.0"
+      source = "hashicorp/aws"
+      # staging-access-gate requires >= 6.0; matching it here keeps the example honest about the
+      # provider it actually runs on.
+      version = ">= 6.0, < 7.0"
     }
     archive = {
       source  = "hashicorp/archive"

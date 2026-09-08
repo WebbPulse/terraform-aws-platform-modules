@@ -143,7 +143,8 @@ session; the API starts answering 401 as soon as the cookies are cleared or the 
 ## Known limits
 
 - The hosted UI is Cognito's classic one. Managed login branding needs a resource that only exists
-  in AWS provider 6.x; both consumers pin 5.x today.
+  in AWS provider 6.x. This module now requires 6.x, so that resource is available to adopt; it is
+  simply not wired up yet.
 - The CloudFront Function checks only that the policy cookie exists and has not expired. The
   signature is verified by CloudFront itself on the key-group behaviors; a forged cookie reaches
   `/index.html` (the SPA shell) and nothing else.

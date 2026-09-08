@@ -7,10 +7,12 @@ locals {
   callback_urls = [for h in local.all_hosts : "https://${h}${var.auth_path_prefix}callback"]
   logout_urls   = [for h in local.all_hosts : "https://${h}${var.auth_path_prefix}logged-out"]
 
-  # AWS provider 6.x exposes the region as `region`; 5.x only has `name` and `id`. A schema-level
-  # unknown attribute is a static error that try() cannot catch, so `id` is the one spelling that
-  # resolves on both majors (6.x only warns about it).
-  region = data.aws_region.current.id
+  # `region` is the only spelling the provider does not deprecate: `name` has been deprecated since
+  # 6.0 and `id` since 6.47, both with a "will be removed in a future version" warning on every
+  # plan. The attribute does not exist at all on 5.x, where reading it is a hard "Unsupported
+  # attribute" error rather than something try() can absorb, so this line and the `>= 6.0` floor in
+  # versions.tf move together. Do not lower that floor without putting `id` back here.
+  region = data.aws_region.current.region
 
   hosted_ui_domain = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${local.region}.amazoncognito.com"
 
