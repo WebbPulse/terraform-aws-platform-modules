@@ -8,6 +8,51 @@ the authoritative record for them.
 Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so an entry marked
 **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.4.0
+
+### `api-alarms`: one alarm for the rate limiter failing open
+
+The shared DynamoDB backed rate limiter allows a request when it cannot reach its
+`<prefix>-rate-limits` table, and logs a WARNING carrying `rate_limit_failed_open` instead of
+refusing traffic. Nothing reported that: the request succeeded, so `AWS/Lambda Errors` stays at zero
+and the API returns 200 while the limit is not being enforced. `rate_limit_fail_open_alarm = true`
+turns those records into a metric and puts one alarm on it.
+
+- One `aws_cloudwatch_log_metric_filter` per watched log group, named
+  `<name_prefix>-<key>-rate-limit-failed-open`, and **one**
+  `<name_prefix>-rate-limit-failed-open` alarm summing them. Same dimensionless single metric shape
+  as `error_log_groups`, so the alarm count stays at one however many functions the estate holds and
+  the alarm is a plain metric alarm rather than metric math.
+- The log groups default to `error_log_groups`, so a consumer that already lists its functions there
+  does not list them twice. `rate_limit_fail_open_log_groups` names a different set and replaces
+  that list rather than merging with it.
+- Sum over one 5 minute period at a threshold of 0 with `GreaterThanThreshold` and
+  `notBreaching` missing data: a single fail open alarms. Actions go to the module's existing topic.
+- New inputs: `rate_limit_fail_open_alarm`, `rate_limit_fail_open_log_groups`,
+  `rate_limit_fail_open_filter_pattern`, `rate_limit_fail_open_metric_name`,
+  `rate_limit_fail_open_alarm_threshold`, `rate_limit_fail_open_alarm_period` and
+  `rate_limit_fail_open_alarm_evaluation_periods`.
+- New outputs: `rate_limit_fail_open_alarm_name`, `rate_limit_fail_open_metric_filter_names` and
+  `rate_limit_fail_open_metric`. The new alarm also joins `alarm_names` and `alarm_arns`.
+- New test suite `modules/api-alarms/tests/rate_limit_fail_open.tftest.hcl`.
+
+**No plan change for an existing consumer.** `rate_limit_fail_open_alarm` defaults to `false` and
+nothing else in the module reads the inputs that go with it, so a consumer that upgrades without
+touching its module block sees no new resources, including one that already passes
+`error_log_groups`. The test suite pins that case.
+
+Check which log shape a service emits before enabling this. The default pattern
+`{ $.rate_limit_failed_open IS TRUE }` matches a **top level** JSON field, which is what a logger
+given the flag as a record attribute writes. A service that interpolates
+`rate_limit_failed_open=True` into its message text has no such field, and a JSON pattern cannot see
+inside the message string: the metric would stay flat at 0 and the alarm would report healthy while
+the limiter fails open. Those services need a substring pattern instead, and the README section
+"The pattern has to match the shape the service actually logs" gives it.
+
+## 2.3.0
+
+`staging-access-gate`: read the region as `region` and require provider 6.x. No `api-alarms` change.
+
 ## 2.2.0
 
 ### `api-alarms`: the aggregate Lambda alarms chunk past ten functions

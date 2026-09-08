@@ -26,6 +26,7 @@ output "alarm_names" {
     [for a in aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.errors : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.standalone_lambda_errors : a.alarm_name],
+    [for a in aws_cloudwatch_metric_alarm.rate_limit_failed_open : a.alarm_name],
   ))
 }
 
@@ -42,6 +43,7 @@ output "alarm_arns" {
     [for a in aws_cloudwatch_metric_alarm.dynamodb_aggregate_throttles : a.arn],
     [for a in aws_cloudwatch_metric_alarm.errors : a.arn],
     [for a in aws_cloudwatch_metric_alarm.standalone_lambda_errors : a.arn],
+    [for a in aws_cloudwatch_metric_alarm.rate_limit_failed_open : a.arn],
   ))
 }
 
@@ -145,5 +147,23 @@ output "error_metric" {
   value = {
     namespace = local.error_alarm_count > 0 ? var.error_metric_namespace : null
     name      = local.error_alarm_count > 0 ? local.error_metric_name : null
+  }
+}
+
+output "rate_limit_fail_open_alarm_name" {
+  description = "Name of the rate limit fail open alarm, null when rate_limit_fail_open_alarm is false or there are no log groups to watch."
+  value       = one(aws_cloudwatch_metric_alarm.rate_limit_failed_open[*].alarm_name)
+}
+
+output "rate_limit_fail_open_metric_filter_names" {
+  description = "Fail open metric filter names keyed by the log group key that produced them. Empty when rate_limit_fail_open_alarm is false."
+  value       = { for k, f in aws_cloudwatch_log_metric_filter.rate_limit_failed_open : k => f.name }
+}
+
+output "rate_limit_fail_open_metric" {
+  description = "Namespace and name of the metric every fail open filter publishes to, so a dashboard or a composite alarm can graph the same series the alarm watches. Both fields are null when the alarm is off."
+  value = {
+    namespace = local.rate_limit_fail_open_alarm_count > 0 ? var.error_metric_namespace : null
+    name      = local.rate_limit_fail_open_alarm_count > 0 ? local.rate_limit_fail_open_metric_name : null
   }
 }
