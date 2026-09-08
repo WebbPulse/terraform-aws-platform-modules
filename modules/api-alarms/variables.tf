@@ -446,3 +446,79 @@ variable "extra_alarm_actions" {
   type        = list(string)
   default     = []
 }
+
+# --- The rate limiter failing open --------------------------------------------------------------
+
+variable "rate_limit_fail_open_alarm" {
+  description = "Create one <name_prefix>-rate-limit-failed-open alarm over the metric filters that count the rate limiter's fail open WARNINGs. false, the default, creates no filters and no alarm, which is why an existing consumer sees no diff. The limiter allows a request when it cannot reach its table, so this alarm is the compensating control that says the limit was not being enforced."
+  type        = bool
+  default     = false
+}
+
+variable "rate_limit_fail_open_log_groups" {
+  description = "Log groups to watch for the limiter's fail open records, as a map of short name to log group name, exactly like error_log_groups. null, the default, reuses error_log_groups, which is what a consumer running the limiter in every function it already watches for errors wants. Set it to name a different set; it replaces the error_log_groups list rather than merging with it. The key goes into the filter name, <name_prefix>-<key>-rate-limit-failed-open."
+  type        = map(string)
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.rate_limit_fail_open_log_groups == null || alltrue([for k in keys(coalesce(var.rate_limit_fail_open_log_groups, {})) : can(regex("^[A-Za-z0-9_-]{1,64}$", k))])
+    error_message = "Every key in rate_limit_fail_open_log_groups must be 1 to 64 characters of letters, digits, hyphens or underscores: it is used verbatim in the metric filter name."
+  }
+
+  validation {
+    condition     = var.rate_limit_fail_open_log_groups == null || alltrue([for n in values(coalesce(var.rate_limit_fail_open_log_groups, {})) : can(regex("^[A-Za-z0-9_./#-]{1,512}$", n))])
+    error_message = "Every value in rate_limit_fail_open_log_groups must be a CloudWatch log group name, for example /aws/lambda/my-function."
+  }
+}
+
+variable "rate_limit_fail_open_filter_pattern" {
+  description = "CloudWatch Logs filter pattern the fail open metric filters match. The default { $.rate_limit_failed_open IS TRUE } matches a structured JSON record carrying a top level rate_limit_failed_open field whose value is the JSON boolean true. That is what a logger emitting the field as a log record attribute writes. A service that instead interpolates the field into the message text needs a substring pattern such as \"rate_limit_failed_open=True\" here, because a JSON pattern cannot see inside the message string: see the README on which shape a service emits."
+  type        = string
+  default     = "{ $.rate_limit_failed_open IS TRUE }"
+
+  validation {
+    condition     = length(trimspace(var.rate_limit_fail_open_filter_pattern)) > 0
+    error_message = "rate_limit_fail_open_filter_pattern must not be empty: an empty pattern matches every log event, which would alarm on all logging rather than on the limiter failing open."
+  }
+}
+
+variable "rate_limit_fail_open_metric_name" {
+  description = "Name of the metric every fail open filter publishes to, null for <name_prefix>-rate-limit-failed-open. Every log group writes this one metric with no dimensions, so the alarm's Sum is the total across all of them. It is deliberately a different metric from the application errors one: a fail open is a request that went through unprotected, not a request that went wrong, and the two want separate thresholds."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.rate_limit_fail_open_metric_name == null || can(regex("^[^:*$]{1,255}$", coalesce(var.rate_limit_fail_open_metric_name, "x")))
+    error_message = "rate_limit_fail_open_metric_name must be 1 to 255 characters and must not contain :, * or $."
+  }
+}
+
+variable "rate_limit_fail_open_alarm_threshold" {
+  description = "Fail open records across every watched log group in one period that must be exceeded for the alarm to fire. The default of 0 with GreaterThanThreshold means a single fail open alarms, which is the right sensitivity for a control that is meant never to fail: the interesting event is that it happened at all."
+  type        = number
+  default     = 0
+}
+
+variable "rate_limit_fail_open_alarm_period" {
+  description = "Period in seconds of the rate limit fail open alarm. CloudWatch accepts 10, 30, or any multiple of 60. The default 300 matches the rest of the module."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([10, 30], var.rate_limit_fail_open_alarm_period) || (var.rate_limit_fail_open_alarm_period >= 60 && var.rate_limit_fail_open_alarm_period % 60 == 0)
+    error_message = "rate_limit_fail_open_alarm_period must be 10, 30, or a multiple of 60."
+  }
+}
+
+variable "rate_limit_fail_open_alarm_evaluation_periods" {
+  description = "Number of periods evaluated by the rate limit fail open alarm."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.rate_limit_fail_open_alarm_evaluation_periods >= 1 && floor(var.rate_limit_fail_open_alarm_evaluation_periods) == var.rate_limit_fail_open_alarm_evaluation_periods
+    error_message = "rate_limit_fail_open_alarm_evaluation_periods must be a whole number of at least 1."
+  }
+}

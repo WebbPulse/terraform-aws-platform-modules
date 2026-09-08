@@ -137,6 +137,17 @@ module "alarms" {
 
   # One alarm across every DynamoDB table in the account, as the other example shows.
   dynamodb_aggregate_alarm = true
+
+  # The rate limiter allows a request when it cannot reach its table, so nothing else reports the
+  # limit going unenforced: the request succeeded and AWS/Lambda Errors stays at zero. This adds one
+  # metric filter per log group and one "<name>-rate-limit-failed-open" alarm on the shared metric
+  # they publish. The log groups are not repeated here because they default to error_log_groups.
+  #
+  # The default pattern { $.rate_limit_failed_open IS TRUE } matches a top level JSON field. A
+  # service that instead writes the flag into its message text needs a substring pattern here, or
+  # the metric stays flat at 0 and the alarm reports healthy while the limiter fails open. See the
+  # module README section "The pattern has to match the shape the service actually logs".
+  rate_limit_fail_open_alarm = true
 }
 
 output "alarm_topic_arn" {
@@ -157,4 +168,9 @@ output "error_alarm_name" {
 output "error_metric" {
   description = "Namespace and name of the metric the filters publish to, for a dashboard."
   value       = module.alarms.error_metric
+}
+
+output "rate_limit_fail_open_alarm_name" {
+  description = "The single alarm covering the rate limiter failing open across every domain."
+  value       = module.alarms.rate_limit_fail_open_alarm_name
 }

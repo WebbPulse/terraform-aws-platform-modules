@@ -89,3 +89,61 @@ resource "aws_cloudwatch_metric_alarm" "standalone_lambda_errors" {
   ok_actions          = local.ok_actions
   tags                = var.tags
 }
+
+# --- The rate limiter failing open --------------------------------------------------------------
+#
+# The shared DynamoDB backed rate limiter is a protective control, not an authorisation control.
+# When its table is unreachable it allows the request rather than refusing it, because refusing
+# every call because DynamoDB is unavailable turns a dependency blip into a full outage, which is
+# the worse failure. That choice is only safe while somebody finds out it happened, and this is
+# what finds out: the limiter logs a WARNING carrying rate_limit_failed_open, one filter turns
+# those records into a metric, and one alarm watches the total.
+#
+# It is a separate metric from the application errors above rather than a wider error pattern,
+# because the two mean different things and want different thresholds. An application error is a
+# request that went wrong; a fail open is a request that went through unprotected while a control
+# was down. A responder wants to see the second one on its own even in a period that is already
+# noisy with the first.
+#
+# The shape is the errors shape, for the reasons that section documents in full: one filter per log
+# group, every filter writing the same metric name in the same namespace with NO dimensions, and a
+# single plain metric alarm whose Sum is therefore the total across all of them. Dimensions would
+# split the metric into one series per function, put the alarm on metric math, and cap the design
+# at the 10 metric metric math ceiling.
+resource "aws_cloudwatch_log_metric_filter" "rate_limit_failed_open" {
+  for_each = local.rate_limit_fail_open_log_groups
+
+  name           = "${var.name_prefix}-${each.key}-rate-limit-failed-open"
+  log_group_name = each.value
+  pattern        = var.rate_limit_fail_open_filter_pattern
+
+  metric_transformation {
+    name          = local.rate_limit_fail_open_metric_name
+    namespace     = var.error_metric_namespace
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+# One alarm over the metric every filter above publishes to. Sum over one period at a threshold of
+# 0 with GreaterThanThreshold means a single fail open in five minutes alarms, which is the right
+# sensitivity for a control that is supposed to never fail: the interesting event is that it
+# happened at all, not how often.
+resource "aws_cloudwatch_metric_alarm" "rate_limit_failed_open" {
+  count = local.rate_limit_fail_open_alarm_count
+
+  alarm_name          = "${var.name_prefix}-rate-limit-failed-open"
+  alarm_description   = "The rate limiter could not reach its table and allowed requests through unchecked, in ${length(local.rate_limit_fail_open_log_groups)} log group${length(local.rate_limit_fail_open_log_groups) == 1 ? "" : "s"}"
+  namespace           = var.error_metric_namespace
+  metric_name         = local.rate_limit_fail_open_metric_name
+  statistic           = "Sum"
+  period              = var.rate_limit_fail_open_alarm_period
+  evaluation_periods  = var.rate_limit_fail_open_alarm_evaluation_periods
+  threshold           = var.rate_limit_fail_open_alarm_threshold
+  comparison_operator = var.comparison_operator
+  treat_missing_data  = var.treat_missing_data
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.ok_actions
+  tags                = var.tags
+}

@@ -74,6 +74,25 @@ locals {
   # for it, rather than two resources racing for the same alarm name.
   standalone_lambda_errors_count = var.lambda_errors_alarm_function_name != null && var.lambda_function_name == null ? 1 : 0
 
+  # The fail open filters watch the same functions the error filters do, so the log groups default
+  # to error_log_groups rather than being listed twice. A consumer whose limiter runs in only some
+  # of those functions overrides the list with rate_limit_fail_open_log_groups; the override is a
+  # full replacement, not a merge, so it can also name a log group the error filters do not watch.
+  rate_limit_fail_open_log_groups = (
+    var.rate_limit_fail_open_alarm
+    ? (var.rate_limit_fail_open_log_groups == null ? var.error_log_groups : var.rate_limit_fail_open_log_groups)
+    : {}
+  )
+
+  # Same dimensionless single metric shape as the error metric above, and the same reason for
+  # carrying name_prefix: two environments in one account must not share a metric name.
+  rate_limit_fail_open_metric_name = coalesce(var.rate_limit_fail_open_metric_name, "${var.name_prefix}-rate-limit-failed-open")
+
+  # The alarm needs both the switch and something to watch. Turning the switch on with no log
+  # groups to resolve creates neither filters nor an alarm rather than an alarm that can never
+  # leave INSUFFICIENT_DATA.
+  rate_limit_fail_open_alarm_count = length(local.rate_limit_fail_open_log_groups) > 0 ? 1 : 0
+
   alarm_actions = concat([aws_sns_topic.alarms.arn], var.extra_alarm_actions)
   ok_actions    = var.notify_on_ok ? [aws_sns_topic.alarms.arn] : []
 

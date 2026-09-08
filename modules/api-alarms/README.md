@@ -30,6 +30,9 @@ aws_cloudwatch_log_metric_filter.errors["<key>"]       one per error_log_groups 
 aws_cloudwatch_metric_alarm.errors[0]                  only with a non-empty error_log_groups
 aws_cloudwatch_metric_alarm.standalone_lambda_errors[0]     only with lambda_errors_alarm_function_name
                                                             and no lambda_function_name
+aws_cloudwatch_log_metric_filter.rate_limit_failed_open["<key>"]  one per watched log group,
+                                                            only with rate_limit_fail_open_alarm
+aws_cloudwatch_metric_alarm.rate_limit_failed_open[0]  only with rate_limit_fail_open_alarm
 ```
 
 Alarm names:
@@ -48,6 +51,7 @@ Alarm names:
 | `dynamodb_aggregate_throttles[0]` | `<name_prefix>-dynamodb-throttles` |
 | `errors[0]` | `<name_prefix>-application-errors` |
 | `standalone_lambda_errors[0]` | `<name_prefix>-lambda-errors` |
+| `rate_limit_failed_open[0]` | `<name_prefix>-rate-limit-failed-open` |
 
 ## Usage
 
@@ -466,6 +470,81 @@ from one to the other across two applies without a destroy and create in between
 `lambda_errors_threshold`, `lambda_errors_period` and `lambda_errors_evaluation_periods`, so an
 application that has tuned those keeps them.
 
+## The rate limiter failing open
+
+The shared DynamoDB backed rate limiter is a protective control, not an authorisation control. When
+it cannot reach its `<prefix>-rate-limits` table it **allows** the request and logs a WARNING
+carrying `rate_limit_failed_open`, because refusing every call while DynamoDB is unavailable turns a
+dependency blip into a full outage, which is the worse failure.
+
+That trade is only safe while somebody finds out it happened. Nothing else reports it: the request
+succeeded, so `AWS/Lambda Errors` stays at zero, the API returns 200 and the DynamoDB alarms see a
+failure the client library already swallowed. The only evidence is the WARNING, and until this alarm
+exists it sits unread in a log group. `rate_limit_fail_open_alarm = true` turns those records into a
+metric and puts one alarm on it:
+
+```hcl
+rate_limit_fail_open_alarm = true
+```
+
+That is one metric filter per watched log group and a single `<name_prefix>-rate-limit-failed-open`
+alarm across all of them. The log groups default to `error_log_groups`, so a consumer that already
+lists its functions there does not list them twice; `rate_limit_fail_open_log_groups` names a
+different set, replacing that list rather than merging with it.
+
+It is a **separate metric from the application errors alarm**, not a widened error pattern, because
+the two mean different things. An application error is a request that went wrong. A fail open is a
+request that went through **unprotected** while a control was down, and a responder wants to see it
+on its own rather than buried in a period that is already noisy with ordinary errors. The threshold
+is 0 with `GreaterThanThreshold`, so a single fail open in five minutes alarms: for a control that
+is meant never to fail, the interesting fact is that it happened at all, not how often.
+
+The filter and alarm shape is the one the errors section above explains in full. Every filter writes
+the same metric name in the same namespace with **no dimensions**, which is what makes one ordinary
+metric alarm the Sum across all of them, keeps the alarm count at one however many functions the
+estate grows to, and keeps the alarm off metric math and its 10 metric ceiling.
+
+### The pattern has to match the shape the service actually logs
+
+`{ $.rate_limit_failed_open IS TRUE }`, the default, matches a JSON record with a **top level**
+`rate_limit_failed_open` field whose value is the JSON boolean `true`:
+
+```json
+{"timestamp":"...","level":"WARNING","message":"Login rate limit check failed; allowing the request.",
+ "rate_limit_failed_open":true,"rate_limit_operation":"record_failure","error_type":"ClientError"}
+```
+
+A JSON filter pattern selects on fields. It cannot see inside the `message` string. A service that
+interpolates the flag into its message text instead, like this:
+
+```json
+{"level":"WARNING","message":"Shared rate limit check failed; allowing the request. rate_limit_failed_open=True operation=check ..."}
+```
+
+has no `rate_limit_failed_open` **field** at all, and the default pattern silently matches nothing:
+the metric stays flat at 0, the alarm sits in OK forever and reports healthy while the limiter is
+failing open. That is the worst possible failure for an alarm, so check which shape a service emits
+before enabling this, and give the service a substring pattern if it is the second one:
+
+```hcl
+rate_limit_fail_open_filter_pattern = "\"rate_limit_failed_open=True\""
+```
+
+Two notes on that. A quoted CloudWatch Logs pattern is a plain substring match over the whole raw
+event, so it works regardless of where in the record the text sits. And it is case sensitive against
+what the service writes: Python's `%s` interpolation of a bool renders `True`, while `json.dumps`
+of the same value renders `true`, which is exactly why the two shapes need two different patterns.
+
+Both are worth fixing at the source eventually. A service that emits the flag as a real field gets
+the default pattern, queryable `filter rate_limit_failed_open = 1` in Logs Insights, and a pattern
+that keeps working when the message wording changes.
+
+### Cost
+
+One alarm per environment at $0.10 a month, plus the metric filters, which are free. A custom metric
+is $0.30 a month, and this is one metric however many log groups publish to it, because they all
+write the same dimensionless series.
+
 ## Turning parts off
 
 `lambda_function_name = null` with `lambda_aggregate_alarm = false` drops every `AWS/Lambda`
@@ -473,8 +552,15 @@ alarm, `http_api_id = null` drops both API
 alarms, `dynamodb_tables = {}` with `dynamodb_aggregate_alarm = false` drops every DynamoDB
 alarm, and `error_log_groups = {}` drops every metric filter and the errors alarm with them.
 
+`rate_limit_fail_open_alarm = false`, the default, drops the fail open filters and their alarm.
+
 The topic is always created, so the module is also a reasonable way to own just the notification
 target while alarms live elsewhere: publish `sns_topic_arn` and point them at it.
+
+Everything added in 2.4 is off unless asked for. `rate_limit_fail_open_alarm` defaults to `false`,
+and nothing else in the module reads the inputs that go with it, so a consumer that upgrades without
+touching its module block gets an unchanged plan even when it already passes `error_log_groups`.
+`tests/rate_limit_fail_open.tftest.hcl` pins that case directly.
 
 2.2 lifted the 10 name cap on `lambda_function_names` by chunking it, and that is a no-op for a
 consumer at 10 or fewer names. The chunk resources stayed on `count`, so a single group is still
@@ -543,6 +629,13 @@ review. Both existing consumers were checked that way before the change was rele
 | `error_alarm_period` | Period in seconds | `300` |
 | `error_alarm_evaluation_periods` | Periods evaluated | `1` |
 | `lambda_errors_alarm_function_name` | Create only the `-lambda-errors` alarm on this function; ignored when `lambda_function_name` is set | `null` |
+| `rate_limit_fail_open_alarm` | Create one `<name_prefix>-rate-limit-failed-open` alarm over the limiter's fail open records | `false` |
+| `rate_limit_fail_open_log_groups` | Log groups to watch for fail open records; null reuses `error_log_groups` | `null` |
+| `rate_limit_fail_open_filter_pattern` | Filter pattern the fail open metric filters match | `{ $.rate_limit_failed_open IS TRUE }` |
+| `rate_limit_fail_open_metric_name` | Metric every fail open filter publishes to, null for `<name_prefix>-rate-limit-failed-open` | `null` |
+| `rate_limit_fail_open_alarm_threshold` | Fail open records across every log group per period to exceed | `0` |
+| `rate_limit_fail_open_alarm_period` | Period in seconds | `300` |
+| `rate_limit_fail_open_alarm_evaluation_periods` | Periods evaluated | `1` |
 | `comparison_operator` | Comparison on every alarm | `"GreaterThanThreshold"` |
 | `treat_missing_data` | Missing data handling on every alarm | `"notBreaching"` |
 | `notify_on_ok` | Put the topic in `ok_actions` as well as `alarm_actions` | `true` |
@@ -576,6 +669,9 @@ is why its adoption passes none of them.
 | `error_alarm_name` | Name of the application errors alarm, `null` when `error_log_groups` is empty |
 | `error_metric_filter_names` | Metric filter names keyed by their `error_log_groups` key |
 | `error_metric` | `{ namespace, name }` of the metric the filters publish to, for a dashboard |
+| `rate_limit_fail_open_alarm_name` | Name of the rate limit fail open alarm, `null` when it is off |
+| `rate_limit_fail_open_metric_filter_names` | Fail open metric filter names keyed by their log group key |
+| `rate_limit_fail_open_metric` | `{ namespace, name }` of the metric the fail open filters publish to, for a dashboard |
 
 ## Adoption
 
