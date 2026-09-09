@@ -27,6 +27,12 @@ variable "tables" {
                   input. null takes the module-wide value.
       deletion_protection  per-table override of the module-wide deletion_protection input.
                   null takes the module-wide value.
+      stream_view_type  per-table stream. A non-null value turns the stream on for this
+                  table alone and sets what its records carry: KEYS_ONLY, NEW_IMAGE,
+                  OLD_IMAGE or NEW_AND_OLD_IMAGES. null takes the module-wide
+                  stream_enabled and stream_view_type pair, so a consumer that sets
+                  neither gets the table it has today. This is the field to use when only
+                  some of the tables in one module call need a stream.
       tags        extra tags for this table on top of tags and the provider default_tags.
 
     Every field except attributes and hash_key is optional.
@@ -51,6 +57,7 @@ variable "tables" {
     ttl_attribute          = optional(string)
     point_in_time_recovery = optional(bool)
     deletion_protection    = optional(bool)
+    stream_view_type       = optional(string)
     tags                   = optional(map(string), {})
   }))
 
@@ -123,6 +130,14 @@ variable "tables" {
       for k in keys(var.tables) : can(regex("^[A-Za-z0-9_.-]{1,255}$", k))
     ])
     error_message = "Table keys may hold only letters, digits, underscores, hyphens and dots, which is what DynamoDB allows in a table name."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.tables : t.stream_view_type == null ||
+      contains(["KEYS_ONLY", "NEW_IMAGE", "OLD_IMAGE", "NEW_AND_OLD_IMAGES"], coalesce(t.stream_view_type, "KEYS_ONLY"))
+    ])
+    error_message = "A table's stream_view_type must be KEYS_ONLY, NEW_IMAGE, OLD_IMAGE or NEW_AND_OLD_IMAGES."
   }
 }
 
