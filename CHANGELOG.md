@@ -28,6 +28,17 @@ API Gateway JWT authorizer fetches them itself.
   set `authorization_type = "NONE"` or `"AWS_IAM"` on a route. A consumer that has one of those
   routes gets a single in-place update on it that then stops recurring.
 
+## 2.5.0
+
+### `dynamodb-tables`: per-table `stream_view_type`
+
+- New optional `stream_view_type` on each table entry (`KEYS_ONLY`, `NEW_IMAGE`, `OLD_IMAGE`,
+  `NEW_AND_OLD_IMAGES`). Setting it enables a DynamoDB stream on that table; leaving it null keeps
+  the table without a stream. CarModPicker row 22 uses `NEW_AND_OLD_IMAGES` on `users`, `parts`,
+  `votes` and `part_listings`.
+- **No plan change** for a consumer that sets nothing; each table that sets it gets one in-place
+  update enabling the stream.
+
 ## 2.4.0
 
 ### `api-alarms`: one alarm for the rate limiter failing open
