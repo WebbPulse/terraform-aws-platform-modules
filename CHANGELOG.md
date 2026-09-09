@@ -8,6 +8,26 @@ the authoritative record for them.
 Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so an entry marked
 **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.5.1
+
+### `http-api`: no authorizer id on a route that takes no authorizer
+
+A route whose effective `authorization_type` was `NONE` or `AWS_IAM` was still handed
+`var.authorizer_id`. Neither type takes an authorizer: API Gateway accepts the create with one
+attached, ignores it and stores nothing, so the route reads back `authorizer_id = ""` while the
+configuration still names an authorizer, and every later plan shows a perpetual in-place
+`authorizer_id: "" -> "..."` update on it. Portfolio staging hit this on the two public
+`.well-known` routes it opts out of the access gate, which have to answer anonymously because the
+API Gateway JWT authorizer fetches them itself.
+
+- `authorizer_id` now resolves to `null` unless the route's effective `authorization_type` is
+  `CUSTOM` or `JWT`. The per-route `authorizer_id` override is unchanged for those two types, and
+  the module-wide `authorizer_id` still reaches every route that does not opt out, `$default`
+  included.
+- **No plan change** for an API whose routes are all `CUSTOM`, which is every consumer that has not
+  set `authorization_type = "NONE"` or `"AWS_IAM"` on a route. A consumer that has one of those
+  routes gets a single in-place update on it that then stops recurring.
+
 ## 2.4.0
 
 ### `api-alarms`: one alarm for the rate limiter failing open

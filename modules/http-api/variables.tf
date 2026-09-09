@@ -121,7 +121,11 @@ variable "routes" {
                          own choice: CUSTOM when authorizer_id is set, NONE when it is not. Set it
                          to "NONE" only to deliberately punch a hole in the access gate, for example
                          a health check that has to answer without the gate's cookies
-      authorizer_id      optional override, null means var.authorizer_id
+      authorizer_id      optional override, null means var.authorizer_id. Applied only when the
+                         effective authorization_type is CUSTOM or JWT; a route that resolves to
+                         NONE or AWS_IAM gets no authorizer id, because those types take none and
+                         API Gateway stores nothing for them, which would otherwise show as a
+                         perpetual in-place authorizer_id update on every later plan
       authorization_scopes optional JWT scopes, only meaningful with a JWT authorizer
 
     API Gateway picks the most specific match, so an explicit route always wins over $default.
@@ -311,7 +315,7 @@ variable "disable_execute_api_endpoint" {
 }
 
 variable "authorizer_id" {
-  description = "Id of an aws_apigatewayv2_authorizer on this API, typically staging-access-gate's http_api_authorizer_id. When set, every route the module creates gets authorization_type CUSTOM with this authorizer, $default included, unless that one route overrides it in routes. When null, every route is NONE."
+  description = "Id of an aws_apigatewayv2_authorizer on this API, typically staging-access-gate's http_api_authorizer_id. When set, every route the module creates gets authorization_type CUSTOM with this authorizer, $default included, unless that one route overrides it in routes. When null, every route is NONE. A route whose effective authorization_type is NONE or AWS_IAM never carries an authorizer id, since those types take none."
   type        = string
   default     = null
 }

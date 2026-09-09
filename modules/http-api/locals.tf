@@ -31,11 +31,20 @@ locals {
   all_routes = merge(local.default_route, var.routes)
 
   # Resolved per route: an explicit override wins, otherwise the module-wide choice.
+  #
+  # An authorizer id only belongs on a route whose effective authorization_type is CUSTOM or JWT.
+  # NONE and AWS_IAM take no authorizer: API Gateway accepts the create with one attached, ignores
+  # it, and stores nothing, so state reads back authorizer_id = "" while the configuration still
+  # says the gate's id. That is a perpetual in-place update on every later plan, which is how this
+  # surfaced on Portfolio staging's two public .well-known routes. Resolving to null here keeps the
+  # configuration and the API's own view of the route in agreement.
   resolved_routes = {
     for k, r in local.all_routes : k => {
-      integration          = r.integration
-      authorization_type   = coalesce(r.authorization_type, local.authorization_type)
-      authorizer_id        = r.authorizer_id != null ? r.authorizer_id : var.authorizer_id
+      integration        = r.integration
+      authorization_type = coalesce(r.authorization_type, local.authorization_type)
+      authorizer_id = contains(["CUSTOM", "JWT"], coalesce(r.authorization_type, local.authorization_type)) ? (
+        r.authorizer_id != null ? r.authorizer_id : var.authorizer_id
+      ) : null
       authorization_scopes = r.authorization_scopes
     }
   }
