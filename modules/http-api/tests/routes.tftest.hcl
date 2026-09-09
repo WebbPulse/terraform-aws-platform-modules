@@ -142,9 +142,145 @@ run "a_route_can_opt_out_of_the_gate_deliberately" {
     error_message = "An explicit authorization_type override should win over the module-wide choice."
   }
 
+  # A NONE route must carry no authorizer id at all. API Gateway accepts the create with one
+  # attached and then stores nothing, so a route that keeps the gate's id in configuration reads
+  # back as "" from the API and shows a perpetual in-place update on every later plan.
+  assert {
+    condition     = aws_apigatewayv2_route.this["GET /health"].authorizer_id == null
+    error_message = "A route opting out with authorization_type NONE must get no authorizer_id, otherwise every later plan shows a perpetual authorizer_id \"\" -> id update on it."
+  }
+
   assert {
     condition     = aws_apigatewayv2_route.this["$default"].authorization_type == "CUSTOM"
     error_message = "One route opting out must not change any other route."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["$default"].authorizer_id == "abc123"
+    error_message = "One route opting out must not strip the authorizer from any other route."
+  }
+}
+
+# The shape Portfolio staging needs: the access gate is on, but the two .well-known documents have
+# to be public because the API Gateway JWT authorizer fetches them anonymously. Opting those routes
+# out must leave them with no authorizer id, and must not disturb the gated routes beside them.
+run "public_well_known_routes_carry_no_authorizer_id" {
+  command = plan
+
+  variables {
+    authorizer_id = "p5vo7t"
+
+    routes = {
+      "ANY /api/v1/posts" = { integration = "posts" }
+      "GET /.well-known/jwks.json" = {
+        integration        = "legacy"
+        authorization_type = "NONE"
+      }
+      "GET /.well-known/openid-configuration" = {
+        integration        = "legacy"
+        authorization_type = "NONE"
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for k in ["GET /.well-known/jwks.json", "GET /.well-known/openid-configuration"] :
+      aws_apigatewayv2_route.this[k].authorization_type == "NONE" && aws_apigatewayv2_route.this[k].authorizer_id == null
+    ])
+    error_message = "The public .well-known routes must be NONE with no authorizer_id, so the JWT authorizer can fetch them anonymously and no plan drifts on them."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["ANY /api/v1/posts"].authorizer_id == "p5vo7t"
+    error_message = "The gated routes must keep the module's authorizer_id."
+  }
+}
+
+# AWS_IAM takes no authorizer either, and the module-wide authorizer_id must not leak onto it.
+run "an_aws_iam_route_carries_no_authorizer_id" {
+  command = plan
+
+  variables {
+    authorizer_id = "abc123"
+
+    routes = {
+      "ANY /api/v1/posts" = { integration = "posts" }
+      "POST /internal/reindex" = {
+        integration        = "legacy"
+        authorization_type = "AWS_IAM"
+      }
+    }
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["POST /internal/reindex"].authorization_type == "AWS_IAM"
+    error_message = "An AWS_IAM override should win over the module-wide choice."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["POST /internal/reindex"].authorizer_id == null
+    error_message = "An AWS_IAM route takes no authorizer, so it must get no authorizer_id."
+  }
+}
+
+# The per-route authorizer_id override is for pointing one route at a different authorizer, and it
+# must keep working for the two types that actually take one.
+run "a_per_route_authorizer_id_override_still_wins_for_custom_and_jwt" {
+  command = plan
+
+  variables {
+    authorizer_id = "gate01"
+
+    routes = {
+      "ANY /api/v1/posts" = { integration = "posts" }
+      "GET /partner/feed" = {
+        integration   = "legacy"
+        authorizer_id = "partner99"
+      }
+      "GET /jwt/thing" = {
+        integration          = "legacy"
+        authorization_type   = "JWT"
+        authorizer_id        = "jwt42"
+        authorization_scopes = ["read:posts"]
+      }
+    }
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["GET /partner/feed"].authorizer_id == "partner99"
+    error_message = "A per-route authorizer_id override must win over var.authorizer_id on a CUSTOM route."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["GET /jwt/thing"].authorizer_id == "jwt42"
+    error_message = "A per-route authorizer_id override must win over var.authorizer_id on a JWT route."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.this["ANY /api/v1/posts"].authorizer_id == "gate01"
+    error_message = "A route without an override must still get var.authorizer_id."
+  }
+}
+
+# With no gate at all every route is NONE, so nothing on the API may carry an authorizer id. This is
+# the case where a stray per-route authorizer_id would otherwise be attached to a NONE route.
+run "without_an_authorizer_no_route_carries_an_authorizer_id" {
+  command = plan
+
+  variables {
+    routes = {
+      "ANY /api/v1/posts" = { integration = "posts" }
+      "GET /partner/feed" = {
+        integration   = "legacy"
+        authorizer_id = "partner99"
+      }
+    }
+  }
+
+  assert {
+    condition     = alltrue([for k, r in aws_apigatewayv2_route.this : r.authorizer_id == null])
+    error_message = "With no authorization on any route, no route may carry an authorizer_id."
   }
 }
 

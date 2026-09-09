@@ -136,8 +136,18 @@ explicitly and visibly:
   }
 ```
 
+An authorizer id only goes on a route that takes one. A route whose effective `authorization_type`
+is `CUSTOM` or `JWT` gets its own `authorizer_id` if it set one and `var.authorizer_id` otherwise; a
+route that resolves to `NONE` or `AWS_IAM` gets no `authorizer_id` at all, even when
+`var.authorizer_id` is set and even when that one route set an `authorizer_id` of its own. Those two
+types take no authorizer: API Gateway accepts the create with one attached, ignores it and stores
+nothing, so the route reads back `authorizer_id = ""` while the configuration still names an
+authorizer, and every later plan shows a perpetual in-place update on it. Portfolio staging hit this
+on `GET /.well-known/jwks.json` and `GET /.well-known/openid-configuration`, which have to stay
+public because the API Gateway JWT authorizer fetches them anonymously.
+
 `tests/routes.tftest.hcl` asserts both directions of this, including that `$default` is `CUSTOM`
-when the gate is on.
+when the gate is on, and that an opted-out route carries no authorizer id.
 
 ## Throttling: layer 1 of the rate limiting
 
@@ -246,7 +256,7 @@ Configuring both places and having them disagree is a bad afternoon. The module 
 | `access_log_format` | Field name to `$context` variable; stored as `jsonencode()` with sorted keys | 14 fields, see `variables.tf` |
 | `lambda_permission_statement_id` | Base `statement_id` of the invoke permissions; see below | `"AllowHttpApiInvoke"` |
 | `disable_execute_api_endpoint` | Turn off the execute-api hostname; requires `domain_name` | `false` |
-| `authorizer_id` | Authorizer for every route (`CUSTOM`), null for `NONE` | `null` |
+| `authorizer_id` | Authorizer for every route (`CUSTOM`), null for `NONE`. Never applied to a route whose effective type is `NONE` or `AWS_IAM` | `null` |
 | `cors_configuration` | API-level CORS; null creates no block | `null` |
 | `domain_name` | Custom hostname; null for no custom domain | `null` |
 | `certificate_arn` | Issued ACM certificate in this region; required with `domain_name` | `null` |
