@@ -73,9 +73,50 @@ Each entry in `tables`:
 | `ttl_attribute` | Attribute holding the expiry epoch seconds | `null` |
 | `point_in_time_recovery` | Per-table override of the module-wide value | `null` |
 | `deletion_protection` | Per-table override of the module-wide value | `null` |
+| `stream_view_type` | Turns this table's stream on by itself; one of the four view types | `null` |
 | `tags` | Extra tags for this table | `{}` |
 
 `projection_type` defaults to `ALL` on an index that does not name one.
+
+## Streams
+
+Two ways to turn a stream on, and the difference matters once a call creates more than one table.
+
+The module-wide `stream_enabled` and `stream_view_type` are one setting for every table the call
+creates. That is the right shape when every table wants a stream and the wrong one when only some
+do, because there is no way to exempt a table from it.
+
+A table's own `stream_view_type` is the per-table form. A non-null value turns that table's stream
+on and sets what its records carry, and it wins over the module-wide pair. `null`, the default,
+falls back to that pair, so a consumer that sets no per-table value plans exactly what it has
+today. Enabling a stream on a table that already exists is an in-place `UpdateTable`; it does not
+replace the table.
+
+```hcl
+tables = {
+  users = {
+    attributes       = [{ name = "id", type = "S" }]
+    hash_key         = "id"
+    stream_view_type = "NEW_AND_OLD_IMAGES"
+  }
+
+  # No stream: no per-table value and the module-wide default is off.
+  sessions = {
+    attributes = [{ name = "id", type = "S" }]
+    hash_key   = "id"
+  }
+}
+```
+
+**Pick the view type once.** DynamoDB does not allow editing a `StreamViewType` after the stream
+exists. Changing it disables the stream and creates a new one, which mints a new stream ARN and
+detaches every event source mapping and EventBridge pipe that was reading the old one. Choose for
+what the eventual consumer needs: a handler that has to see what a deleted item held needs
+`NEW_AND_OLD_IMAGES`, and it cannot be added later without that break. See
+[Change data capture for DynamoDB Streams](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.html).
+
+Stream records live for 24 hours, so a consumer that falls further behind than that loses events
+rather than catching up.
 
 ## Outputs
 
