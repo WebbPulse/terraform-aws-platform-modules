@@ -142,6 +142,13 @@ run "no_role_policies_when_no_role_was_named" {
     condition     = length(aws_iam_role_policy.identity_signing) == 0 && length(aws_iam_role_policy.identity_tables) == 0
     error_message = "With identity_role_name null the module must attach nothing and leave the caller to use the policy JSON outputs."
   }
+
+  # The MFA grant follows the same rule. The key is still created, because a consumer may well
+  # attach mfa_policy_json to a role this module was not told about.
+  assert {
+    condition     = length(aws_iam_role_policy.identity_mfa) == 0
+    error_message = "With identity_role_name null the MFA grant must not be attached either."
+  }
 }
 
 run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
@@ -156,6 +163,60 @@ run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
   assert {
     condition     = length(aws_iam_role_policy.identity_signing) == 1 && length(aws_iam_role_policy.identity_tables) == 1
     error_message = "Naming the role must attach both the signing grant and the table grant."
+  }
+
+  # M4 adds a third: the envelope key grant, attached on the same condition as the other two.
+  assert {
+    condition     = length(aws_iam_role_policy.identity_mfa) == 1
+    error_message = "Naming the role must also attach the MFA envelope grant, since the key defaults on."
+  }
+
+  # GenerateDataKey and Decrypt and nothing else. The seed is encrypted locally under a data key,
+  # so nothing ever sends a plaintext seed to KMS and kms:Encrypt would widen the grant for a call
+  # that is never made.
+  assert {
+    condition     = contains(local.mfa_key_actions, "kms:GenerateDataKey") && contains(local.mfa_key_actions, "kms:Decrypt")
+    error_message = "The envelope grant must allow kms:GenerateDataKey for sealing a seed and kms:Decrypt for opening one."
+  }
+
+  assert {
+    condition     = length(local.mfa_key_actions) == 2
+    error_message = "The envelope grant must be exactly those two actions: crypto.py calls GenerateDataKey and Decrypt and nothing else."
+  }
+
+  assert {
+    condition     = !contains(local.mfa_key_actions, "kms:Encrypt")
+    error_message = "kms:Encrypt must not be granted: the design is an envelope, so the plaintext seed never reaches KMS."
+  }
+
+  # The two halves of the pair must not disagree. The key policy grants the same actions to the
+  # role that the role's own policy claims on the key.
+  assert {
+    condition     = length(setsubtract(local.mfa_key_actions, ["kms:GenerateDataKey", "kms:Decrypt"])) == 0
+    error_message = "The key policy and the role policy are built from the same action list, so neither half can be wider than the other."
+  }
+
+  # Only purpose is pinned. user_id is a different string for every user, so no static condition
+  # can name it; pinning purpose still stops this key being reused for anything but TOTP seeds.
+  # Asserted on the statement rather than on the rendered JSON: the document embeds the created
+  # key's ARN, which is unknown until apply, so the whole string is unknown at plan. The condition
+  # block is built from variables alone and is knowable here.
+  assert {
+    condition     = contains(keys(local.mfa_policy_statement.Condition.StringEquals), "kms:EncryptionContext:purpose")
+    error_message = "The envelope grant must condition on the encryption context purpose, which is the half of the context that has a fixed value."
+  }
+
+  # StringEquals, not a set operator. kms:EncryptionContext:<key> is a single valued condition key,
+  # and the AWS KMS documentation says using ForAllValues with it produces an overly permissive
+  # policy.
+  assert {
+    condition     = keys(local.mfa_policy_statement.Condition)[0] == "StringEquals" && length(keys(local.mfa_policy_statement.Condition)) == 1
+    error_message = "The encryption context condition must use StringEquals and nothing else: the condition key is single valued and a set operator on it is overly permissive."
+  }
+
+  assert {
+    condition     = local.mfa_policy_statement.Condition.StringEquals["kms:EncryptionContext:purpose"] == "totp"
+    error_message = "The pinned purpose must be totp, which is crypto.TOTP_ENCRYPTION_PURPOSE and what the package sends on every call."
   }
 
   # Sign and GetPublicKey and nothing else. The function never needs to manage the key, and
@@ -244,6 +305,13 @@ run "the_environment_map_is_what_identity_settings_parses" {
   assert {
     condition     = local.identity_environment["IDENTITY_RP_ID"] == var.registrable_domain
     error_message = "The WebAuthn RP ID is the registrable domain, and it is hashed into every credential for that credential's life."
+  }
+
+  # M4. The name is the settings field under the IDENTITY_ prefix: IdentitySettings.data_key_arn,
+  # which is what EnvelopeCipher is built from. Not "envelope" or "mfa" anything.
+  assert {
+    condition     = contains(keys(local.identity_environment), "IDENTITY_DATA_KEY_ARN")
+    error_message = "With the envelope key on by default, IDENTITY_DATA_KEY_ARN must be in the map: it is IdentitySettings.data_key_arn and TOTP enrolment refuses without it."
   }
 
   # Product strings this module has no resource behind are deliberately absent, so a consumer

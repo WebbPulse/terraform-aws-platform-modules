@@ -29,6 +29,35 @@ output "signing_policy_json" {
 }
 
 # ---------------------------------------------------------------------------
+# The MFA envelope key
+# ---------------------------------------------------------------------------
+
+output "mfa_encryption_key_arn" {
+  description = "ARN of the symmetric KMS key TOTP seeds are sealed under, which is what the package reads as IDENTITY_DATA_KEY_ARN. The key this module created, or mfa_encryption_key_arn when a consumer supplied its own, or null when neither exists. Null is the signal that TOTP enrolment will refuse: EnvelopeCipher will not construct without a key id."
+  value       = local.mfa_key_arn
+}
+
+output "mfa_encryption_key_id" {
+  description = "Key id of the MFA envelope key, null when the module did not create one. Use mfa_encryption_key_arn for anything the application reads or an IAM policy names."
+  value       = one(aws_kms_key.identity_mfa[*].key_id)
+}
+
+output "mfa_encryption_key_alias" {
+  description = "Alias of the MFA envelope key, alias/<name_prefix>-identity-mfa, or null when the key or the alias is not created. KMS accepts an alias anywhere it accepts a key id for GenerateDataKey and Decrypt, and it is a pure function of name_prefix, so passing it to a consumer takes no resource reference."
+  value       = one(aws_kms_alias.identity_mfa[*].name)
+}
+
+output "mfa_encryption_key_alias_arn" {
+  description = "ARN of the MFA envelope key alias, null when the alias is not created. An alias ARN is not usable as an IAM policy resource: name mfa_encryption_key_arn there instead."
+  value       = one(aws_kms_alias.identity_mfa[*].arn)
+}
+
+output "mfa_policy_json" {
+  description = "IAM policy document granting kms:GenerateDataKey and kms:Decrypt on the MFA envelope key, conditioned on the encryption context purpose. Null when there is no key. Already attached to identity_role_name when that is set; this output is for a consumer composing one inline policy out of several statements or attaching it to a role the module was not told about."
+  value       = local.mfa_key_exists ? local.mfa_policy_json : null
+}
+
+# ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
 
@@ -87,10 +116,17 @@ output "identity_environment" {
     merge into the identity function's environment:
 
       IDENTITY_ISSUER, IDENTITY_AUDIENCE, IDENTITY_SIGNING_KEY_ARNS (a JSON array, active signer
-      first), IDENTITY_COOKIE_DOMAIN and IDENTITY_RP_ID.
+      first), IDENTITY_COOKIE_DOMAIN, IDENTITY_RP_ID and, when an MFA envelope key exists,
+      IDENTITY_DATA_KEY_ARN.
 
     Every name is a field of webbpulse.identity.IdentitySettings, whose env_prefix is IDENTITY_, so
     the composition root builds the settings object straight from the environment.
+
+    IDENTITY_DATA_KEY_ARN is present only when there is a key to name, either one this module
+    created or one supplied through mfa_encryption_key_arn. IdentitySettings.data_key_arn defaults
+    to an empty string and EnvelopeCipher refuses to construct on one, so an absent variable and an
+    empty one mean the same thing to the package and omitting it keeps the rendered environment
+    honest about which keys exist.
 
     It is deliberately not the whole block. IDENTITY_ENVIRONMENT, IDENTITY_RP_NAME,
     IDENTITY_PRODUCT_NAME, IDENTITY_SUPPORT_EMAIL and IDENTITY_FRONTEND_BASE_URL are product

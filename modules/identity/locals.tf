@@ -5,6 +5,8 @@ locals {
   # rather than by two places agreeing.
   signing_key_name  = "${var.name_prefix}-identity-signing"
   signing_key_alias = "alias/${local.signing_key_name}"
+  mfa_key_name      = "${var.name_prefix}-identity-mfa"
+  mfa_key_alias     = "alias/${local.mfa_key_name}"
   authorizer_name   = coalesce(var.authorizer_name, "${var.name_prefix}-identity-jwt")
 
   # An unset tags argument and an empty map plan identically on provider 5.x, but passing null
@@ -18,6 +20,65 @@ locals {
     var.name_tag ? { Name = local.signing_key_name } : {},
     var.tags,
   )
+
+  # The MFA envelope key's tags, on the same rule as the signing key's.
+  mfa_key_tags = merge(
+    var.name_tag ? { Name = local.mfa_key_name } : {},
+    var.tags,
+  )
+
+  # Whether a key exists at all, decided from the inputs alone.
+  #
+  # Separate from mfa_key_arn because a created key's ARN is not known until apply, and anything
+  # that decides a resource count or a map's shape has to be known at plan time. This answers the
+  # same question from the variables: there is a key when the module creates one, or when the
+  # consumer supplied one of its own.
+  mfa_key_exists = var.enable_mfa_encryption_key || var.mfa_encryption_key_arn != null
+
+  # The key TOTP seeds are actually sealed under: the one this module created, or a consumer's own
+  # when it supplied one and turned creation off. Null when neither exists, which is what makes
+  # both the grant and IDENTITY_DATA_KEY_ARN disappear together rather than leaving a policy naming
+  # a key that is not there.
+  mfa_key_arn = var.enable_mfa_encryption_key ? one(aws_kms_key.identity_mfa[*].arn) : var.mfa_encryption_key_arn
+
+  # The two calls the envelope makes, and no more.
+  #
+  # Deliberately not kms:Encrypt: webbpulse.identity.crypto is an envelope, so KMS mints a data key
+  # through GenerateDataKey and the seed is encrypted locally under it. Nothing ever sends a
+  # plaintext seed to KMS, so granting Encrypt would widen the grant for a call nothing makes.
+  # Deliberately not kms:GenerateDataKeyWithoutPlaintext either, since sealing needs the plaintext
+  # data key in the process to run AES-GCM with it.
+  mfa_key_actions = ["kms:GenerateDataKey", "kms:Decrypt"]
+
+  generated_mfa_key_policy = one(data.aws_iam_policy_document.mfa_key[*].json)
+
+  # The identity role's statement on the envelope key. Scoped to the one key ARN and carrying the
+  # same encryption context condition the key policy does, so neither half of the pair is wider
+  # than the other.
+  #
+  # kms:EncryptionContext:purpose is single valued, so StringEquals is the correct operator; a set
+  # operator such as ForAllValues would be wrong here per the AWS KMS condition key documentation.
+  # Only purpose is pinned, because user_id differs per user and no static condition can name it.
+  mfa_policy_statement = merge(
+    {
+      Sid      = "SealAndOpenTotpSeeds"
+      Effect   = "Allow"
+      Action   = local.mfa_key_actions
+      Resource = [local.mfa_key_arn]
+    },
+    var.mfa_encryption_context_purpose == null ? {} : {
+      Condition = {
+        StringEquals = {
+          "kms:EncryptionContext:purpose" = var.mfa_encryption_context_purpose
+        }
+      }
+    },
+  )
+
+  mfa_policy_json = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [local.mfa_policy_statement]
+  })
 
   table_names = {
     for key, table in var.tables : key => "${var.name_prefix}-${key}"
@@ -115,11 +176,27 @@ locals {
   # the identity role. The cycle would exist if the key were built from something the Lambda
   # module produces and that module were built from the key; Terraform's graph is per resource
   # rather than per module, so the order is role, then key, then function.
-  identity_environment = {
-    IDENTITY_ISSUER           = var.issuer
-    IDENTITY_AUDIENCE         = var.audience
-    IDENTITY_SIGNING_KEY_ARNS = jsonencode(local.signing_key_arns)
-    IDENTITY_COOKIE_DOMAIN    = var.registrable_domain
-    IDENTITY_RP_ID            = var.registrable_domain
-  }
+  # IDENTITY_DATA_KEY_ARN is the M4 addition, and it is merged conditionally rather than set to an
+  # empty string when there is no key. IdentitySettings.data_key_arn defaults to "", and
+  # EnvelopeCipher refuses to construct on an empty key id with a message naming this setting, so
+  # an absent variable and an empty one behave identically to the package. Omitting it keeps the
+  # function's rendered environment honest about which keys exist.
+  #
+  # The name is the field name under the IDENTITY_ prefix: IdentitySettings.data_key_arn, not
+  # "envelope" or "mfa" anything. It is the setting that has existed since M1 as a placeholder and
+  # that M4 is the first release to read.
+  mfa_environment = local.mfa_key_exists ? {
+    IDENTITY_DATA_KEY_ARN = local.mfa_key_arn
+  } : {}
+
+  identity_environment = merge(
+    {
+      IDENTITY_ISSUER           = var.issuer
+      IDENTITY_AUDIENCE         = var.audience
+      IDENTITY_SIGNING_KEY_ARNS = jsonencode(local.signing_key_arns)
+      IDENTITY_COOKIE_DOMAIN    = var.registrable_domain
+      IDENTITY_RP_ID            = var.registrable_domain
+    },
+    local.mfa_environment,
+  )
 }
