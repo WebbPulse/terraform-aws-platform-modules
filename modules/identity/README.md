@@ -1,8 +1,9 @@
 # terraform-aws-identity
 
 A product's whole identity layer as one module block: the KMS signing keys the access tokens are
-signed with, the symmetric KMS key TOTP seeds are sealed under, the six DynamoDB tables the identity
-flows read and write, the three IAM grants that let the identity function reach all of them, and
+signed with, the symmetric KMS key TOTP seeds are sealed under, the ten DynamoDB tables the
+identity flows read and write, the three IAM grants that let the identity function reach all of them,
+and
 optionally the API Gateway JWT authorizer that verifies the resulting tokens at the edge.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/identity`.
@@ -18,7 +19,7 @@ Portfolio adopted the module in
 [WebbPulse-Portfolio#164](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/164). Everything the
 module owns already existed there, the hand-written M1 KMS resources and the four tables alike, so
 the whole adoption was `moved` blocks: 11 moves, 2 adds, 6 in-place changes and no destroys. The
-authorizer and the M4 tables are the only genuine creates. See [Adoption](#adoption).
+authorizer and the M4, M5 and M6 tables are the only genuine creates. See [Adoption](#adoption).
 
 ## How it works
 
@@ -41,7 +42,8 @@ var.tables = { <key> = { attributes, hash_key, range_key?, global_secondary_inde
    │  name = "${var.name_prefix}-${key}"
    ▼
 aws_dynamodb_table.this[<key>]      credentials, refresh-tokens, identity-tokens, login-attempts,
-   ▼                                  totp-factors, recovery-codes
+   │                                  totp-factors, recovery-codes, passkeys, webauthn-challenges,
+   ▼                                  oauth-states, oauth-links
 outputs: table_names, table_arns, table_arns_list, tables
 
 enable_mfa_encryption_key (default true)
@@ -108,6 +110,34 @@ http_api_id (optional)
   permanent items carrying a TTL attribute that must never be set, where one bug deletes accounts.
   Separate tables make that failure impossible rather than merely unlikely. Per-table IAM is the
   other half.
+- **A WebAuthn challenge is a row, not a token, and the table grant has to reach three indexes.** A
+  challenge exists to make an assertion unreplayable, which is a claim about state that a signed
+  token cannot make: a JWT verifies exactly as well the second time as the first. So
+  `webauthn-challenges` holds one row per outstanding ceremony, written when options are generated
+  and deleted when it is consumed, with `expires_at` reclaiming what is abandoned. `passkeys` is
+  keyed `user_id` + `credential_id` because the management page reads its own writes and needs a
+  consistent `Query` on the base table, and `credential_id-index` serves the login lookup in the
+  other direction, where eventual consistency is fine.
+- **An OAuth state is a row for the same reason, and `oauth-links` is keyed on the provider
+  identity.** `oauth-states` holds one row per outstanding authorization request, spent by a
+  conditional `DeleteItem` so it is single use even under a concurrent replay, with `expires_at`
+  reclaiming what is abandoned; the ten minute deadline is re-checked on every read, so an
+  unreclaimed row is refused rather than accepted. `oauth-links` hashes on `provider_subject`
+  (`<provider>#<subject>`) so the uniqueness constraint **is** the primary key: attaching a provider
+  is one conditional put on `attribute_not_exists(provider_subject)`, which resolves a race to one
+  winner with no read-then-write and no synthetic reservation rows. `user_id-index` answers "every
+  link for this user" for listing and for the last-method count in unlink. A GSI rather than a
+  second table because two tables would need both rows written and deleted in step with no
+  cross-table transaction available, and a half-failed pair is an orphaned link that unlink cannot
+  find; an index cannot disagree with its base table.
+- **Three indexes now sit on a request path, which is what the grant's `/index/*` entries are for.**
+  The refresh token family revocation reads `family_id-generation-index`, the passkey login lookup
+  reads `credential_id-index` and the OAuth link listing reads `user_id-index`. DynamoDB authorises
+  an index read against `table/<name>/index/<index>`, so a policy naming only `table/<name>` denies
+  all three with an `AccessDenied` that names the table.
+- **`oauth-links` and `passkeys` never carry a TTL, and the rule is sharper than it looks.** Both
+  hold sign-in methods, and either may be the only one an account has. The package refuses an unlink
+  that would remove the last way in, but a TTL deletes with nobody to refuse it.
 - **The three identity strings are close to irreversible.** The `issuer` is byte identical in three
   places (the `iss` claim, the discovery document's `issuer` member, the authorizer's configured
   issuer) and a mismatch denies every request while logging no reason. The `audience` carries the
@@ -195,6 +225,72 @@ conventional. Each one acts on an already-authenticated user and reads its subje
 a factor on anybody else's account, so the authorizer is not decoration on these routes: it is where
 the subject comes from.
 
+## The passkey routes, and the two that must stay in front of the authorizer
+
+`webbpulse` 0.14.0 mounts seven passkey routes under the issuer's path. They mount only when
+`passkeys_enabled` is true and the product supplies the two M5 stores, which is what the `passkeys`
+and `webauthn-challenges` tables above are for. As with the MFA routes the module creates no routes,
+so this is a table of what the consumer attaches `authorizer_id` to and what it must not.
+
+| Route | Behind the JWT authorizer |
+| --- | --- |
+| `POST <issuer>/passkeys/register/options` | Yes |
+| `POST <issuer>/passkeys/register/verify` | Yes |
+| `POST <issuer>/login/passkey/options` | **No.** Anonymous by design. |
+| `POST <issuer>/login/passkey/verify` | **No.** It is the sign-in. |
+| `GET <issuer>/passkeys` | Yes |
+| `PATCH <issuer>/passkeys/{credential_id}` | Yes |
+| `DELETE <issuer>/passkeys/{credential_id}` | Yes |
+
+**The two login legs are the entry point, so nothing can be behind the authorizer yet.** Give them
+`authorization_type = "NONE"`, the same treatment `login/totp` and the two `.well-known` routes get,
+and for the same underlying reason: the caller cannot yet hold the credential the authorizer wants.
+`login/passkey/options` is deliberately answerable by anybody, including an address with no account,
+because answering differently would turn an anonymous route into an account oracle that needs no
+password.
+
+The other five sit behind it and read their subject from the **verified claims** rather than from
+the body, which is what stops one user registering, renaming or deleting a credential on another
+user's account.
+
+**One consequence worth knowing before the routes go up.** The package treats a user-verified
+passkey as two factors and sets `amr` to `["swk", "pin", "mfa"]`, so a user with TOTP enrolled is
+**not** challenged for a code after signing in with one. A passkey reporting no user verification is
+one factor and is challenged exactly as a password is. That is a policy decision the package makes
+rather than one this module configures, but it changes what a sign-in looks like on a product that
+already required MFA.
+
+## The OAuth routes, and the two that must stay in front of the authorizer
+
+`webbpulse` 0.15.0 mounts five OAuth routes under the issuer's path. They mount only when the
+product has configured a provider with a client id and supplied both M6 stores, which is what the
+`oauth-states` and `oauth-links` tables above are for.
+
+| Route | Behind the JWT authorizer |
+| --- | --- |
+| `GET <issuer>/oauth/{provider}/start` | **No.** It is the start of a sign-in. |
+| `GET <issuer>/oauth/callback` | **No.** The browser arrives from the provider. |
+| `POST <issuer>/oauth/{provider}/link` | Yes |
+| `GET <issuer>/oauth/links` | Yes |
+| `DELETE <issuer>/oauth/{provider}/link` | Yes |
+
+**The start and callback legs are the entry point**, so as with the passkey login legs the caller
+holds nothing the authorizer would accept. Give them `authorization_type = "NONE"`. The callback in
+particular is a **browser redirect from the provider**, not an XHR, so it arrives with no
+`Authorization` header at all and there is no way for it to carry one.
+
+The `link` routes do sit behind the authorizer, and that is where the account being linked to comes
+from. A user id in the body would be an account takeover primitive, and the state row records
+whether the flow was started as a login or as a link so a callback cannot be replayed into the other
+meaning.
+
+**Two things about linking that the module does not configure but that decide what a plan means.**
+Auto-linking happens only when the provider's email **and** the local account's email are both
+verified, because either half alone is a takeover route. And an unlink refuses to remove the last
+sign-in method, counting other links, a stored password and the product's own hook, which is why
+`oauth-links` must never grow a TTL: an expiring link is exactly the deletion that refusal exists to
+prevent, performed by DynamoDB with nobody to refuse it.
+
 ## Usage
 
 ```hcl
@@ -241,7 +337,7 @@ A fuller worked example, including the environment block and the authorizer wiri
 | `create_mfa_encryption_key_alias` | `bool` | `true` | Create `alias/<name_prefix>-identity-mfa`. |
 | `mfa_encryption_key_policy_json` | `string` | `null` | Replaces the generated envelope key policy outright. A replacement still needs an account root statement. |
 | `mfa_encryption_context_purpose` | `string` | `"totp"` | Value pinned in both halves of the grant as `StringEquals` on `kms:EncryptionContext:purpose`. `null` omits the condition. |
-| `tables` | `map(object)` | the six identity tables | Tables to create, keyed by the logical name the package uses. `{}` creates none. |
+| `tables` | `map(object)` | the ten identity tables | Tables to create, keyed by the logical name the package uses. `{}` creates none. |
 | `point_in_time_recovery` | `bool` | `true` | Module-wide default for continuous backups. |
 | `deletion_protection` | `bool` | `false` | Module-wide default for the DynamoDB deletion protection flag. |
 | `billing_mode` | `string` | `"PAY_PER_REQUEST"` | `PAY_PER_REQUEST` or `PROVISIONED`. |
@@ -460,6 +556,25 @@ consumer, including one whose other tables all move. Nothing existing has them a
 there is nothing to move them from. They arrive with the KMS envelope key, its alias and the MFA
 role policy; see the 2.7.0 changelog entry for how to turn the key off.
 
+### Coming from 2.7.0
+
+2.8.0's four new tables, `passkeys` and `webauthn-challenges` from M5 and `oauth-states` and
+`oauth-links` from M6, are creates on the same footing: four adds, no moves, and the table policy
+widens by four table ARNs and four index ARNs. A consumer that passes `tables` explicitly gets
+nothing new until it adds the entries itself, which is the point of the input; a consumer on the
+default map gets them by bumping the pin.
+
+The one thing to look for in the plan is a **replacement** rather than a create. A consumer that
+already runs passkeys or OAuth with a hand-rolled table of its own, keyed some other way, will see
+the module want to replace it, and a replaced `passkeys` or `oauth-links` table is every user's
+credentials or every user's linked accounts gone. CarModPicker's existing `oauth_accounts` is the
+concrete case: it stores synthetic uniqueness rows under a different key, so it is not this table
+under another name. Either `moved` it in and reconcile the schema first, or keep it out of `tables`
+and grant it separately.
+
+There is no new variable and no new output, so a consumer that wants none of the four can carry on
+passing its own `tables` map and see no diff at all.
+
 ## Tests
 
 `tests/signing_keys.tftest.hcl` pins the rotation contract: that the active key leads the list, that
@@ -469,7 +584,16 @@ key, an out-of-range active index, an ECC spec and a malformed issuer.
 `tests/tables.tftest.hcl` pins the key schemas against the package's constants, including the
 hyphenated logical names, the `family_id-generation-index` GSI name that `storage.py` names as a
 literal, the `expires_at` TTL attributes, that the credentials table has no TTL at all, and that
-neither M4 table has a TTL or an index.
+neither M4 table has a TTL or an index. The M5 runs pin the same way: that `passkeys` lists on the
+base table and logs in through `credential_id-index`, which `storage.py` names as a literal, that it
+projects `ALL` so a sign-in is one read, that it has no TTL for the reason `totp-factors` has none,
+and that `webauthn-challenges` is a single-use row keyed on `challenge_id` alone with `expires_at`
+reclaiming it. The M6 runs pin `oauth-states` as a single-use row keyed on `state` with
+`expires_at`, and `oauth-links` as keyed on `provider_subject` with `user_id-index`, projecting
+`ALL`, and never a TTL. One run overrides the table ARNs so the grant's index resources are knowable
+at plan and asserts they are the table ARN with `/index/*` appended, which is the resource form
+DynamoDB authorises a GSI read against, and another pins that exactly three default tables carry an
+index.
 
 `tests/mfa_encryption_key.tftest.hcl` covers the envelope key both ways: created by default with the
 right spec, usage and rotation, turned off entirely with no key, no alias, no grant and no

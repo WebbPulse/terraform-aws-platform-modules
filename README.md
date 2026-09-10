@@ -45,7 +45,7 @@ existing consumer's plan stays empty.
 | [`modules/app-secrets`](modules/app-secrets/) | A map of Secrets Manager secrets in five shapes (generated, given, JSON, placeholder, empty) with a ready-made read policy for the app role. |
 | [`modules/codeartifact`](modules/codeartifact/) | One CodeArtifact domain and its repositories, with the domain and repository policies that let CI in the application accounts read and two publisher roles write, plus ready-made IAM statements for the consumer side. |
 | [`modules/ecr-repository`](modules/ecr-repository/) | An application's container registry as one map: one ECR repository per domain, immutable commit-SHA tags, scan on push, and a lifecycle policy that keeps storage flat. |
-| [`modules/identity`](modules/identity/) | A product's identity layer for the shared identity standard: KMS RSA signing keys with an ordered rotation list, the four identity DynamoDB tables with the key schemas the `webbpulse.identity` package requires, the signing and table IAM grants, an optional API Gateway JWT authorizer, and a ready to merge `IDENTITY_*` environment map. |
+| [`modules/identity`](modules/identity/) | A product's identity layer for the shared identity standard: KMS RSA signing keys with an ordered rotation list, the ten identity DynamoDB tables with the key schemas the `webbpulse.identity` package requires, the signing and table IAM grants, an optional API Gateway JWT authorizer, and a ready to merge `IDENTITY_*` environment map. |
 
 Each module README carries an "Adoption" section with the `moved` blocks and variable values that
 take over an application's existing resources with zero destroy or replace. Planned next: a root

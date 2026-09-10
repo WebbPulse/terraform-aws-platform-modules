@@ -40,12 +40,12 @@ override_data {
   }
 }
 
-run "the_six_identity_tables_exist_with_the_package_names" {
+run "the_ten_identity_tables_exist_with_the_package_names" {
   command = plan
 
   assert {
-    condition     = length(aws_dynamodb_table.this) == 6
-    error_message = "The default must create the six tables the identity flows read and write: the four from M1 plus totp-factors and recovery-codes from M4."
+    condition     = length(aws_dynamodb_table.this) == 10
+    error_message = "The default must create the ten tables the identity flows read and write: the four from M1, totp-factors and recovery-codes from M4, passkeys and webauthn-challenges from M5, and oauth-states and oauth-links from M6."
   }
 
   # webbpulse.dynamodb.table_name builds "<prefix>-<logical>", so the module's names and the names
@@ -78,6 +78,26 @@ run "the_six_identity_tables_exist_with_the_package_names" {
   assert {
     condition     = aws_dynamodb_table.this["recovery-codes"].name == "example-staging-recovery-codes"
     error_message = "The logical key is hyphenated because the package constant is RECOVERY_CODES_TABLE = \"recovery-codes\"."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["passkeys"].name == "example-staging-passkeys"
+    error_message = "The logical key is the package constant PASSKEYS_TABLE = \"passkeys\"."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["webauthn-challenges"].name == "example-staging-webauthn-challenges"
+    error_message = "The logical key is hyphenated because the package constant is WEBAUTHN_CHALLENGES_TABLE = \"webauthn-challenges\"."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["oauth-states"].name == "example-staging-oauth-states"
+    error_message = "The logical key is hyphenated because the package constant is OAUTH_STATES_TABLE = \"oauth-states\"."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["oauth-links"].name == "example-staging-oauth-links"
+    error_message = "The logical key is hyphenated because the package constant is OAUTH_LINKS_TABLE = \"oauth-links\"."
   }
 }
 
@@ -140,6 +160,167 @@ run "recovery_codes_are_keyed_for_a_point_spend_and_never_expire" {
   assert {
     condition     = length([for a in var.tables["recovery-codes"].attributes : a if a.type != "S"]) == 0
     error_message = "Both key attributes are strings: user_id is an id and code_hash is a hex digest."
+  }
+}
+
+# M5. The base table is keyed for the management page, which reads its own writes: listing a user's
+# credentials has to be a consistent Query on the primary key, and a GSI read cannot be consistent.
+# The index serves the opposite lookup, credential id to owner, on the login path.
+run "passkeys_lists_consistently_on_the_base_table_and_logs_in_through_the_index" {
+  command = plan
+
+  assert {
+    condition     = aws_dynamodb_table.this["passkeys"].hash_key == "user_id"
+    error_message = "A user's whole set of credentials must live in one partition so listing them is a single consistent Query rather than a GSI read."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["passkeys"].range_key == "credential_id"
+    error_message = "The range key must be credential_id: renaming or deleting one passkey is a point write on the primary key."
+  }
+
+  # The index name is load-bearing: PASSKEY_CREDENTIAL_INDEX in storage.py names it as a literal in
+  # the Query call, so a rename here is a failed lookup on the login path rather than a plan diff.
+  assert {
+    condition     = one(aws_dynamodb_table.this["passkeys"].global_secondary_index).name == "credential_id-index"
+    error_message = "The GSI name must be exactly credential_id-index: PASSKEY_CREDENTIAL_INDEX names it as a literal and a rename breaks passkey sign-in."
+  }
+
+  assert {
+    condition     = one(aws_dynamodb_table.this["passkeys"].global_secondary_index).hash_key == "credential_id"
+    error_message = "The login lookup goes from the credential id the authenticator returned to its owner, so credential_id is the index hash key."
+  }
+
+  # Asserted on the input rather than on the resource: the provider renders an unset index range key
+  # as the empty string rather than as null, so a null check against the attribute never holds.
+  assert {
+    condition     = one(var.tables["passkeys"].global_secondary_indexes).range_key == null
+    error_message = "A credential id identifies one credential, so the index needs no range key."
+  }
+
+  # ALL rather than KEYS_ONLY: the login path needs the stored public key and the sign count off
+  # the index read, and a KEYS_ONLY projection would turn every sign-in into a second GetItem.
+  assert {
+    condition     = one(aws_dynamodb_table.this["passkeys"].global_secondary_index).projection_type == "ALL"
+    error_message = "The index must project ALL: the login lookup reads the public key and the sign count from it, and KEYS_ONLY would cost a second read on every sign-in."
+  }
+
+  # The same rule as totp-factors and recovery-codes, and for the same reason with more force under
+  # passkeys_passwordless: a credential that vanishes on a schedule is a factor silently removed
+  # from an account, and it may have been the only one.
+  assert {
+    condition     = var.tables["passkeys"].ttl_attribute == null
+    error_message = "passkeys must never carry a TTL attribute: a passkey that expires on its own removes a factor, possibly the only factor, from an account with nothing to say so."
+  }
+
+  assert {
+    condition     = length([for a in var.tables["passkeys"].attributes : a if a.type != "S"]) == 0
+    error_message = "Both key attributes are strings: user_id is an id and credential_id is the base64url credential id."
+  }
+}
+
+# M5. The one identity table whose rows are meant to disappear. A challenge is a row rather than a
+# token because unreplayability is a claim about state, and a signed token verifies exactly as well
+# the second time as the first.
+run "webauthn_challenges_is_a_single_use_row_that_expires_on_expires_at" {
+  command = plan
+
+  assert {
+    condition     = aws_dynamodb_table.this["webauthn-challenges"].hash_key == "challenge_id"
+    error_message = "A challenge is looked up and deleted by its own id, so challenge_id is the whole key."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["webauthn-challenges"].range_key == null
+    error_message = "challenge_id alone identifies a challenge; a range key would force a Query where a GetItem and a conditional delete belong."
+  }
+
+  assert {
+    condition     = length(var.tables["webauthn-challenges"].global_secondary_indexes) == 0
+    error_message = "Every access to a challenge is by challenge_id on the primary key, so an index would cost a write per ceremony to serve nothing."
+  }
+
+  # TTL is storage reclamation, never access control: the deadline is checked in code on every read
+  # regardless, so a row DynamoDB has not got round to is still refused. Pointing this at another
+  # attribute breaks nothing visibly and grows the table forever, which is why it is contract.
+  assert {
+    condition     = var.tables["webauthn-challenges"].ttl_attribute == "expires_at"
+    error_message = "webauthn-challenges must expire on expires_at, which is the attribute the store writes."
+  }
+}
+
+# M6. The OAuth analogue of webauthn-challenges, and a row for the same reason: a state binds a
+# callback to the request that started it, which is a claim about state a signed value cannot make.
+run "oauth_states_is_a_single_use_row_that_expires_on_expires_at" {
+  command = plan
+
+  assert {
+    condition     = aws_dynamodb_table.this["oauth-states"].hash_key == "state"
+    error_message = "A state is spent by a conditional DeleteItem on its own value, so state is the whole key."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["oauth-states"].range_key == null
+    error_message = "state alone identifies a row; a range key would force a Query where a conditional delete belongs."
+  }
+
+  assert {
+    condition     = length(var.tables["oauth-states"].global_secondary_indexes) == 0
+    error_message = "Every access to a state is by its own value on the primary key, so an index would cost a write per sign-in attempt to serve nothing."
+  }
+
+  # Storage reclamation, not access control: the ten minute deadline is re-checked in code on every
+  # read, so a row DynamoDB has not got round to is refused rather than accepted.
+  assert {
+    condition     = var.tables["oauth-states"].ttl_attribute == "expires_at"
+    error_message = "oauth-states must expire on expires_at, which is the attribute the store writes."
+  }
+}
+
+# M6. Keyed on the provider identity so uniqueness is the primary key: attaching a provider is one
+# conditional put on attribute_not_exists(provider_subject) rather than a read-then-write.
+run "oauth_links_is_keyed_on_the_provider_identity_and_lists_through_the_index" {
+  command = plan
+
+  assert {
+    condition     = aws_dynamodb_table.this["oauth-links"].hash_key == "provider_subject"
+    error_message = "The hash key must be provider_subject (\"<provider>#<subject>\"): that is what makes the uniqueness constraint the primary key and a race resolve to one winner."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["oauth-links"].range_key == null
+    error_message = "One provider identity is one row, so provider_subject alone identifies it."
+  }
+
+  # The index name is load-bearing: OAUTH_LINK_USER_INDEX in storage.py names it as a literal in the
+  # Query call, so a rename here breaks listing a user's links and the last-method count in unlink.
+  assert {
+    condition     = one(aws_dynamodb_table.this["oauth-links"].global_secondary_index).name == "user_id-index"
+    error_message = "The GSI name must be exactly user_id-index: OAUTH_LINK_USER_INDEX names it as a literal."
+  }
+
+  assert {
+    condition     = one(aws_dynamodb_table.this["oauth-links"].global_secondary_index).hash_key == "user_id"
+    error_message = "Listing a user's links and counting their remaining sign-in methods both query by user_id."
+  }
+
+  # Asserted on the input rather than on the resource: the provider renders an unset index range key
+  # as the empty string rather than as null, so a null check against the attribute never holds.
+  assert {
+    condition     = one(var.tables["oauth-links"].global_secondary_indexes).range_key == null
+    error_message = "A user's links need no ordering, so the index needs no range key."
+  }
+
+  assert {
+    condition     = one(aws_dynamodb_table.this["oauth-links"].global_secondary_index).projection_type == "ALL"
+    error_message = "The index must project ALL: listing a user's links reads the whole record from it, and KEYS_ONLY would cost a read per link."
+  }
+
+  # A link is a sign-in method and may be the only one. The package refuses an unlink that would
+  # remove the last way in, and a TTL would do exactly that with nobody to refuse it.
+  assert {
+    condition     = var.tables["oauth-links"].ttl_attribute == null
+    error_message = "oauth-links must never carry a TTL attribute: a link that expires on its own can be the last sign-in method an account has."
   }
 }
 
@@ -259,6 +440,78 @@ run "backups_default_to_on_except_where_there_is_nothing_to_restore" {
   assert {
     condition     = alltrue([for t in aws_dynamodb_table.this : !t.deletion_protection_enabled])
     error_message = "Deletion protection defaults off so a staging teardown is not a manual console step; a production consumer passes true."
+  }
+}
+
+# Two tables now carry an index and both are Queried by name on a request path, so the grant has to
+# reach index ARNs. DynamoDB treats an index as its own resource: dynamodb:Query on table/<name>
+# alone is an AccessDenied that names the table, on a request that read an index.
+run "the_table_grant_reaches_the_index_on_every_indexed_table" {
+  command = plan
+
+  variables {
+    identity_role_name = "example-staging-identity"
+  }
+
+  # The refresh token family revocation, the passkey login lookup and the OAuth link listing.
+  assert {
+    condition     = length([for k, t in var.tables : k if length(t.global_secondary_indexes) > 0]) == 3
+    error_message = "Exactly three default tables carry an index: refresh-tokens for family revocation, passkeys for the login lookup and oauth-links for listing a user's links."
+  }
+
+  # ARNs are unknown until apply, so what is checkable at plan is the shape: one table entry and one
+  # index entry per table. A table-only policy would be half this length.
+  assert {
+    condition     = length(local.table_policy_resources) == 2 * length(local.table_arns_list)
+    error_message = "Every table must contribute both its own ARN and an index wildcard, or a Query against a named index is denied."
+  }
+
+  assert {
+    condition     = contains(var.table_policy_actions, "dynamodb:Query")
+    error_message = "dynamodb:Query is what both index reads make, so the grant is useless without it."
+  }
+}
+
+# The index entries are the table ARNs with /index/* appended, which is the resource form DynamoDB
+# matches a Query on a global secondary index against. A real ARN is not known until apply, so this
+# run overrides the tables to make the strings knowable and then checks the shape the policy builds.
+run "an_index_resource_is_the_table_arn_with_index_appended" {
+  command = plan
+
+  variables {
+    identity_role_name = "example-staging-identity"
+    tables = {
+      passkeys = {
+        attributes = [
+          { name = "user_id", type = "S" },
+          { name = "credential_id", type = "S" },
+        ]
+        hash_key  = "user_id"
+        range_key = "credential_id"
+        global_secondary_indexes = [
+          {
+            name     = "credential_id-index"
+            hash_key = "credential_id"
+          },
+        ]
+      }
+    }
+  }
+
+  override_resource {
+    target          = aws_dynamodb_table.this
+    override_during = plan
+    values = {
+      arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-passkeys"
+    }
+  }
+
+  assert {
+    condition = local.table_policy_resources == [
+      "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-passkeys",
+      "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-passkeys/index/*",
+    ]
+    error_message = "The grant must name the table ARN and that ARN with /index/* appended: DynamoDB authorises an index read against the index resource, not the table's."
   }
 }
 
