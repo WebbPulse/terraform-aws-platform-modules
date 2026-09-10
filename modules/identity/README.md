@@ -14,9 +14,11 @@ and a table whose hash key does not match what the store writes applies cleanly 
 the login path at request time. Changing a key in the default `tables` map is changing the
 package's storage layer.
 
-Portfolio carries hand-written KMS resources in `terraform/identity.tf` from milestone M1; the
-module reproduces them exactly, so adopting it is three `moved` blocks and an empty plan. The
-tables and the authorizer are new. See [Adoption](#adoption).
+Portfolio adopted the module in
+[WebbPulse-Portfolio#164](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/164). Everything the
+module owns already existed there, the hand-written M1 KMS resources and the four tables alike, so
+the whole adoption was `moved` blocks: 11 moves, 2 adds, 6 in-place changes and no destroys. The
+authorizer and the M4 tables are the only genuine creates. See [Adoption](#adoption).
 
 ## How it works
 
@@ -283,17 +285,29 @@ A fuller worked example, including the environment block and the authorizer wiri
 
 ## Adoption
 
-Portfolio's `terraform/identity.tf` carries the M1 KMS resources: the key, the alias and the
-signing role policy. Those three move into the module with no change to what exists in AWS. The
-four tables and the JWT authorizer do **not** exist yet at `origin/staging`, so those are ordinary
-creates rather than moves.
+Portfolio adopted this module in
+[WebbPulse-Portfolio#164](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/164), and what
+follows is that change rather than a sketch of one. **Nothing the module owns was a create.** The
+M1 KMS resources, the key, the alias and the signing role policy, were already hand-written in
+`terraform/identity.tf`; the four tables were already applied inside `module.dynamodb`, created by
+[#160](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/160) (`credentials`,
+`refresh-tokens`, `login-attempts`) and [#162](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/162)
+(`identity-tokens`). So the whole adoption is `moved` blocks: **11 moves, 2 adds, 6 in-place
+changes, 0 destroys.**
 
-The module's resources use `count`, so each destination address carries `[0]`.
+A consumer whose tables genuinely do not exist yet gets creates for those four instead, and the
+rest of this section still applies unchanged.
+
+The module's resources use `count`, so each destination address carries `[0]`. The tables are keyed
+by `for_each` on their logical name, and both this module and `dynamodb-tables` build the physical
+name as `"<name_prefix>-<key>"` from the same prefix, which is what makes them moves rather than
+replaces: `aws_dynamodb_table` forces a new resource only on `name`, `hash_key`, `range_key` and
+the attribute set, and all four are identical on both sides.
 
 ```hcl
 module "identity" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/identity"
-  version = "~> 2.6"
+  version = "~> 2.7"
 
   name_prefix        = local.prefix
   issuer             = local.identity_issuer
@@ -303,7 +317,7 @@ module "identity" {
   identity_role_name = module.lambda_domain["identity"].role_id
   identity_role_arn  = module.lambda_domain["identity"].role_arn
 
-  # Reproduces the tags the hand-written key carries, so the move is a no-op.
+  # Reproduces the tags the hand-written key carries, so the key itself is a pure move.
   tags = {
     Component = "identity"
     Milestone = "M1"
@@ -312,6 +326,28 @@ module "identity" {
 
   point_in_time_recovery = true
   deletion_protection    = var.environment == "production"
+
+  # Matched to what the consumer's existing table grant allowed, not left at the default.
+  # See the gotcha below.
+  table_policy_actions = local.dynamodb_write_actions
+}
+```
+
+### The moved blocks
+
+The three M1 resources are **two-hop chains**, and the chaining is the part worth reading twice.
+The M0 spike declared the key, the alias and the signing policy under
+`count = local.identity_spike_count`; M1 made them unconditional and added three `moved` blocks to
+express that. Those blocks are still needed, because a workspace that has not applied since M1
+still has state at the indexed spike address. Terraform follows a chain of moves within one plan,
+so `[0]` to the bare address to the module address resolves in a single step, and **both hops are
+kept**. Dropping the first hop destroys the signing key and creates a new one under the same alias.
+
+```hcl
+# The M1 KMS resources: the existing spike hop, then the hop into the module.
+moved {
+  from = aws_kms_key.identity_signing[0]
+  to   = aws_kms_key.identity_signing
 }
 
 moved {
@@ -320,47 +356,109 @@ moved {
 }
 
 moved {
+  from = aws_kms_alias.identity_signing[0]
+  to   = aws_kms_alias.identity_signing
+}
+
+moved {
   from = aws_kms_alias.identity_signing
   to   = module.identity.aws_kms_alias.identity_signing[0]
+}
+
+moved {
+  from = aws_iam_role_policy.identity_spike_signing[0]
+  to   = aws_iam_role_policy.identity_signing
 }
 
 moved {
   from = aws_iam_role_policy.identity_signing
   to   = module.identity.aws_iam_role_policy.identity_signing[0]
 }
-```
 
-The existing outputs are repointed at the module:
+# The four tables, out of the tables module and into this one.
+moved {
+  from = module.dynamodb.aws_dynamodb_table.this["credentials"]
+  to   = module.identity.aws_dynamodb_table.this["credentials"]
+}
 
-```hcl
-output "identity_signing_key_alias" {
-  value = module.identity.signing_key_alias
+moved {
+  from = module.dynamodb.aws_dynamodb_table.this["refresh-tokens"]
+  to   = module.identity.aws_dynamodb_table.this["refresh-tokens"]
+}
+
+moved {
+  from = module.dynamodb.aws_dynamodb_table.this["login-attempts"]
+  to   = module.identity.aws_dynamodb_table.this["login-attempts"]
+}
+
+moved {
+  from = module.dynamodb.aws_dynamodb_table.this["identity-tokens"]
+  to   = module.identity.aws_dynamodb_table.this["identity-tokens"]
 }
 ```
 
-and the identity function's environment merges the module's map last, so it wins over the product
-strings around it:
+The hand-written `data.aws_iam_policy_document` for the key policy is deleted rather than moved.
+The module renders its own equivalent, and a data source holds no real resource, so that is a state
+drop and not a destroy.
 
-```hcl
-environment = merge(
-  {
-    IDENTITY_ENVIRONMENT       = var.environment
-    IDENTITY_PRODUCT_NAME      = "WebbPulse"
-    IDENTITY_RP_NAME           = "WebbPulse"
-    IDENTITY_SUPPORT_EMAIL     = "support@webbpulse.com"
-    IDENTITY_FRONTEND_BASE_URL = local.frontend_base_url
-    IDENTITY_TABLE_NAMES       = jsonencode(module.identity.table_names)
-  },
-  module.identity.identity_environment,
-)
-```
+### The in-place changes, and why they are unavoidable
 
-Land it on `staging` first and read the speculative plan. It must show the three moves, the four
-tables as adds, and **no destroys**. A destroy on the KMS key means an address did not line up, and
-that is the one mistake in this design with no recovery: fix the `moved` block rather than applying.
+Six changes, all in place, none of which replaces anything or touches key material or table data.
 
-Because the KMS key description differs slightly from the hand-written one, expect an in-place
-update on the key's description. It is metadata only and does not touch key material.
+| Address | What changes | Why |
+| --- | --- | --- |
+| `module.identity.aws_kms_key.identity_signing[0]` | `description` only | The module composes the description from `name_prefix`, `signing_key_spec` and `issuer`. **There is no input that overrides it**, so any hand-written wording differs. Metadata only. |
+| `module.identity.aws_dynamodb_table.this["credentials"]` | `tags` gains `Name`, `Component`, `Milestone` | See the tag note below. |
+| `module.identity.aws_dynamodb_table.this["refresh-tokens"]` | the same three tags | same |
+| `module.identity.aws_dynamodb_table.this["login-attempts"]` | the same three tags | same |
+| `module.identity.aws_dynamodb_table.this["identity-tokens"]` | the same three tags | same |
+| the consumer's own `aws_iam_role_policy.lambda_domain["identity"]` | the four identity tables leave its table statement | They are granted by the module's `identity-tables` policy on the same role instead. Effective permissions are unchanged. |
+
+**The tags are a genuine trade rather than an oversight.** `tags` and `name_tag` are module wide:
+they reach the signing key and every table alike, and there is no per-resource tag input. Portfolio's
+hand-written key carried `Name`, `Component` and `Milestone`; its four tables carried none, because
+`module.dynamodb` was called with neither input. **No setting of the two inputs keeps both.**
+Reproducing the key's tags is the option to take: it keeps the key, the one resource whose tags
+exist today, byte identical, and the cost is three tags added to four tables, which is an in-place
+update that replaces nothing and loses no data. The alternative, `tags = {}` with
+`name_tag = false`, strips three tags off the signing key instead, which is a change to the
+resource an adoption is most concerned with not disturbing.
+
+The two adds are `module.identity.aws_iam_role_policy.identity_tables[0]`, the table grant on the
+identity role, and the module's two data sources, which are not resources.
+
+### Read the plan for the destroy count
+
+Land it on `staging` first and read the speculative plan. **It must show `0 to destroy`.** That is
+the check, and it is worth stating on its own rather than folding it into a general "review the
+plan": a destroy on `module.identity.aws_kms_key.identity_signing[0]` means an address did not line
+up, and dropping a signing key that an already-issued token still references is the one mistake in
+this design with no recovery. Fix the `moved` block rather than applying. A destroy on a table is
+the same shape of mistake with data behind it.
+
+Whether each first hop of a chain is a real move or a no-op depends on when the workspace last
+applied, and that is not observable from the configuration. Both are safe, which is why the chains
+are kept.
+
+### `table_policy_actions`, which is the one part that is not a move
+
+The table grant is the exception: in Portfolio it was one statement inside a hand-written
+`identity-runtime` policy and becomes the module's own `identity-tables` policy on the same role.
+That is an add on one side and a narrowing on the other rather than a state move.
+
+**Pass `table_policy_actions` explicitly to keep the grant identical across that split.** The
+module's default is the item level set the identity flows use and **drops `dynamodb:Scan`,
+`dynamodb:DescribeTable` and `dynamodb:ConditionCheckItem`**, so a consumer whose existing grant
+included them silently loses three permissions on the same apply that is supposed to change
+nothing. Dropping a permission is a behaviour change rather than a refactor. Match the existing
+action list here, and make narrowing to the module's default a separate change with its own review.
+
+### Coming from 2.6.0
+
+2.7.0's two M4 tables, `totp-factors` and `recovery-codes`, are **genuine creates** for any
+consumer, including one whose other tables all move. Nothing existing has them at any address, so
+there is nothing to move them from. They arrive with the KMS envelope key, its alias and the MFA
+role policy; see the 2.7.0 changelog entry for how to turn the key off.
 
 ## Tests
 
