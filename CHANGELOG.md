@@ -10,6 +10,84 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.8.0
+
+### `identity`: the M5 passkey tables and the M6 OAuth tables
+
+Follows `webbpulse` 0.14.0 and 0.15.0, which ship identity milestones M5 (WebAuthn registration,
+passwordless sign-in, credential management) and M6 (the authorization code flow against Google and
+GitHub, and account linking). The module gains the four tables those releases added, and nothing
+else. **Additive**: no input, output or existing resource changed, so a consumer that passes
+`tables` explicitly sees no plan change at all and picks the tables up when it adds them itself.
+
+- **Two tables in the default `tables` map.** `passkeys`, hash `user_id` and range `credential_id`,
+  with one global secondary index, `credential_id-index` on `credential_id`, projecting `ALL`. The
+  primary key is that way round because the management page reads its own writes: listing a user's
+  credentials has to be a consistent `Query` on the base table, and a GSI read cannot be consistent.
+  The login lookup goes the other way, credential id to owner, and that one tolerates eventual
+  consistency because a credential written by an already-authenticated request is not one somebody
+  is signing in with in the same instant. `ALL` rather than `KEYS_ONLY` because the login path reads
+  the stored public key and the sign count off the index, and `KEYS_ONLY` would cost a second read
+  on every sign-in. **No TTL, and there never may be one**, for the reason `totp-factors` has none:
+  a passkey is a second factor, or under `passkeys_passwordless` the only factor, and one that
+  vanishes on a schedule is silently removed from an account.
+- **`webauthn-challenges`, hash `challenge_id`, no range key, no index, TTL on `expires_at`.** The
+  one table in the identity set whose rows are meant to disappear. A WebAuthn challenge is a row
+  rather than a signed token because unreplayability is a claim about state and a token cannot make
+  it: a JWT verifies exactly as well the second time as the first, so a captured
+  options-and-assertion pair replays for the whole of that token's lifetime. The row is written when
+  options are generated, deleted when it is consumed, and refused past its deadline whether or not
+  DynamoDB has reclaimed it. TTL stays storage reclamation and never access control, which is the
+  same rule every other expiring table in the map follows; pointing it at another attribute breaks
+  nothing visibly and grows the table forever, which is why `expires_at` is contract.
+- **`oauth-states`, hash `state`, no range key, no index, TTL on `expires_at`.** The OAuth analogue
+  of `webauthn-challenges`, and a row for the same reason: a state binds a callback to the request
+  that started it. It is spent by a conditional `DeleteItem` with `ReturnValues=ALL_OLD`, so it is
+  single use even under a concurrent replay, and the ten minute deadline is re-checked on every read
+  so an unreclaimed row is refused rather than accepted.
+- **`oauth-links`, hash `provider_subject`, no range key, one index `user_id-index` on `user_id`
+  projecting `ALL`, no TTL.** The hash key is the provider identity (`<provider>#<subject>`), which
+  makes the uniqueness constraint the primary key: attaching a provider is one conditional put on
+  `attribute_not_exists(provider_subject)`, so a race resolves to one winner with no read-then-write
+  and no synthetic reservation rows. This deliberately diverges from section 4.2 of the standard,
+  which sketched a synthetic id with two indexes. `user_id-index` answers "every link for this user",
+  which listing and the last-method count in `unlink` both need; it is a GSI rather than a second
+  table because two tables would need both rows written and deleted in step with no cross-table
+  transaction available, and a half-failed pair is an orphaned link that `unlink` cannot find. **No
+  TTL, and there never may be one**: a link is a sign-in method and may be the only one, and the
+  package's refusal to unlink the last way in is worth nothing if DynamoDB deletes it on a timer.
+- **No policy input changed, and the index wildcard is now load-bearing three times over.** The
+  table grant has always named every table this module creates plus `<table arn>/index/*`, so
+  `dynamodb:Query` on `credential_id-index` and on `user_id-index` is already allowed and there was
+  nothing to add. It is worth stating why that entry exists: DynamoDB authorises an index read
+  against `table/<name>/index/<index>`, so a policy naming only `table/<name>` denies a Query that
+  read a GSI, with an `AccessDenied` that names the table. Three flows now depend on it, the refresh
+  token family revocation, the passkey login lookup and the OAuth link listing, and the comments on
+  the resource, the local and the output say so.
+- **`identity_environment` is untouched, deliberately.** `IDENTITY_RP_ID` is already there, derived
+  from `registrable_domain`, because the RP ID *is* the registrable domain and the module owns that
+  input. `IDENTITY_PASSKEYS_ENABLED`, `IDENTITY_RP_NAME` and `IDENTITY_WEBAUTHN_ORIGINS`, and M6's
+  `IDENTITY_OAUTH_*` settings alongside them, are product strings and product toggles with no
+  resource behind them, which is exactly the category the output has always excluded
+  `IDENTITY_RP_NAME`, `IDENTITY_PRODUCT_NAME`, `IDENTITY_SUPPORT_EMAIL` and
+  `IDENTITY_FRONTEND_BASE_URL` for. The module has no variable-backed feature toggle to follow as a
+  precedent, so adding one here would be the first and would put a product decision behind a module
+  input. The consumer merges them alongside the map, as it already does for the other four. The
+  OAuth client secrets in particular never belong here: they come from the product's Secrets Manager
+  JSON and are passed as an argument the package keeps off its settings object.
+- **README**: which of the seven passkey routes must not sit behind the JWT authorizer. The two
+  login legs must not, because they are the entry point and the caller holds nothing the authorizer
+  would accept; `login/passkey/options` in particular is answerable by anybody by design, since
+  answering differently would make an anonymous route an account oracle. The other five do, and each
+  reads its subject from the verified claims. Also flagged: the package treats a user-verified
+  passkey as two factors, so a user with TOTP enrolled is not challenged for a code after one.
+- **Adoption**: a "Coming from 2.7.0" note. Four adds and no moves for a consumer on the default
+  map, and the one thing to read the plan for is a **replacement** rather than a create, which is
+  what a consumer with a hand-rolled `passkeys` or OAuth table keyed some other way will see. A
+  replaced `passkeys` table is every user's credentials gone and a replaced `oauth-links` is every
+  user's linked accounts. CarModPicker's existing `oauth_accounts` is the concrete case: it stores
+  synthetic uniqueness rows under a different key, so it is not `oauth-links` under another name.
+
 ### `identity`: the adoption section now matches what adoption actually looked like
 
 Documentation only. No module input, output or resource changed, so there is **no plan change** and

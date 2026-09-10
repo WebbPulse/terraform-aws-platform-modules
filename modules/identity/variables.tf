@@ -286,12 +286,12 @@ variable "mfa_encryption_context_purpose" {
 variable "tables" {
   description = <<-EOT
     The identity tables to create, keyed by the logical name the package knows them by. The
-    default is the four tables the identity flows read and write, with the keys, index and TTL
+    default is the ten tables the identity flows read and write, with the keys, indexes and TTL
     attributes that `webbpulse.identity.storage` and `webbpulse.identity.lockout` define. Those key
     schemas are the package's contract rather than this module's preference: a table whose hash key
     does not match what the store writes fails at request time, not at apply time.
 
-    The shape is the dynamodb-tables module's table object, so a product that wants a fifth
+    The shape is the dynamodb-tables module's table object, so a product that wants a further
     identity table adds an entry here in the shape it already knows.
 
     Set it to {} to create no tables at all, for a consumer whose tables are already created by its
@@ -406,6 +406,95 @@ variable "tables" {
       ]
       hash_key  = "user_id"
       range_key = "code_hash"
+    }
+
+    # M5. Hash user_id, range credential_id, with one index the other way round.
+    #
+    # The primary key is that way because the management page reads its own writes: listing a
+    # user's credentials has to be a consistent Query on the base table, and a GSI read cannot be
+    # consistent. The login lookup goes the other way, from a credential id to its owner, and that
+    # is what credential_id-index serves. Eventual consistency is fine there and the window is
+    # bounded: a credential missing from the index for the second after it was written cannot be
+    # one anybody is signing in with, because it was written by an already authenticated request.
+    #
+    # The index name is a literal in the package: PASSKEY_CREDENTIAL_INDEX in storage.py names it,
+    # so a rename here is a failed Query on the login path rather than a plan diff.
+    #
+    # NO TTL, EVER, for the reason totp-factors has none. A passkey is a second factor, or with
+    # passkeys_passwordless the only factor, and one that vanishes on a schedule is removed from
+    # the account silently. A credential goes when its owner removes it.
+    passkeys = {
+      attributes = [
+        { name = "user_id", type = "S" },
+        { name = "credential_id", type = "S" },
+      ]
+      hash_key  = "user_id"
+      range_key = "credential_id"
+      global_secondary_indexes = [
+        {
+          name     = "credential_id-index"
+          hash_key = "credential_id"
+        },
+      ]
+    }
+
+    # M5. Hash challenge_id, no range, no index, and this is the one identity table whose rows are
+    # meant to disappear.
+    #
+    # A WebAuthn challenge exists to make an assertion unreplayable, which is a claim about state
+    # that a signed token cannot make. So a challenge is a row: written when options are generated,
+    # deleted when it is consumed, and refused past its deadline whether or not DynamoDB has got
+    # round to reclaiming it. TTL here is storage reclamation and never access control, which is
+    # the same rule every other expiring table in this map follows. Pointing it at a different
+    # attribute breaks nothing visibly and grows the table forever, so expires_at is contract.
+    "webauthn-challenges" = {
+      attributes    = [{ name = "challenge_id", type = "S" }]
+      hash_key      = "challenge_id"
+      ttl_attribute = "expires_at"
+    }
+
+    # M6. Hash state, no range, no index, TTL on expires_at. The OAuth analogue of
+    # webauthn-challenges and a row for the same reason: a state exists to bind a callback to the
+    # request that started it, and it is spent by a conditional DeleteItem with ReturnValues=ALL_OLD
+    # so it is single use even under a concurrent replay. Expiry is re-checked on every read, so an
+    # unreclaimed row is refused rather than accepted; ten minutes is the package's deadline.
+    "oauth-states" = {
+      attributes    = [{ name = "state", type = "S" }]
+      hash_key      = "state"
+      ttl_attribute = "expires_at"
+    }
+
+    # M6. Hash provider_subject ("<provider>#<subject>"), no range, with one index the other way
+    # round on user_id.
+    #
+    # The primary key is the provider identity, which makes the uniqueness constraint the primary
+    # key: attaching a provider is one conditional put on attribute_not_exists(provider_subject),
+    # so a race resolves to one winner with no read-then-write and no synthetic reservation rows.
+    # This deliberately diverges from section 4.2 of the standard, which sketched a synthetic id.
+    #
+    # user_id-index answers "every link for this user", which listing and the last-method count in
+    # unlink both need. A GSI rather than a second table keyed on user_id: two tables would need
+    # both rows written and deleted in step with no cross-table transaction available, and a
+    # half-failed pair is an orphaned link that unlink cannot find. An index cannot disagree with
+    # its base table. The price is eventual consistency, which the package buys out by re-reading
+    # the base table by primary key before counting a candidate as a remaining sign-in method.
+    #
+    # The index name is a literal in the package: OAUTH_LINK_USER_INDEX in storage.py names it.
+    #
+    # NO TTL. A link is a sign-in method, and it may be the only one; it goes when the user
+    # detaches the provider, which the package refuses when it would remove the last way in.
+    "oauth-links" = {
+      attributes = [
+        { name = "provider_subject", type = "S" },
+        { name = "user_id", type = "S" },
+      ]
+      hash_key = "provider_subject"
+      global_secondary_indexes = [
+        {
+          name     = "user_id-index"
+          hash_key = "user_id"
+        },
+      ]
     }
   }
 

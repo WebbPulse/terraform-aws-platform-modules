@@ -88,7 +88,7 @@ output "tables" {
 }
 
 output "table_policy_json" {
-  description = "IAM policy document granting table_policy_actions on every table this module created and on their indexes. Already attached to identity_role_name when that is set. The index wildcard is included because the refresh token family query reads family_id-generation-index."
+  description = "IAM policy document granting table_policy_actions on every table this module created and on their indexes. Already attached to identity_role_name when that is set. The index wildcard is included because three flows Query a named index: the refresh token family revocation reads family_id-generation-index, the passkey login lookup reads credential_id-index and listing a user's OAuth links reads user_id-index."
   value       = local.table_policy_json
 }
 

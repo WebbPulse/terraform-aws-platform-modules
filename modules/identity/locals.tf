@@ -139,7 +139,9 @@ locals {
   })
 
   # The table grant. Every table this module creates plus every index on them, which is what the
-  # refresh token family query needs.
+  # refresh token family query, the passkey login lookup and the OAuth link listing need. All three
+  # name their index as a literal and Query it, and dynamodb:Query on the table ARN alone does not
+  # reach an index.
   #
   # Sorted by table key so the rendered document is stable: a policy whose statement order moves
   # with a map's iteration order shows a diff on a plan that changed nothing.

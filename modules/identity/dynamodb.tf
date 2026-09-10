@@ -84,8 +84,11 @@ resource "aws_dynamodb_table" "this" {
 }
 
 # The table grant, as one statement covering every table this module created and every index on
-# them. The index wildcard is not optional: the refresh token family query reads
-# family_id-generation-index, and a policy naming only the table ARNs denies it.
+# them. The index wildcard is not optional and three flows now depend on it: the refresh token
+# family query reads family_id-generation-index, the passkey login lookup reads credential_id-index
+# and listing a user's OAuth links reads user_id-index. A policy naming only the table ARNs denies
+# all three. DynamoDB treats an index as its own resource, so table/<name> alone does not imply
+# table/<name>/index/<index>.
 resource "aws_iam_role_policy" "identity_tables" {
   count = var.identity_role_name == null || length(var.tables) == 0 ? 0 : 1
 
