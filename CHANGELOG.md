@@ -8,6 +8,38 @@ the authoritative record for them.
 Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so an entry marked
 **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.6.0
+
+### New module: `identity`
+
+A product's whole identity layer for the shared identity standard, mounted once per environment.
+Portfolio was carrying the KMS half of this hand-written in `terraform/identity.tf` from milestone
+M1; the module reproduces those resources exactly, so adopting it is three `moved` blocks and an
+empty plan. The tables and the authorizer are new.
+
+- **Signing keys.** One to four `aws_kms_key` resources, `RSA_2048` and `SIGN_VERIFY`, with
+  automatic rotation deliberately off: the `kid` is derived from the key material, so rotating
+  material behind one key id orphans every already-issued token. Rotation is by adding a key.
+  `signing_key_arns` is ordered by `active_signing_key` and never sorted, because the package signs
+  with element 0 and publishes every element in the JWKS. An alias tracks the active signer.
+- **Tables.** The four identity tables (`credentials`, `refresh-tokens`, `identity-tokens`,
+  `login-attempts`) with the exact key schemas, the `family_id-generation-index` GSI and the
+  `expires_at` TTL attributes that `webbpulse.identity.storage` and `.lockout` require. The
+  credentials table has no TTL by design.
+- **Grants.** `kms:Sign` and `kms:GetPublicKey` on every signing key, and item level DynamoDB access
+  to every table and index. No `Scan`.
+- **Authorizer.** An optional `aws_apigatewayv2_authorizer` of type JWT on a given HTTP API,
+  validating the same issuer and audience the function signs with. Off by default, because
+  `CreateAuthorizer` synchronously fetches the discovery document and fails the apply when nothing
+  is serving it yet. `wait_for_discovery_document` polls the URL first so a cold start does not
+  present as a misconfiguration. Protected routes are not created here: the consumer attaches
+  `authorizer_id` to avoid a dependency cycle.
+- **`identity_environment`** returns the `IDENTITY_*` variables that follow from the module's own
+  resources, with the signing key list as a JSON array, ready to merge into the function's
+  environment.
+
+**No plan change** for existing consumers: this release adds a module and touches nothing else.
+
 ## 2.5.1
 
 ### `http-api`: no authorizer id on a route that takes no authorizer
