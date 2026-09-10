@@ -8,6 +8,37 @@ the authoritative record for them.
 Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so an entry marked
 **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `identity`: the adoption section now matches what adoption actually looked like
+
+Documentation only. No module input, output or resource changed, so there is **no plan change** and
+nothing to pin.
+
+- **The four tables are moves, not creates.** The adoption section said `credentials`,
+  `refresh-tokens`, `login-attempts` and `identity-tokens` "do not exist yet at `origin/staging`, so
+  those are ordinary creates". That was true when it was written and is not true now:
+  WebbPulse-Portfolio#160 created three of them and #162 created `identity-tokens`, all four inside
+  `module.dynamodb`. They move out of it at
+  `module.dynamodb.aws_dynamodb_table.this["<key>"]`.
+- **The worked example is now WebbPulse-Portfolio#164 verbatim** rather than a sketch: all 11 `moved`
+  blocks, including that the three M1 KMS resources are two-hop chains through their M0 spike
+  addresses. Dropping the first hop of a chain destroys the signing key.
+- **The six in-place changes are listed with the reason each one is unavoidable**: the KMS key
+  description, which the module composes from `name_prefix`, `signing_key_spec` and `issuer` with no
+  input to override it, and three tags on each of the four tables, because `tags` and `name_tag` are
+  module wide and there is no per-resource tag input, so no setting of the two keeps both the key's
+  existing tags and the tables' absence of them.
+- **"0 to destroy" is now stated as the check to read the plan for**, on its own rather than folded
+  into a general review note. A destroy on the signing key means an address did not line up, and
+  that is the one mistake in this design with no recovery.
+- **`table_policy_actions` gotcha called out.** The default drops `dynamodb:Scan`,
+  `dynamodb:DescribeTable` and `dynamodb:ConditionCheckItem`, so a consumer whose existing grant
+  carried them must pass the input explicitly or lose three permissions on the apply that is meant
+  to change nothing.
+- **The two M4 tables are flagged as genuine creates** for a consumer coming from 2.6.0. Nothing
+  holds them at any address, so there is nothing to move them from.
+
 ## 2.7.0
 
 ### `identity`: the M4 tables and the TOTP envelope key
