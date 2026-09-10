@@ -178,6 +178,108 @@ variable "create_signing_key_alias" {
 }
 
 # ---------------------------------------------------------------------------
+# The MFA envelope key
+# ---------------------------------------------------------------------------
+
+variable "enable_mfa_encryption_key" {
+  description = <<-EOT
+    Create the symmetric KMS key that TOTP seeds are sealed under, and grant the identity role
+    kms:GenerateDataKey and kms:Decrypt on it.
+
+    On by default, because a TOTP seed is the one identity secret that cannot be hashed. The server
+    has to reproduce the code to check it, so unlike a password there is no one-way form and unlike
+    a passkey there is no public half: a read of the seed table is a complete compromise of the
+    second factor for every user in it. DynamoDB's own encryption at rest is under an AWS owned key
+    and is transparent to every principal that can call Query, which is exactly the attacker this
+    is about. Sealing the seed under a separate key means reading a usable one needs
+    dynamodb:GetItem AND kms:Decrypt with the right encryption context, and every decrypt is a
+    CloudTrail event.
+
+    Turn it off only for a product that has TOTP disabled outright, or one supplying its own key
+    through mfa_encryption_key_arn. With the key off and no ARN supplied, IDENTITY_DATA_KEY_ARN is
+    absent from identity_environment and webbpulse.identity.crypto.EnvelopeCipher refuses to
+    construct, so TOTP enrolment fails loudly rather than storing a seed in the clear.
+  EOT
+
+  type    = bool
+  default = true
+}
+
+variable "mfa_encryption_key_arn" {
+  description = "An existing symmetric KMS key to seal TOTP seeds under, instead of the one this module would create. Set it together with enable_mfa_encryption_key = false to point the package at a key owned elsewhere. It must be SYMMETRIC_DEFAULT with ENCRYPT_DECRYPT usage, and it must not be a signing key: a key that can both sign tokens and decrypt seeds makes the blast radius of either compromise the whole of both. The module grants the identity role GenerateDataKey and Decrypt on whatever ARN ends up in use, so a supplied key is granted the same way a created one is."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.mfa_encryption_key_arn == null || can(regex("^arn:aws[a-z-]*:kms:", var.mfa_encryption_key_arn))
+    error_message = "mfa_encryption_key_arn must be a KMS key ARN, not a key id or an alias: the IAM statement names it as a resource and an alias ARN there grants nothing."
+  }
+}
+
+variable "mfa_encryption_key_deletion_window_in_days" {
+  description = "Waiting period before KMS actually deletes the MFA envelope key. The 30 day maximum, for the same reason the signing key takes it: the key is the only thing that can open every stored TOTP seed, and deleting it makes every enrolled second factor permanently unreadable with no way back other than every user re-enrolling."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.mfa_encryption_key_deletion_window_in_days >= 7 && var.mfa_encryption_key_deletion_window_in_days <= 30
+    error_message = "mfa_encryption_key_deletion_window_in_days must be between 7 and 30, which is the range KMS accepts."
+  }
+}
+
+variable "mfa_encryption_key_rotation" {
+  description = <<-EOT
+    Automatic annual rotation on the MFA envelope key. ON by default, and deliberately the opposite
+    of the signing key's setting.
+
+    The two are opposite because the failure modes are opposite. A signing key's `kid` is derived
+    from its material, so rotating material behind one key id orphans every already-issued token.
+    An envelope key has no such identifier: KMS keeps every previous backing key and picks the right
+    one from the wrapped blob, so a data key wrapped last year still decrypts after a rotation with
+    nothing to re-encrypt and no seed to re-enrol. Rotation here is free and is what the control
+    exists for.
+  EOT
+
+  type    = bool
+  default = true
+}
+
+variable "create_mfa_encryption_key_alias" {
+  description = "Create alias/<name_prefix>-identity-mfa pointing at the MFA envelope key. Same purpose as the signing key's alias: a pure function of name_prefix that a consumer can pass where KMS accepts a key id without taking a resource reference. An alias is unique per account and region."
+  type        = bool
+  default     = true
+}
+
+variable "mfa_encryption_key_policy_json" {
+  description = "A complete KMS key policy for the MFA envelope key, replacing the generated one. Leave null for the generated policy, which mirrors the signing key's shape: an account root statement plus kms:GenerateDataKey and kms:Decrypt for identity_role_arn, conditioned on the encryption context purpose. The root statement is not optional in a hand-written replacement either, because without it IAM policies in the account have no effect on the key and the key can become unmanageable."
+  type        = string
+  default     = null
+}
+
+variable "mfa_encryption_context_purpose" {
+  description = <<-EOT
+    The value of the `purpose` half of the encryption context, pinned in both halves of the grant
+    as a StringEquals condition on kms:EncryptionContext:purpose.
+
+    "totp" is webbpulse.identity.crypto.TOTP_ENCRYPTION_PURPOSE, and the package sends it on every
+    GenerateDataKey and every Decrypt. Changing it here without changing it there produces a key
+    the identity function may not use, presenting as enrolment failing with an AccessDenied that
+    names no context.
+
+    The other half of the context, `user_id`, is deliberately NOT pinned: its value is a different
+    string for every user, so no fixed condition can express it. What the purpose condition buys is
+    that this key cannot be used for anything other than TOTP seeds, so a later feature that wants
+    envelope encryption gets its own key rather than quietly widening this one.
+
+    Set it to null to omit the condition entirely, for a consumer running a package version that
+    sends a different context.
+  EOT
+
+  type    = string
+  default = "totp"
+}
+
+# ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
 
@@ -272,6 +374,38 @@ variable "tables" {
       range_key              = "attempted_at"
       ttl_attribute          = "expires_at"
       point_in_time_recovery = false
+    }
+
+    # M4. Hash user_id, no range, no index. One factor per user, so user_id alone is the key: a
+    # second authenticator is not a second row, the user re-enrols and replaces the seed, which is
+    # what keeps the login challenge's factor list a derivation rather than a query.
+    #
+    # NO TTL, EVER. Section 4.1's rule applies with more force here than anywhere else in the map.
+    # An expiring refresh token costs a user one extra login; a TOTP factor that vanishes early
+    # costs them the account, silently, and if MFA is required for their role they cannot get in at
+    # all. The rows are deleted explicitly by a user disabling TOTP and never on a schedule.
+    #
+    # The seed itself is not stored in the clear: it is sealed under a data key from the envelope
+    # key below, and the three envelope fields are ordinary non-key attributes.
+    "totp-factors" = {
+      attributes = [{ name = "user_id", type = "S" }]
+      hash_key   = "user_id"
+    }
+
+    # M4. Hash user_id, range code_hash, no index. The range key is the hash of the code, so
+    # spending one is a point write on the primary key with no index and no scan, and reading a
+    # whole set is one Query on the partition.
+    #
+    # NO TTL, for the same reason as totp-factors: a recovery code that expires on its own is a
+    # user locked out of an account they hold the paper for. A set is replaced wholesale on
+    # regeneration and deleted outright when TOTP is disabled.
+    "recovery-codes" = {
+      attributes = [
+        { name = "user_id", type = "S" },
+        { name = "code_hash", type = "S" },
+      ]
+      hash_key  = "user_id"
+      range_key = "code_hash"
     }
   }
 

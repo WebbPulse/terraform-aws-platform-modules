@@ -40,12 +40,12 @@ override_data {
   }
 }
 
-run "the_four_identity_tables_exist_with_the_package_names" {
+run "the_six_identity_tables_exist_with_the_package_names" {
   command = plan
 
   assert {
-    condition     = length(aws_dynamodb_table.this) == 4
-    error_message = "The default must create the four tables the identity flows read and write."
+    condition     = length(aws_dynamodb_table.this) == 6
+    error_message = "The default must create the six tables the identity flows read and write: the four from M1 plus totp-factors and recovery-codes from M4."
   }
 
   # webbpulse.dynamodb.table_name builds "<prefix>-<logical>", so the module's names and the names
@@ -68,6 +68,78 @@ run "the_four_identity_tables_exist_with_the_package_names" {
   assert {
     condition     = aws_dynamodb_table.this["login-attempts"].name == "example-staging-login-attempts"
     error_message = "The logical key is hyphenated because the package constant is LOGIN_ATTEMPTS_TABLE = \"login-attempts\"."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["totp-factors"].name == "example-staging-totp-factors"
+    error_message = "The logical key is hyphenated because the package constant is TOTP_FACTORS_TABLE = \"totp-factors\"."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["recovery-codes"].name == "example-staging-recovery-codes"
+    error_message = "The logical key is hyphenated because the package constant is RECOVERY_CODES_TABLE = \"recovery-codes\"."
+  }
+}
+
+# M4. One factor per user, so user_id alone is the key: re-enrolling replaces the seed rather than
+# adding a row, which is what keeps the login challenge's factor list a derivation rather than a
+# query.
+run "totp_factors_is_one_row_per_user_and_never_expires" {
+  command = plan
+
+  assert {
+    condition     = aws_dynamodb_table.this["totp-factors"].hash_key == "user_id"
+    error_message = "storage.py reads a TOTP factor by user_id."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["totp-factors"].range_key == null
+    error_message = "One factor per user means user_id alone identifies the row; a range key would allow two factors and make the login challenge a query."
+  }
+
+  assert {
+    condition     = length(var.tables["totp-factors"].global_secondary_indexes) == 0
+    error_message = "Every access to a factor is by user_id on the primary key, so an index would cost a write on every enrolment to serve nothing."
+  }
+
+  # The sharpest case of section 4.1's rule. An expiring refresh token costs a user one extra
+  # login; a TOTP factor that vanishes early costs them the account, and if MFA is required for
+  # their role they cannot get in at all.
+  assert {
+    condition     = var.tables["totp-factors"].ttl_attribute == null
+    error_message = "totp-factors must never carry a TTL attribute: a second factor that expires on its own silently drops the account to one, with no error anybody sees."
+  }
+}
+
+# M4. The range key is the hash of the code, so spending one is a point write on the primary key
+# with no index and no scan, and reading a whole set is one Query on the partition.
+run "recovery_codes_are_keyed_for_a_point_spend_and_never_expire" {
+  command = plan
+
+  assert {
+    condition     = aws_dynamodb_table.this["recovery-codes"].hash_key == "user_id"
+    error_message = "A user's whole set of codes must live in one partition so listing them is a single Query."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this["recovery-codes"].range_key == "code_hash"
+    error_message = "The range key must be code_hash: consuming a code is a conditional write on the primary key, with no index and no scan."
+  }
+
+  assert {
+    condition     = length(var.tables["recovery-codes"].global_secondary_indexes) == 0
+    error_message = "Both operations, listing a set and spending one code, are served by the primary key alone."
+  }
+
+  assert {
+    condition     = var.tables["recovery-codes"].ttl_attribute == null
+    error_message = "recovery-codes must never carry a TTL attribute: a code that expires on its own is a user locked out of an account they hold the paper for."
+  }
+
+  # Only the SHA-256 of each code is stored, so both key attributes are strings.
+  assert {
+    condition     = length([for a in var.tables["recovery-codes"].attributes : a if a.type != "S"]) == 0
+    error_message = "Both key attributes are strings: user_id is an id and code_hash is a hex digest."
   }
 }
 

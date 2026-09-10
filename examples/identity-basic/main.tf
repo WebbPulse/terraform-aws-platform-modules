@@ -1,6 +1,7 @@
 # A product's whole identity layer in one module block: the KMS signing key the tokens are signed
-# with, the four DynamoDB tables the identity flows read and write, the two IAM grants that let the
-# identity function reach both, and the environment variables that configure the package.
+# with, the symmetric KMS key TOTP seeds are sealed under, the six DynamoDB tables the identity
+# flows read and write, the three IAM grants that let the identity function reach all of them, and
+# the environment variables that configure the package.
 #
 # The JWT authorizer is deliberately left out of this example. Creating one is a second apply, for
 # a reason worth understanding before copying this: see the ordering section below.
@@ -43,7 +44,7 @@ resource "aws_iam_role" "identity" {
 
 module "identity" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/identity"
-  version = "~> 2.6"
+  version = "~> 2.7"
 
   name_prefix = local.prefix
 

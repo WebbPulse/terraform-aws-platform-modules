@@ -118,3 +118,122 @@ resource "aws_iam_role_policy" "identity_signing" {
   role   = var.identity_role_name
   policy = local.signing_policy_json
 }
+
+# ---------------------------------------------------------------------------
+# The MFA envelope key.
+#
+# SYMMETRIC_DEFAULT and ENCRYPT_DECRYPT, which is what GenerateDataKey needs. A separate key from
+# the signing keys and not merely a separate alias: a key that can both sign tokens and decrypt
+# TOTP seeds makes the blast radius of either compromise the whole of both, and the package refuses
+# a data_key_arn equal to a signing key for that reason.
+#
+# The package never calls kms:Encrypt on this key. webbpulse.identity.crypto uses envelope
+# encryption, so KMS mints a fresh 256 bit data key per seed through GenerateDataKey, AES-256-GCM
+# happens locally, and only the wrapped key goes to KMS. That is why the grant below is
+# GenerateDataKey and Decrypt rather than Encrypt and Decrypt: a fresh data key per secret makes
+# GCM nonce reuse impossible by construction, and there is no call for Encrypt to serve.
+#
+# AUTOMATIC ROTATION IS ON HERE, the opposite of the signing keys, because the failure mode is
+# opposite. The signing key's kid is derived from its material, so rotation orphans issued tokens.
+# An envelope key has no such identifier: KMS retains every previous backing key and selects the
+# right one from the wrapped blob, so a data key wrapped before a rotation still opens afterwards
+# with nothing to re-encrypt.
+# ---------------------------------------------------------------------------
+
+resource "aws_kms_key" "identity_mfa" {
+  count = var.enable_mfa_encryption_key ? 1 : 0
+
+  description = "Symmetric envelope key for the ${var.name_prefix} identity function's TOTP seeds. Wraps a per-seed AES-256 data key through GenerateDataKey; the seed itself is encrypted locally with AES-256-GCM and never sent to KMS."
+
+  key_usage                = "ENCRYPT_DECRYPT"
+  customer_master_key_spec = "SYMMETRIC_DEFAULT"
+  enable_key_rotation      = var.mfa_encryption_key_rotation
+  deletion_window_in_days  = var.mfa_encryption_key_deletion_window_in_days
+
+  policy = coalesce(var.mfa_encryption_key_policy_json, local.generated_mfa_key_policy)
+
+  tags = length(local.mfa_key_tags) == 0 ? null : local.mfa_key_tags
+}
+
+# Same purpose as the signing key's alias: a name that is a pure function of name_prefix, so a
+# consumer can pass it where KMS accepts a key id without taking a resource reference on the key.
+resource "aws_kms_alias" "identity_mfa" {
+  count = var.enable_mfa_encryption_key && var.create_mfa_encryption_key_alias ? 1 : 0
+
+  name          = local.mfa_key_alias
+  target_key_id = aws_kms_key.identity_mfa[0].key_id
+}
+
+# The MFA key policy, built on the signing key policy's shape: an account root statement that is
+# never optional, plus the identity role's two calls.
+#
+# The condition is the part worth reading. webbpulse.identity.crypto sends an encryption context of
+# {"user_id": "<id>", "purpose": "totp"} on both GenerateDataKey and Decrypt, and KMS binds it into
+# the wrapped key as authenticated additional data. Only `purpose` has a fixed value, so only
+# `purpose` can be pinned: `user_id` is a different string per user and no static condition can
+# express it. Pinning purpose still buys the real property, that this key is usable for TOTP seeds
+# and nothing else, so a later feature wanting an envelope gets its own key rather than silently
+# widening this one.
+#
+# kms:EncryptionContext:<context-key> is a single valued condition key, so StringEquals is correct
+# and a set operator would not be: the AWS KMS condition key documentation says explicitly that
+# using ForAllValues with it produces an overly permissive policy. Both operations support it.
+data "aws_iam_policy_document" "mfa_key" {
+  count = var.enable_mfa_encryption_key ? 1 : 0
+
+  statement {
+    sid    = "EnableIAMPoliciesInThisAccount"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    actions   = ["kms:*"]
+    resources = ["*"]
+  }
+
+  dynamic "statement" {
+    for_each = var.identity_role_arn == null ? [] : [var.identity_role_arn]
+
+    content {
+      sid    = "AllowTheIdentityFunctionToSealAndOpenTotpSeeds"
+      effect = "Allow"
+
+      principals {
+        type        = "AWS"
+        identifiers = [statement.value]
+      }
+
+      actions   = local.mfa_key_actions
+      resources = ["*"]
+
+      dynamic "condition" {
+        for_each = var.mfa_encryption_context_purpose == null ? [] : [var.mfa_encryption_context_purpose]
+
+        content {
+          test     = "StringEquals"
+          variable = "kms:EncryptionContext:purpose"
+          values   = [condition.value]
+        }
+      }
+    }
+  }
+}
+
+# The matching identity-side grant, scoped to exactly this key and exactly the two calls the
+# envelope makes. Both halves carry the same condition, so neither is wider than the other.
+#
+# The count is built from the two input variables rather than from local.mfa_key_arn, even though
+# that local says the same thing more directly. A created key's ARN is unknown until apply, so a
+# count reading it makes the instance count itself unknown and Terraform refuses to plan at all.
+# The variables are known at plan time and answer the same question: there is a key when the module
+# creates one or when the consumer supplied one.
+resource "aws_iam_role_policy" "identity_mfa" {
+  count = var.identity_role_name == null || !local.mfa_key_exists ? 0 : 1
+
+  name   = "identity-mfa"
+  role   = var.identity_role_name
+  policy = local.mfa_policy_json
+}

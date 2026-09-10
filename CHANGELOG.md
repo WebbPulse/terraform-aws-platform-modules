@@ -8,6 +8,60 @@ the authoritative record for them.
 Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so an entry marked
 **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.7.0
+
+### `identity`: the M4 tables and the TOTP envelope key
+
+Follows `webbpulse` 0.12.0, which ships identity milestone M4: TOTP, recovery codes, the MFA
+ticket, step-up and `amr`. The module gains the two tables that release added and the KMS key its
+seed encryption needs.
+
+- **Two tables in the default `tables` map.** `totp-factors`, hash `user_id`, no range key and no
+  index, because one factor per user means re-enrolling replaces the seed rather than adding a row.
+  `recovery-codes`, hash `user_id` and range `code_hash`, so spending a code is a point write on the
+  primary key and reading a whole set is one `Query` on the partition. **Neither carries a TTL, and
+  neither ever may.** The general rule about mixing expiring and permanent entities is sharper here
+  than anywhere else in the map: an expiring refresh token costs a user one extra login, while a
+  TOTP factor or a recovery code that vanishes early costs them the account. Both are covered by the
+  existing table grant, which already names every table this module creates plus their indexes.
+- **An optional symmetric KMS key for the TOTP seed envelope**, `enable_mfa_encryption_key`,
+  defaulting to true. A seed is the one identity secret that cannot be hashed, because the server
+  has to reproduce the code to check it, so a read of `totp-factors` would otherwise be a complete
+  compromise of the second factor for every user in it. The key policy follows the signing key's
+  shape, there is an `alias/<name_prefix>-identity-mfa`, and the identity role gets exactly
+  `kms:GenerateDataKey` and `kms:Decrypt` scoped to that key ARN. Not `kms:Encrypt`: the package
+  uses envelope encryption, so a plaintext seed never reaches KMS. A consumer whose key is owned
+  elsewhere sets `mfa_encryption_key_arn` and turns creation off; the grant and the environment
+  variable follow the supplied key.
+- **Automatic rotation is ON for this key, the opposite of the signing keys.** The signing keys have
+  it off because the `kid` is derived from the key material, so rotating one orphans every
+  already-issued token. An envelope key has no such identifier: KMS retains every previous backing
+  key and selects the right one from the wrapped blob, so a data key wrapped before a rotation still
+  opens afterwards, with nothing to re-encrypt and no user to re-enrol.
+- **The grant is conditioned on the encryption context**, `StringEquals` on
+  `kms:EncryptionContext:purpose` equal to `totp`, in both the key policy and the role policy so
+  neither half is wider than the other. Only `purpose` is pinned. The package sends
+  `{"user_id": "<id>", "purpose": "totp"}` and KMS enforces the whole context as authenticated
+  additional data, but `user_id` is a different value per user and no static condition can name it.
+  What the condition buys is that the key cannot be used for anything other than TOTP seeds.
+  `mfa_encryption_context_purpose = null` omits it.
+- **`identity_environment` gains `IDENTITY_DATA_KEY_ARN`**, which is
+  `IdentitySettings.data_key_arn` under the package's `IDENTITY_` prefix. It is present only when
+  there is a key to name: the field defaults to an empty string and `EnvelopeCipher` refuses to
+  construct on one, so an absent variable and an empty one mean the same thing to the package.
+- **New outputs**: `mfa_encryption_key_arn`, `mfa_encryption_key_id`, `mfa_encryption_key_alias`,
+  `mfa_encryption_key_alias_arn` and `mfa_policy_json`.
+- **README**: which of the six new MFA routes must not sit behind the JWT authorizer.
+  `POST <issuer>/login/totp` must not, because it carries an MFA ticket whose audience is
+  `<issuer>/mfa` rather than the API's audience, so the gateway rejects it before it reaches the
+  function and every MFA login fails at its second step. The other five do sit behind it, and each
+  reads its subject from the verified claims rather than from the body.
+
+**Plan change for existing `identity` consumers**, which is what makes this a minor rather than a
+patch. Taking 2.7.0 adds two DynamoDB tables, one KMS key, one alias and one IAM role policy. A
+consumer that does not want the key sets `enable_mfa_encryption_key = false`; one that does not want
+the tables overrides `tables`. Nothing existing is modified or replaced.
+
 ## 2.6.0
 
 ### New module: `identity`

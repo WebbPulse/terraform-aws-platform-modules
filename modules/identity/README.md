@@ -1,9 +1,9 @@
 # terraform-aws-identity
 
 A product's whole identity layer as one module block: the KMS signing keys the access tokens are
-signed with, the four DynamoDB tables the identity flows read and write, the two IAM grants that
-let the identity function reach both, and optionally the API Gateway JWT authorizer that verifies
-the resulting tokens at the edge.
+signed with, the symmetric KMS key TOTP seeds are sealed under, the six DynamoDB tables the identity
+flows read and write, the three IAM grants that let the identity function reach all of them, and
+optionally the API Gateway JWT authorizer that verifies the resulting tokens at the edge.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/identity`.
 
@@ -38,13 +38,23 @@ var.tables = { <key> = { attributes, hash_key, range_key?, global_secondary_inde
                          ttl_attribute?, point_in_time_recovery?, deletion_protection? } }
    │  name = "${var.name_prefix}-${key}"
    ▼
-aws_dynamodb_table.this[<key>]      credentials, refresh-tokens, identity-tokens, login-attempts
-   ▼
+aws_dynamodb_table.this[<key>]      credentials, refresh-tokens, identity-tokens, login-attempts,
+   ▼                                  totp-factors, recovery-codes
 outputs: table_names, table_arns, table_arns_list, tables
 
+enable_mfa_encryption_key (default true)
+   │
+   ▼
+aws_kms_key.identity_mfa            SYMMETRIC_DEFAULT, ENCRYPT_DECRYPT, rotation ON
+   ├─ aws_kms_alias.identity_mfa ──▶ alias/<name_prefix>-identity-mfa
+   ▼
+   identity_environment.IDENTITY_DATA_KEY_ARN
+
 identity_role_name
-   ├─ aws_iam_role_policy.identity_signing   kms:Sign + kms:GetPublicKey on every key
-   └─ aws_iam_role_policy.identity_tables    item level access to every table and index
+   ├─ aws_iam_role_policy.identity_signing   kms:Sign + kms:GetPublicKey on every signing key
+   ├─ aws_iam_role_policy.identity_tables    item level access to every table and index
+   └─ aws_iam_role_policy.identity_mfa       kms:GenerateDataKey + kms:Decrypt on the envelope key,
+                                             conditioned on the encryption context purpose
 
 http_api_id (optional)
    └─ terraform_data.discovery_document_ready ──▶ aws_apigatewayv2_authorizer.identity_jwt
@@ -64,6 +74,33 @@ http_api_id (optional)
   material behind one key id changes what `GetPublicKey` returns, the derived `kid` follows it, and
   every already-issued token then references a `kid` the JWKS no longer serves. Rotation here is by
   adding a key, never by mutating one.
+- **The envelope key rotates automatically and the signing keys do not, for the same reason.** The
+  reason is the `kid`. A signing key's identifier is derived from its material, so rotating it
+  orphans every already-issued token. An envelope key has no such identifier: KMS keeps every
+  previous backing key and picks the right one out of the wrapped blob, so a data key wrapped last
+  year still opens after a rotation with nothing to re-encrypt and no user to re-enrol. Rotation
+  there is free, which is why it is on.
+- **A TOTP seed is the one identity secret that cannot be hashed**, which is why it gets a key of
+  its own. The server has to reproduce the code to check it, so unlike a password there is no
+  one-way form and unlike a passkey there is no public half: a read of `totp-factors` is a complete
+  compromise of the second factor for every user in it. DynamoDB's own encryption at rest is under
+  an AWS owned key and is transparent to any principal that can call `Query`. Sealing the seed under
+  a separate key means a usable seed needs `dynamodb:GetItem` **and** `kms:Decrypt` with the right
+  encryption context, and every decrypt is a CloudTrail event. It is a different key from the
+  signing key deliberately: one key that could both sign tokens and open seeds would make the blast
+  radius of either compromise the whole of both.
+- **The grant is `GenerateDataKey` and `Decrypt`, never `Encrypt`.** The package uses envelope
+  encryption, so KMS mints a fresh 256-bit data key per seed, AES-256-GCM happens locally, and only
+  the wrapped key is ever sent to KMS. A plaintext seed never reaches KMS, so `kms:Encrypt` would
+  widen the grant for a call nothing makes. A fresh data key per secret is also what makes GCM
+  nonce reuse impossible by construction rather than by a counter somebody has to maintain.
+- **Only the `purpose` half of the encryption context can be pinned in IAM.** The package sends
+  `{"user_id": "<id>", "purpose": "totp"}` on both calls, and KMS binds it into the wrapped key as
+  authenticated additional data, which is what makes a ciphertext copied into another user's row
+  fail to decrypt. In a policy condition only `purpose` has a fixed value: `user_id` differs per
+  user and no static condition can name it. Pinning `purpose` still buys the real property, that
+  this key is usable for TOTP seeds and nothing else, so a later feature wanting an envelope gets
+  its own key rather than quietly widening this one.
 - **Per-entity tables, not single table.** TTL is a table-level setting. Refresh tokens and
   verification tokens want one and credentials must never have one, so mixing them would leave the
   permanent items carrying a TTL attribute that must never be set, where one bug deletes accounts.
@@ -123,6 +160,39 @@ created after it, while the discovery routes must be created before it. Putting 
 back `authorizer_id` and the consumer attaches it, either through the `http-api` module's per-route
 `authorizer_id` or on a standalone `aws_apigatewayv2_route`.
 
+## The MFA routes, and the one that must stay in front of the authorizer
+
+`webbpulse` 0.12.0 mounts six MFA routes under the issuer's path. They mount only when TOTP is
+enabled and the product supplies the two M4 stores, which is what the `totp-factors` and
+`recovery-codes` tables above are for. The module does not create routes, so this is a table of what
+the consumer attaches `authorizer_id` to and what it must not.
+
+| Route | Behind the JWT authorizer |
+| --- | --- |
+| `POST <issuer>/login/totp` | **No.** See below. |
+| `POST <issuer>/totp/enrol` | Yes |
+| `POST <issuer>/totp/activate` | Yes |
+| `POST <issuer>/totp/disable` | Yes |
+| `POST <issuer>/recovery-codes` | Yes |
+| `POST <issuer>/step-up` | Yes |
+
+**`login/totp` must not be behind the authorizer, and the reason is the audience.** It is the second
+leg of an MFA login: the caller has proved a password and holds an MFA ticket, not an access token.
+The ticket is deliberately minted with an audience of `<issuer>/mfa` rather than the API's audience,
+which is exactly what stops it being spent anywhere else. The gateway's JWT authorizer is configured
+with the API's `audience`, so a ticket presented to any route behind it is rejected before it
+reaches any code of ours. Put `login/totp` behind the authorizer and every MFA login fails at its
+second step, with a gateway 401 that names no reason and never reaches a log of the function's.
+
+Give it `authorization_type = "NONE"`, the same treatment the two `.well-known` routes get, and for
+a related reason: in all three cases the caller cannot yet hold the credential the authorizer wants.
+
+The other five do sit behind it, and it is worth saying why that is safe rather than merely
+conventional. Each one acts on an already-authenticated user and reads its subject from the
+**verified claims** rather than from the request body. A user id in the body would let anybody enrol
+a factor on anybody else's account, so the authorizer is not decoration on these routes: it is where
+the subject comes from.
+
 ## Usage
 
 ```hcl
@@ -162,7 +232,14 @@ A fuller worked example, including the environment block and the authorizer wiri
 | `signing_key_deletion_window_in_days` | `number` | `30` | Waiting period before KMS deletes a removed key. |
 | `signing_key_policy_json` | `string` | `null` | Replaces the generated key policy outright. A replacement still needs an account root statement. |
 | `create_signing_key_alias` | `bool` | `true` | Create `alias/<name_prefix>-identity-signing` pointing at the active signer. |
-| `tables` | `map(object)` | the four identity tables | Tables to create, keyed by the logical name the package uses. `{}` creates none. |
+| `enable_mfa_encryption_key` | `bool` | `true` | Create the symmetric KMS key TOTP seeds are sealed under, and grant the identity role `GenerateDataKey` and `Decrypt` on it. |
+| `mfa_encryption_key_arn` | `string` | `null` | An existing symmetric key to use instead. Set with `enable_mfa_encryption_key = false`. Granted and exported exactly as a created key is. |
+| `mfa_encryption_key_deletion_window_in_days` | `number` | `30` | Waiting period before KMS deletes the envelope key. Deleting it makes every stored seed permanently unreadable. |
+| `mfa_encryption_key_rotation` | `bool` | `true` | Automatic annual rotation on the envelope key. On, unlike the signing keys: KMS keeps previous backing keys, so a data key wrapped before a rotation still opens. |
+| `create_mfa_encryption_key_alias` | `bool` | `true` | Create `alias/<name_prefix>-identity-mfa`. |
+| `mfa_encryption_key_policy_json` | `string` | `null` | Replaces the generated envelope key policy outright. A replacement still needs an account root statement. |
+| `mfa_encryption_context_purpose` | `string` | `"totp"` | Value pinned in both halves of the grant as `StringEquals` on `kms:EncryptionContext:purpose`. `null` omits the condition. |
+| `tables` | `map(object)` | the six identity tables | Tables to create, keyed by the logical name the package uses. `{}` creates none. |
 | `point_in_time_recovery` | `bool` | `true` | Module-wide default for continuous backups. |
 | `deletion_protection` | `bool` | `false` | Module-wide default for the DynamoDB deletion protection flag. |
 | `billing_mode` | `string` | `"PAY_PER_REQUEST"` | `PAY_PER_REQUEST` or `PROVISIONED`. |
@@ -188,6 +265,11 @@ A fuller worked example, including the environment block and the authorizer wiri
 | `signing_key_alias` | `alias/<name_prefix>-identity-signing`, or null when the alias is off. |
 | `signing_key_alias_arn` | ARN of the alias, null when not created. |
 | `signing_policy_json` | The signing grant as a policy document, for a consumer attaching it by hand. |
+| `mfa_encryption_key_arn` | The key TOTP seeds are sealed under, which is `IDENTITY_DATA_KEY_ARN`. Null when there is none. |
+| `mfa_encryption_key_id` | Key id of the envelope key, null when the module did not create one. |
+| `mfa_encryption_key_alias` | `alias/<name_prefix>-identity-mfa`, or null when the key or the alias is off. |
+| `mfa_encryption_key_alias_arn` | ARN of the envelope key alias, null when not created. Not usable as an IAM policy resource. |
+| `mfa_policy_json` | The envelope grant as a policy document, null when there is no key. |
 | `table_names` | Logical key to full table name. The map an application passes to its Lambda. |
 | `table_arns` | Logical key to table ARN. |
 | `table_arns_list` | Every table ARN as a list, sorted by key. |
@@ -288,10 +370,17 @@ key, an out-of-range active index, an ECC spec and a malformed issuer.
 
 `tests/tables.tftest.hcl` pins the key schemas against the package's constants, including the
 hyphenated logical names, the `family_id-generation-index` GSI name that `storage.py` names as a
-literal, the `expires_at` TTL attributes, and that the credentials table has no TTL at all.
+literal, the `expires_at` TTL attributes, that the credentials table has no TTL at all, and that
+neither M4 table has a TTL or an index.
 
-`tests/authorizer_and_grants.tftest.hcl` covers the authorizer arguments, the two IAM grants and the
-environment map.
+`tests/mfa_encryption_key.tftest.hcl` covers the envelope key both ways: created by default with the
+right spec, usage and rotation, turned off entirely with no key, no alias, no grant and no
+environment variable, and supplied from outside, where the grant and the environment variable follow
+the supplied ARN. It also pins the encryption context condition, including that the operator is
+`StringEquals` rather than a set operator.
+
+`tests/authorizer_and_grants.tftest.hcl` covers the authorizer arguments, the three IAM grants and
+the environment map.
 
 Every run is `command = plan` against a mocked provider, so the suite reaches no AWS API and needs
 no credentials. The two data sources the KMS key policy depends on are supplied with `override_data`
@@ -311,6 +400,15 @@ for the same reason.
   chance to notice that an already-issued token still references it. Never lower it in the same
   change that raises it.
 - **No alarms.** Table and key monitoring belong to the estate's aggregate alarms rather than to
-  per-table alarms created here.
+  per-table alarms created here. That includes the envelope key: a `Decrypt` on it is worth
+  alarming on at the estate level rather than from this module.
+- **The encryption context condition pins `purpose` only.** `user_id` is the half that stops a
+  ciphertext being moved between rows, and KMS enforces it as authenticated additional data on
+  every call, but it is a different value per user so no static IAM condition can express it. The
+  policy therefore constrains what this key may be used *for*, not which user's seed a given call
+  may open.
+- **Deleting the envelope key is unrecoverable in a way the signing keys are not.** A lost signing
+  key costs every user one extra login. A lost envelope key makes every stored TOTP seed
+  permanently unreadable, and the only way back is every enrolled user re-enrolling.
 - **One authorizer per module instance.** A product needing several authorizers on the same API
   creates the extra ones itself from `issuer` and `audience`.
