@@ -149,6 +149,134 @@ public because the API Gateway JWT authorizer fetches them anonymously.
 `tests/routes.tftest.hcl` asserts both directions of this, including that `$default` is `CUSTOM`
 when the gate is on, and that an opted-out route carries no authorizer id.
 
+## Requiring an identity access token
+
+`authorizer_id` above answers "may this caller reach the API at all". This answers the different
+question of "who is this caller", by enforcing the identity module's access tokens at the gateway.
+It is opt-in per route:
+
+```hcl
+  routes = {
+    # Anonymous. A caller with no token yet is the point of each of these.
+    "GET /.well-known/openid-configuration" = { integration = "identity", authorization_type = "NONE" }
+    "GET /.well-known/jwks.json"            = { integration = "identity", authorization_type = "NONE" }
+    "POST /api/auth/login"                  = { integration = "identity" }
+    "POST /api/auth/refresh"                = { integration = "identity" }
+
+    # Authenticated.
+    "GET /api/auth/me"     = { integration = "identity", require_identity_jwt = true }
+    "ANY /api/v1/{proxy+}" = { integration = "legacy", require_identity_jwt = true }
+  }
+```
+
+`require_identity_jwt = true` is one statement of intent with two implementations, because an HTTP
+API route takes exactly one authorizer and in staging that slot is already the gate's.
+
+**Production.** Set `identity_jwt`, and a marked route becomes `authorization_type = "JWT"` against
+an `aws_apigatewayv2_authorizer` this module creates. API Gateway verifies the RS256 signature
+against the JWKS the issuer publishes, checks `iss`, `aud`, `exp` and `nbf`, and hands the claims to
+the integration at `requestContext.authorizer.jwt.claims` as a map of strings. Nothing of ours runs
+on the request path.
+
+```hcl
+  identity_jwt = {
+    issuer   = module.identity.issuer
+    audience = module.identity.audience
+  }
+
+  identity_jwt_depends_on = [module.lambda_identity]
+```
+
+Set `identity_jwt.authorizer_id` instead when the identity module already creates an authorizer for
+the same issuer and audience. This module then attaches that one rather than creating a second
+identical one, which is worth doing because the identity module polls the discovery document before
+creating its authorizer, a stronger ordering guarantee than `identity_jwt_depends_on` gives.
+`issuer` and `audience` are still required, since they are what the variable's validations check,
+but nothing reads them when `authorizer_id` is set.
+
+**Staging.** Leave `identity_jwt` null. The routes keep the gate's authorizer exactly as they have
+it today, and enforcement moves into the gate's own Lambda, which verifies the same token. The
+wiring is one output into one input:
+
+```hcl
+module "gate" {
+  # ...
+  identity_jwt = {
+    issuer   = module.identity.issuer
+    audience = module.identity.audience
+  }
+
+  identity_jwt_route_keys = module.api.identity_jwt_route_keys
+}
+```
+
+That works because a route key is the same string on both sides by construction: it is the map key
+in `routes` here, and it is `requestContext.routeKey` in the authorizer's event. It is the route key
+rather than a second authorizer resource because a payload 2.0 authorizer event does not name the
+authorizer that invoked the function. `routeArn` is a route ARN and there is no authorizer id
+anywhere in the event, so two authorizers over one Lambda would be indistinguishable from inside it.
+
+### What the two environments do not share
+
+The claims reach the application at different paths, and the gate's Lambda gets as close to the
+native shape as a Lambda authorizer is allowed to. A Lambda authorizer's context always lands under
+`requestContext.authorizer.lambda`, and API Gateway stringifies every value and rejects nested
+objects outright, so the claims travel as one JSON string under a key literally named `jwt.claims`:
+
+| | production | staging |
+| --- | --- | --- |
+| enforced by | API Gateway's JWT authorizer | the gate's Lambda authorizer |
+| claims at | `requestContext.authorizer.jwt.claims` | `requestContext.authorizer.lambda["jwt.claims"]` |
+| shape | map of strings | JSON string of a map of strings |
+
+One line reads both, and every value is a string either way, so `exp` is `"1757200000"` in both and
+nothing needs an environment-specific parse:
+
+```python
+auth = event["requestContext"]["authorizer"]
+claims = auth.get("jwt", {}).get("claims") or json.loads(auth["lambda"]["jwt.claims"])
+```
+
+`sub`, `iss` and `exp` are also lifted out individually as `jwt.claims.sub` and so on, for a caller
+that wants only the subject and would rather not parse the blob.
+
+### Anonymous routes, which matter more than they look
+
+The two `.well-known` routes must be `authorization_type = "NONE"` in both environments. API
+Gateway's own validator fetches `<issuer>/.well-known/openid-configuration` during
+`CreateAuthorizer`, from outside, with no credentials of ours, and the whole apply fails with
+`BadRequestException: ... Issuer must have a valid discovery endpoint` if it does not get a document
+back. Login, refresh, register, verification, password reset, the OAuth start and callback, the
+passkey login options and verify, and `oauth/providers` are anonymous for the plainer reason that a
+caller with no token yet is exactly who calls them. Refresh in particular must never require an
+access token: it is the flow for a caller whose access token has expired.
+
+`$default` can never be marked. It is the catch-all for every path no explicit route claims, so
+requiring a token on it would turn enforcement on for paths nobody has listed.
+
+### Ordering, and the shape of the plan
+
+The module orders its own routes before the authorizer and the protected routes after it, which is
+why the protected routes are a second resource, `aws_apigatewayv2_route.identity_jwt`. One `for_each`
+cannot be both before and after the same resource: Terraform reports a cycle and refuses the graph.
+
+The consequence worth knowing before the first apply is that a route which gains
+`require_identity_jwt` under `identity_jwt` **moves between the two resources, so it is destroyed and
+recreated**. For a route being switched from open to token-required that is the correct blast radius
+and it is seconds of 404 on one path, but a plan says "replaced" rather than "updated in place".
+Marking the routes in the same apply that first sets `identity_jwt` keeps it to one move. Staging
+never sees this: with `identity_jwt` null every route stays where it is.
+
+What Terraform cannot order is the identity function being deployed and warm behind those routes.
+`depends_on` orders API calls, not their effects, and an auto-deploying stage, an
+`UpdateFunctionConfiguration` that returns while `LastUpdateStatus` is still `InProgress`, and a
+container image cold start all sit between `CreateRoute` returning 201 and an outside request
+getting a document back. `identity_jwt_depends_on` is where the function goes, and on a first apply
+it is worth applying the function and its routes in an earlier run.
+
+`tests/identity_jwt.tftest.hcl` covers both environments, the anonymous routes staying anonymous in
+each, and the two configurations the module refuses.
+
 ## Throttling: layer 1 of the rate limiting
 
 Gateway throttling is the first layer, applied before a request reaches any function, and the one
@@ -245,7 +373,7 @@ Configuring both places and having them disagree is a bad afternoon. The module 
 | `description` | API description, null for none | `null` |
 | `integrations` | Map of backend name to `{ lambda_function_name, lambda_invoke_arn, payload_format_version?, timeout_milliseconds?, lambda_permission_statement_id? }` | required |
 | `default_integration` | Which `integrations` key serves `$default`; null creates no `$default` route | `"legacy"` |
-| `routes` | Map of route key to `{ integration, authorization_type?, authorizer_id?, authorization_scopes? }` | `{}` |
+| `routes` | Map of route key to `{ integration, authorization_type?, authorizer_id?, authorization_scopes?, require_identity_jwt? }` | `{}` |
 | `payload_format_version` | Default payload format for integrations that set none, `1.0` or `2.0` | `"2.0"` |
 | `throttling_burst_limit` | Stage default route burst limit | `50` |
 | `throttling_rate_limit` | Stage default route requests per second | `25` |
@@ -257,6 +385,8 @@ Configuring both places and having them disagree is a bad afternoon. The module 
 | `lambda_permission_statement_id` | Base `statement_id` of the invoke permissions; see below | `"AllowHttpApiInvoke"` |
 | `disable_execute_api_endpoint` | Turn off the execute-api hostname; requires `domain_name` | `false` |
 | `authorizer_id` | Authorizer for every route (`CUSTOM`), null for `NONE`. Never applied to a route whose effective type is `NONE` or `AWS_IAM` | `null` |
+| `identity_jwt` | `{ issuer, audience, name?, audiences?, identity_sources?, authorizer_id? }`; creates the native JWT authorizer and puts marked routes behind it. Production only | `null` |
+| `identity_jwt_depends_on` | What must already be serving the discovery document before the authorizer is created, usually the identity function's module | `[]` |
 | `cors_configuration` | API-level CORS; null creates no block | `null` |
 | `domain_name` | Custom hostname; null for no custom domain | `null` |
 | `certificate_arn` | Issued ACM certificate in this region; required with `domain_name` | `null` |
@@ -284,6 +414,10 @@ state. Both hold under that rule. Override it per entry if a backend needs somet
 | `default_integration_id` | Id of the integration behind `$default`, null when there is none. The 1.x `integration_id` under its new name |
 | `route_ids` | Route ids keyed by route key, `$default` included |
 | `route_integrations` | Which integration serves each route key; read it in a plan to see how much of the monolith is left |
+| `identity_jwt_authorizer_id` | Id of the JWT authorizer, null when `identity_jwt` is unset |
+| `identity_jwt_authorizer_name` | Name of the JWT authorizer, null when unset |
+| `identity_jwt_route_keys` | The marked route keys, sorted. Pass it to `staging-access-gate`'s `identity_jwt_route_keys` |
+| `route_identity_jwt_required` | Route key to whether it requires a token; the audit view |
 | `lambda_permission_statement_ids` | `statement_id` of each invoke permission, keyed by `integrations` key |
 | `access_log_group_name` | Access log group name |
 | `access_log_group_arn` | Access log group ARN |

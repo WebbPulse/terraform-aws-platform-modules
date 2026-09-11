@@ -83,3 +83,13 @@ output "origin_request_policy_id_all_viewer_except_host_header" {
   description = "AWS managed AllViewerExceptHostHeader origin request policy id, for the login and API behaviors."
   value       = local.origin_request_policy_all_viewer_except_host
 }
+
+output "identity_jwt_enforced" {
+  description = "Whether the authorizer additionally requires an identity access token. True only when identity_jwt is set and identity_jwt_route_keys names at least one route; either half alone enforces nothing."
+  value       = local.identity_jwt_enabled
+}
+
+output "identity_jwt_route_keys" {
+  description = "The route keys the authorizer requires an identity access token on, sorted, echoed back so a consumer can assert the set in a plan. Empty when nothing is enforced."
+  value       = local.identity_jwt_enabled ? local.identity_jwt_route_keys : []
+}

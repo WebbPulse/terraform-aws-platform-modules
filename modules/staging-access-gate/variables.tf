@@ -138,3 +138,117 @@ variable "log_retention_days" {
   type        = number
   default     = 14
 }
+
+# ---------------------------------------------------------------------------
+# Identity access token enforcement
+# ---------------------------------------------------------------------------
+
+variable "identity_jwt" {
+  description = <<-EOT
+    Make the gate's authorizer also require a valid identity access token on the routes named in
+    identity_jwt_route_keys. Null, the default, leaves the authorizer checking only the gate
+    credentials, which is exactly what it does today.
+
+    Fields:
+      issuer    the identity issuer, byte for byte the string the identity module was given. The
+                JWKS URL is derived from it as <issuer>/.well-known/jwks.json unless jwks_url says
+                otherwise
+      audience  the aud claim the identity function stamps. A token whose aud is anything else is
+                refused, which is what stops a production token opening staging
+      jwks_url            optional override of the derived JWKS URL
+      jwks_ttl_seconds    optional, how long a fetched key set is reused. Default 300
+      clock_skew_seconds  optional leeway on exp and nbf, for skew between the signer and this
+                          function. Default 60
+
+    This exists because an HTTP API route takes exactly one authorizer and in staging that one is
+    the gate's, so the identity token cannot be enforced by a native JWT authorizer alongside it.
+    The gate's Lambda verifies the token itself instead: RS256 only, signature against the issuer's
+    JWKS, then iss, aud, exp and nbf. The gate check still runs first and still has to pass, so this
+    only ever narrows access.
+
+    Production does not use this. There the native JWT authorizer does the work, configured through
+    the http-api module's own identity_jwt input.
+  EOT
+
+  type = object({
+    issuer             = string
+    audience           = string
+    jwks_url           = optional(string)
+    jwks_ttl_seconds   = optional(number)
+    clock_skew_seconds = optional(number)
+  })
+  default = null
+
+  validation {
+    condition     = var.identity_jwt == null || startswith(coalesce(try(var.identity_jwt.issuer, null), "https://x"), "https://")
+    error_message = "identity_jwt.issuer must be an https URL."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || !endswith(coalesce(try(var.identity_jwt.issuer, null), "x"), "/")
+    error_message = "identity_jwt.issuer must not end with a trailing slash: the JWKS URL is built by appending /.well-known/jwks.json, and a trailing slash yields a double slash that fetches nothing."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.audience, null), "")) > 0
+    error_message = "identity_jwt.audience must not be empty: it is what the token's aud claim is matched against."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.jwks_ttl_seconds, null), 300) > 0
+    error_message = "identity_jwt.jwks_ttl_seconds must be greater than zero."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.clock_skew_seconds, null), 60) >= 0
+    error_message = "identity_jwt.clock_skew_seconds must not be negative."
+  }
+}
+
+variable "identity_jwt_route_keys" {
+  description = <<-EOT
+    The API Gateway route keys that require an identity access token, for example
+    ["GET /api/auth/me", "ANY /api/v1/{proxy+}"]. Empty, the default, means no route does and the
+    authorizer behaves exactly as it did before this input existed.
+
+    Pass the http-api module's identity_jwt_route_keys output straight into this. That output is the
+    set of routes marked require_identity_jwt, already sorted, and a route key is the same string on
+    both sides by construction: it is the map key in that module's routes and it is
+    requestContext.routeKey in this authorizer's event.
+
+    The route key is the signal rather than a second authorizer resource because a payload 2.0
+    authorizer event does not name the authorizer that invoked the function. routeArn is a route ARN
+    and there is no authorizer id anywhere in the event, so two authorizers over one Lambda would be
+    indistinguishable from inside it.
+
+    A key here that names no route on the API is inert rather than an error: this module is not
+    given the API's route list and cannot tell the difference between a typo and a route that has
+    not been added yet.
+  EOT
+
+  type    = list(string)
+  default = []
+
+  validation {
+    condition = alltrue([
+      for k in var.identity_jwt_route_keys :
+      k == "$default" || can(regex("^(ANY|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /", k))
+    ])
+    error_message = "Every identity_jwt_route_keys entry must be an API Gateway route key, <METHOD> <path>, exactly as the http-api module's routes are keyed."
+  }
+
+  validation {
+    condition     = !contains(var.identity_jwt_route_keys, "$default")
+    error_message = "Do not require an identity token on $default. It is the catch-all for every path no explicit route claims, so marking it turns enforcement on for paths nobody has listed, including ones that have to answer anonymously."
+  }
+
+  validation {
+    condition     = alltrue([for k in var.identity_jwt_route_keys : !strcontains(k, ",")])
+    error_message = "A route key must not contain a comma: the list is passed to the authorizer as one comma separated environment variable."
+  }
+
+  validation {
+    condition     = length(distinct(var.identity_jwt_route_keys)) == length(var.identity_jwt_route_keys)
+    error_message = "identity_jwt_route_keys contains the same route key twice."
+  }
+}

@@ -32,6 +32,38 @@ locals {
   origin_request_policy_all_viewer_except_host = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
 
   default_app_handler = "function appHandler(event) { return event.request; }"
+
+  # ---------------------------------------------------------------------------
+  # Identity access token enforcement
+  # ---------------------------------------------------------------------------
+
+  # Enforcement needs both halves: an issuer and audience to verify against, and at least one route
+  # to verify on. Either alone is a no-op, and saying so here rather than in the function keeps the
+  # rendered environment honest about whether anything is enforced.
+  identity_jwt_enabled = var.identity_jwt != null && length(var.identity_jwt_route_keys) > 0
+
+  # Sorted so the environment variable, and therefore the function's source hash, does not move when
+  # a consumer reorders its list. The http-api output is already sorted; this covers a hand written
+  # one.
+  identity_jwt_route_keys = sort(var.identity_jwt_route_keys)
+
+  # The environment block, merged into the function only when there is something to enforce, so a
+  # consumer that leaves both inputs alone sees no change to the function at all.
+  identity_jwt_environment = local.identity_jwt_enabled ? {
+    IDENTITY_ISSUER   = var.identity_jwt.issuer
+    IDENTITY_AUDIENCE = var.identity_jwt.audience
+
+    # Derived from the issuer by default, which is where the identity function publishes it and the
+    # same URL the native JWT authorizer reads in production.
+    IDENTITY_JWKS_URL = coalesce(var.identity_jwt.jwks_url, "${var.identity_jwt.issuer}/.well-known/jwks.json")
+
+    # One comma separated string because a Lambda environment holds strings. A route key cannot
+    # contain a comma, which the variable validates.
+    IDENTITY_JWT_ROUTE_KEYS = join(",", local.identity_jwt_route_keys)
+
+    IDENTITY_JWKS_TTL_SECONDS   = tostring(coalesce(var.identity_jwt.jwks_ttl_seconds, 300))
+    IDENTITY_CLOCK_SKEW_SECONDS = tostring(coalesce(var.identity_jwt.clock_skew_seconds, 60))
+  } : {}
 }
 
 data "aws_region" "current" {}

@@ -10,6 +10,78 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.9.0
+
+### `http-api` and `staging-access-gate`: identity access tokens enforced at the gateway
+
+The identity module has signed RS256 access tokens and published a JWKS since 2.5.0, but nothing in
+front of the applications checked them. Every route that needed a caller's identity had to verify
+the token itself, in each product, and a route that forgot to was open. This moves the check to the
+gateway, so an unverified request never reaches application code, and it does it in both
+environments with one statement of intent per route.
+
+**Additive and backwards compatible.** Both new inputs default to null or empty and every default
+preserves current behaviour. A consumer that adopts 2.9.0 without setting them sees **no plan
+change**: `staging-access-gate` merges the new environment variables rather than setting them empty,
+and `http-api` creates no authorizer and moves no route.
+
+- **`http-api`: `identity_jwt`, `identity_jwt_depends_on`, and `require_identity_jwt` per route.**
+  Marking a route with `require_identity_jwt = true` states that the route needs a caller identity.
+  With `identity_jwt` set, the module creates an `aws_apigatewayv2_authorizer` of type JWT and the
+  marked routes go behind it: API Gateway verifies the signature against the issuer's JWKS, checks
+  `iss`, `aud`, `exp` and `nbf`, and puts the claims at `requestContext.authorizer.jwt.claims`.
+  Nothing of ours runs on the request path. New outputs: `identity_jwt_authorizer_id`,
+  `identity_jwt_authorizer_name`, `identity_jwt_route_keys`, `route_identity_jwt_required`.
+- **The marked routes are a second resource, `aws_apigatewayv2_route.identity_jwt`.** They have to
+  be. `CreateAuthorizer` synchronously fetches `<issuer>/.well-known/openid-configuration` from
+  outside, with none of our credentials, so the `.well-known` routes must exist and answer
+  anonymously **before** the authorizer is created, while the protected routes must be created
+  **after** it. One `for_each` cannot be both sides of the same resource; Terraform reports a cycle
+  and refuses the graph. The cost of the split is worth knowing before the first apply: a route that
+  gains `require_identity_jwt` moves between the two resources, so a plan says replaced rather than
+  updated in place. That is seconds of 404 on one path, which is the correct blast radius for
+  switching a route from open to token-required, and marking routes in the same apply that first
+  sets `identity_jwt` keeps it to one move.
+- **`staging-access-gate`: `identity_jwt` and `identity_jwt_route_keys`.** Staging cannot use the
+  native authorizer, because an HTTP API route takes exactly one authorizer and on a gated API that
+  slot is the gate's. So the gate's own Lambda does both checks: the signed cookie as before, then,
+  for the named routes, a valid Bearer access token verified the same way. Leave `identity_jwt` null
+  in staging's `http-api` and the routes stay exactly where they are; the marked keys still come out
+  of `identity_jwt_route_keys`, and wiring that output into this input is the whole of it. New
+  outputs: `identity_jwt_enforced`, `identity_jwt_route_keys`.
+- **Route keys, not a second authorizer, because the event does not say.** The natural design is two
+  authorizer resources over one Lambda, one demanding a token and one not. It cannot work: a payload
+  format 2.0 authorizer event carries no authorizer id, and `routeArn` is a route ARN, so the two
+  are indistinguishable from inside the function. What the event does carry is
+  `requestContext.routeKey`, which is the same string the consumer already wrote as the map key in
+  `routes`. So the keys travel from one module to the other and the Lambda matches them exactly.
+  `$default` is refused by a variable validation: as the catch-all it would turn enforcement on for
+  every path nobody has routed.
+- **The claims arrive in nearly the same shape in both environments, and the difference is
+  unavoidable.** A Lambda authorizer's context always lands under `requestContext.authorizer.lambda`,
+  and API Gateway stringifies every value and rejects nested objects, so staging cannot literally put
+  claims where the native authorizer puts them. It gets as close as the platform permits: one JSON
+  string of a string map under a key named `jwt.claims`, plus `sub`, `iss` and `exp` lifted out. One
+  line reads both, values are strings on both sides, and both module READMEs carry it.
+- **Verification uses `node:crypto`, with no dependency.** `archive_file` zips the Lambda source as
+  it sits and no consumer's Terraform run does an `npm install`, so any library would have to be
+  vendored here and patched by hand. Node 22 imports a JWK and verifies RS256 natively, and the
+  identity module already refuses to sign with anything but RSA. `alg` is read to refuse and never to
+  select, which is what closes `alg: none` and RS256-to-HS256 confusion. The JWKS is cached with a
+  short TTL, force-refreshed once on an unknown `kid` so a rotation recovers without a redeploy, and
+  a stale cache is preferred over failing a request when a fetch fails.
+- **Ordering that Terraform cannot express.** `depends_on` orders API calls, not their effects, and
+  an auto-deploying stage, an `UpdateFunctionConfiguration` that returns while the update is still in
+  progress, and a container cold start all sit between `CreateRoute` returning 201 and an outside
+  request getting a discovery document back. `identity_jwt_depends_on` is where the identity function
+  goes, and a first apply is best done in two runs: routes and function, then the authorizer.
+- **Tests.** Six new `terraform test` runs cover both environments, the anonymous routes staying
+  anonymous, and the two configurations the module refuses (an authorizer with no routes behind it,
+  and `require_identity_jwt` together with `authorization_type = "NONE"`). A new JS suite verifies a
+  valid token, expiry, wrong issuer, wrong audience, an unknown `kid` recovering on refresh, a
+  missing header, a missing gate cookie, `alg: none`, HS256 confusion, an `aud` array, clock skew,
+  and enforcement being off, against locally generated RSA keys and a stubbed JWKS endpoint.
+
 ## 2.8.0
 
 ### `identity`: the M5 passkey tables and the M6 OAuth tables

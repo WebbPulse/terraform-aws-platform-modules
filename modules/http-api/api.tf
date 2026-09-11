@@ -41,8 +41,12 @@ resource "aws_apigatewayv2_integration" "this" {
 
 # One route per entry in local.all_routes, which is var.routes plus the synthesised $default. Every
 # route goes through local.resolved_routes, so authorization is never left off by accident.
+# Routes that do not name the identity JWT authorizer. The ones that do are created after it, in
+# identity_jwt.tf, because they cannot be in the same for_each as the .well-known routes the
+# authorizer's own creation depends on. Both resources read local.resolved_routes, so authorization
+# is decided once for every route on the API either way.
 resource "aws_apigatewayv2_route" "this" {
-  for_each = local.resolved_routes
+  for_each = local.resolved_open_routes
 
   api_id             = aws_apigatewayv2_api.this.id
   route_key          = each.key
