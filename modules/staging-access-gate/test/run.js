@@ -201,4 +201,13 @@ function ev(uri, opts={}) {
   ]})), {isAuthorized:true}, 'login lambda cookies accepted by the authorizer');
 
   console.log('authorizer tests passed');
+
+  // ---- the identity access token half of the authorizer
+  // Handed the gate helpers from above so its requests are ones that already pass the gate, which
+  // is what lets every assertion there be about the token alone.
+  await require('./identity_jwt.js')({
+    gateCookies,
+    signPolicy,
+    publicPem: apub,
+  });
 })().catch(e => { console.error(e); process.exit(1); });

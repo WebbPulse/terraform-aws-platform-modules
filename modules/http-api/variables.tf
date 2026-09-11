@@ -127,6 +127,15 @@ variable "routes" {
                          API Gateway stores nothing for them, which would otherwise show as a
                          perpetual in-place authorizer_id update on every later plan
       authorization_scopes optional JWT scopes, only meaningful with a JWT authorizer
+      require_identity_jwt optional, false by default. True means this route requires a valid
+                         identity access token on top of whatever else protects it, and the module
+                         picks the mechanism from the environment it was configured for: with
+                         identity_jwt set (production) the route becomes JWT against the identity
+                         authorizer, and with identity_jwt null (staging) the route is untouched:
+                         the key is published in the identity_jwt_route_keys output and the access
+                         gate's Lambda authorizer, which already holds the route's only authorizer
+                         slot, verifies the same token on it. An explicit authorization_type on the
+                         same entry wins, so a route can still be forced open
 
     API Gateway picks the most specific match, so an explicit route always wins over $default.
 
@@ -140,6 +149,7 @@ variable "routes" {
     authorization_type   = optional(string)
     authorizer_id        = optional(string)
     authorization_scopes = optional(list(string))
+    require_identity_jwt = optional(bool, false)
   }))
   default = {}
 
@@ -162,6 +172,17 @@ variable "routes" {
       r.authorization_type == null || contains(["NONE", "CUSTOM", "AWS_IAM", "JWT"], coalesce(r.authorization_type, "NONE"))
     ])
     error_message = "A routes entry's authorization_type must be NONE, CUSTOM, AWS_IAM or JWT."
+  }
+
+  # A route that both requires a token and is forced to NONE is a contradiction, and the one that
+  # loses silently is the security-relevant half. Saying so at plan time is cheaper than finding out
+  # from a request that should have been refused.
+  validation {
+    condition = alltrue([
+      for k, r in var.routes :
+      !coalesce(r.require_identity_jwt, false) || coalesce(r.authorization_type, "CUSTOM") != "NONE"
+    ])
+    error_message = "A routes entry cannot set require_identity_jwt = true together with authorization_type = \"NONE\": NONE takes no authorizer, so the token would not be checked."
   }
 }
 
@@ -395,4 +416,107 @@ variable "tags" {
   description = "Tags applied to every taggable resource this module creates (API, stage, log group, custom domain). Provider default_tags still apply on top; leave empty to rely on them alone."
   type        = map(string)
   default     = {}
+}
+
+# ---------------------------------------------------------------------------
+# Identity JWT enforcement
+# ---------------------------------------------------------------------------
+
+variable "identity_jwt" {
+  description = <<-EOT
+    Turn on gateway level enforcement of the identity module's access tokens. Null, the default,
+    creates no authorizer and changes nothing, so an existing consumer that does not set it sees no
+    plan change at all.
+
+    Fields:
+      issuer   the identity issuer, byte for byte the same string the identity module was given.
+               API Gateway appends /.well-known/openid-configuration to it and fetches that during
+               CreateAuthorizer, so it must be https, must not end in a slash, and must already be
+               served when this authorizer is created
+      audience the aud claim the identity function stamps. A token whose aud is anything else is
+               refused
+      name     optional authorizer name, defaults to "<var.name>-identity-jwt"
+      audiences        optional, the full list the authorizer accepts when more than one is needed.
+                       Null means exactly [audience]
+      identity_sources optional, defaults to ["$request.header.Authorization"], which is where a
+                       bearer token belongs. API Gateway requires every listed identity source to be
+                       present or it answers 401 without evaluating the token
+      authorizer_id    optional. An authorizer that already exists on this API, to attach instead of
+                       creating one. Pass module.identity.authorizer_id here when the identity
+                       module is already making one: its authorizer polls the discovery document
+                       before creating itself, which is a stronger ordering guarantee than
+                       identity_jwt_depends_on gives, and two authorizers validating the same issuer
+                       and audience differ in nothing but their names. issuer and audience are still
+                       required, because they are what the validations check the configuration
+                       against, but nothing here reads them when this is set
+
+    Set this in PRODUCTION, where a route marked require_identity_jwt gets authorization_type
+    "JWT" pointed at this authorizer. Leave it null in STAGING: the route already has to carry the
+    access gate's Lambda authorizer and a route takes exactly one authorizer, so there is no slot
+    for this one. Enforcement there moves into the gate's Lambda, which is handed the
+    identity_jwt_route_keys output as its identity_jwt_route_keys input and verifies the same token
+    on the same routes.
+
+    ORDERING. CreateAuthorizer fetches the discovery document synchronously and fails with
+    "Issuer must have a valid discovery endpoint" when it does not get one back. The two
+    .well-known routes therefore have to exist, answer anonymously, and already be deployed before
+    this resource is created. Because this module creates both the routes and the authorizer, the
+    graph is routes then authorizer then the protected routes' authorizer attachment, and Terraform
+    orders it correctly on its own. What it cannot order is the identity function being deployed
+    and warm: see identity_jwt_depends_on.
+  EOT
+
+  type = object({
+    issuer           = string
+    audience         = string
+    name             = optional(string)
+    audiences        = optional(list(string))
+    identity_sources = optional(list(string))
+    authorizer_id    = optional(string)
+  })
+  default = null
+
+  validation {
+    condition     = var.identity_jwt == null || startswith(coalesce(try(var.identity_jwt.issuer, null), "https://x"), "https://")
+    error_message = "identity_jwt.issuer must be an https URL: API Gateway fetches the discovery document over the public internet and will not accept a plaintext issuer."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || !endswith(coalesce(try(var.identity_jwt.issuer, null), "x"), "/")
+    error_message = "identity_jwt.issuer must not end with a trailing slash. API Gateway appends /.well-known/openid-configuration to it, and a trailing slash yields a double slash that fetches nothing."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.audience, null), "")) > 0
+    error_message = "identity_jwt.audience must not be empty: the authorizer matches the token's aud claim against it."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.audiences, null), ["x"])) > 0
+    error_message = "identity_jwt.audiences must be null or a non-empty list."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.identity_sources, null), ["x"])) > 0
+    error_message = "identity_jwt.identity_sources must be null or a non-empty list; an empty list makes the authorizer accept a request carrying no token at all."
+  }
+}
+
+variable "identity_jwt_depends_on" {
+  description = <<-EOT
+    What must already exist and already answer before the JWT authorizer is created. Pass the
+    identity function's module or resource value here.
+
+    This module already orders its own routes before the authorizer, so this is not about the
+    routes. It is about the function behind them: UpdateFunctionConfiguration returns while
+    LastUpdateStatus is still InProgress, an auto_deploy stage deploys asynchronously, and a
+    container image function under the Lambda Web Adapter takes seconds to cold start. Any one of
+    them makes CreateAuthorizer fetch a 404, and the failure is the same BadRequestException as
+    having no route at all.
+
+    Leave it empty when the identity function is applied in an earlier run.
+  EOT
+
+  type    = any
+  default = []
 }

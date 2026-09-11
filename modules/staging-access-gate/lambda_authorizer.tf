@@ -45,7 +45,7 @@ resource "aws_iam_role_policy" "authorizer" {
 
 resource "aws_lambda_function" "authorizer" {
   function_name = "${var.name}-access-gate-authorizer"
-  description   = "HTTP API REQUEST authorizer for the ${var.name} access gate: admits CORS preflights, requests carrying the origin verification header, and browsers presenting the gate's own valid CloudFront signed cookies."
+  description   = local.identity_jwt_enabled ? "HTTP API REQUEST authorizer for the ${var.name} access gate: admits CORS preflights, requests carrying the origin verification header, and browsers presenting the gate's own valid CloudFront signed cookies, and additionally requires a valid identity access token on the routes named in IDENTITY_JWT_ROUTE_KEYS." : "HTTP API REQUEST authorizer for the ${var.name} access gate: admits CORS preflights, requests carrying the origin verification header, and browsers presenting the gate's own valid CloudFront signed cookies."
   role          = aws_iam_role.authorizer.arn
 
   filename         = data.archive_file.authorizer.output_path
@@ -57,7 +57,9 @@ resource "aws_lambda_function" "authorizer" {
   timeout          = 5
 
   environment {
-    variables = {
+    # The identity block is merged rather than set to empty strings, so a gate with no token
+    # enforcement has exactly the environment it had before that feature existed and shows no diff.
+    variables = merge({
       HEADER_NAME         = lower(var.origin_verify_header_name)
       ORIGIN_VERIFY_PARAM = aws_ssm_parameter.origin_verify.name
       COOKIE_DOMAIN       = var.cookie_domain
@@ -66,7 +68,9 @@ resource "aws_lambda_function" "authorizer" {
       # The public half of the signing key pair. Not a secret: CloudFront publishes it, and it only
       # verifies signatures, so an environment variable is the right place for it.
       SIGNING_PUBLIC_KEY_PEM = tls_private_key.signing.public_key_pem
-    }
+      },
+      local.identity_jwt_environment,
+    )
   }
 
   depends_on = [aws_cloudwatch_log_group.authorizer, aws_iam_role_policy.authorizer]
