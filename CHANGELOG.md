@@ -10,6 +10,16 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.9.1
+
+### `staging-access-gate`: authorizer description fits the Lambda limit
+
+2.9.0 set a description on the gate authorizer function that, with `identity_jwt` enabled, was
+longer than the 256 characters Lambda accepts. `UpdateFunctionConfiguration` rejected it, so the
+first apply of a consumer turning on `identity_jwt` failed after the plan was green. Both variants
+of the description are now short enough with any allowed `name`. **Plan change:** one in-place
+update of the authorizer function's description for existing consumers.
+
 ## 2.9.0
 
 ### `http-api` and `staging-access-gate`: identity access tokens enforced at the gateway
