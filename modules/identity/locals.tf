@@ -106,6 +106,29 @@ locals {
     ]
   })
 
+  additional_grant_resources = {
+    for name, grant in var.additional_table_grants : name => flatten([
+      for table in sort(grant.tables) : [
+        aws_dynamodb_table.this[table].arn,
+        "${aws_dynamodb_table.this[table].arn}/index/*",
+      ]
+    ])
+  }
+
+  additional_grant_policy_json = {
+    for name, grant in var.additional_table_grants : name => jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Sid      = "IdentityTableAccess"
+          Effect   = "Allow"
+          Action   = coalesce(grant.actions, var.table_policy_actions)
+          Resource = local.additional_grant_resources[name]
+        },
+      ]
+    })
+  }
+
   mfa_environment = local.mfa_key_exists ? {
     IDENTITY_DATA_KEY_ARN = local.mfa_key_arn
   } : {}

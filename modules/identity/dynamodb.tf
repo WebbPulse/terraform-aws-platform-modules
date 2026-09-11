@@ -61,3 +61,11 @@ resource "aws_iam_role_policy" "identity_tables" {
   role   = var.identity_role_name
   policy = local.table_policy_json
 }
+
+resource "aws_iam_role_policy" "additional_table_grants" {
+  for_each = var.additional_table_grants
+
+  name   = "identity-tables-${each.key}"
+  role   = each.value.role_name
+  policy = local.additional_grant_policy_json[each.key]
+}
