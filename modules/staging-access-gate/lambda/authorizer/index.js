@@ -71,6 +71,7 @@ function loadConfig() {
     return {
       routeKeys: Array.isArray(parsed.route_keys) ? parsed.route_keys : [],
       signingPublicKeyPem: typeof parsed.signing_public_key_pem === 'string' ? parsed.signing_public_key_pem : '',
+      anonymousPathPrefixes: Array.isArray(parsed.anonymous_path_prefixes) ? parsed.anonymous_path_prefixes : [],
     };
   } catch (err) {
     // A package without the file is a packaging bug, not a request the function should answer
@@ -78,7 +79,7 @@ function loadConfig() {
     // means no signed cookie verifies) rather than silently dropping token enforcement while still
     // admitting traffic.
     console.error('identity_jwt_config.json could not be read, failing closed:', err.message);
-    return { routeKeys: [], signingPublicKeyPem: '' };
+    return { routeKeys: [], signingPublicKeyPem: '', anonymousPathPrefixes: [] };
   }
 }
 
@@ -108,6 +109,44 @@ const JWKS_URL = process.env.IDENTITY_JWKS_URL || (ISSUER ? `${ISSUER}/.well-kno
 // The module sorts the list before rendering it, so the file's bytes, and therefore the function's
 // source hash, do not move when a consumer reorders its input.
 const JWT_ROUTE_KEYS = new Set(CONFIG.routeKeys.map((s) => String(s).trim()).filter(Boolean));
+
+// Paths that are admitted with no gate credential and no token at all.
+//
+// WHY A HOLE IS CORRECT HERE, when the rest of this function exists to make holes impossible. These
+// are the OpenID discovery document and the JWKS: public key material by definition, published so
+// that anyone can verify a token this issuer signed. They carry no user data, mutate nothing and
+// reveal nothing an attacker cannot derive from a token they already hold. Standing them behind a
+// credential is what created the fail-closed loop this list fixes, and every other verifier of
+// these tokens (a native JWT authorizer, a partner service, this function's own fetch above) needs
+// them reachable without one.
+//
+// Matched as path prefixes against the request path, not as route keys, because the enforcement is
+// about the resource rather than the route: a consumer may serve both documents through one
+// `ANY /api/auth/{proxy+}` route, in which case there is no distinct route key to name.
+//
+// The module renders this from its own inputs, defaulting to the issuer's `.well-known` path, so a
+// consumer that does not want the hole can render an empty list.
+const ANONYMOUS_PATH_PREFIXES = CONFIG.anonymousPathPrefixes
+  .map((s) => String(s).trim())
+  .filter(Boolean);
+
+// The request path, from wherever payload 2.0 put it.
+function requestPath(event) {
+  return String(
+    event.rawPath || ((event.requestContext || {}).http || {}).path || '',
+  );
+}
+
+function isAnonymousPath(event) {
+  if (ANONYMOUS_PATH_PREFIXES.length === 0) {
+    return false;
+  }
+  const path = requestPath(event);
+  if (!path) {
+    return false;
+  }
+  return ANONYMOUS_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix));
+}
 
 // How long a fetched JWKS is reused, and how long a fetch may take. Short, because the cost of a
 // stale key set is requests failing after a rotation and the cost of a fetch is one HTTPS call per
@@ -238,11 +277,33 @@ function resetJwksCache() {
 
 // The fetch itself. Overridable through globalThis.fetch, which is how the tests stub it without a
 // network.
+//
+// WHY THIS SENDS THE ORIGIN VERIFICATION HEADER. The JWKS lives on the same API this function
+// guards, on a path that is behind this very gate, and this fetch carries none of a browser's
+// credentials: no gate cookie, no origin header unless one is put here. Without it the gate refuses
+// the authorizer's own request with 403, `keyFor` throws, and every identity token is answered
+// "JWKS unavailable" and denied. That is a fail-closed loop in which no authenticated request can
+// ever succeed, and anonymous-only testing does not reach it because an anonymous route never
+// fetches the key set at all.
+//
+// The header is the same credential the gate already accepts from CloudFront and from pipelines,
+// read from the same SSM parameter this function reads for the inbound check, so nothing new is
+// granted: the authorizer presents a credential it already holds to a path that already accepts it.
+// The value is never logged.
 async function fetchJwks() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), JWKS_TIMEOUT_MS);
   try {
-    const response = await fetch(JWKS_URL, { signal: controller.signal });
+    const headers = {};
+    try {
+      headers[HEADER_NAME] = await expected();
+    } catch (err) {
+      // The SSM read is the same one the inbound gate check makes, so a failure here means the
+      // inbound check is failing too and the request is being denied regardless. Fetching without
+      // the header is still worth attempting: an ungated issuer serves the key set anyway.
+      console.warn('origin verification value unavailable for the JWKS fetch:', err.message);
+    }
+    const response = await fetch(JWKS_URL, { signal: controller.signal, headers });
     if (!response.ok) {
       throw new Error(`JWKS fetch returned ${response.status}`);
     }
@@ -443,6 +504,12 @@ exports.handler = async (event) => {
     return ALLOW;
   }
 
+  // The public key material, before the gate. See ANONYMOUS_PATH_PREFIXES for why these two
+  // documents are deliberately reachable without a credential.
+  if (isAnonymousPath(event)) {
+    return ALLOW;
+  }
+
   // The gate first, unchanged. A request that cannot get past it is refused whether or not it
   // carries a token, so the token check never widens access.
   let gateOk = false;
@@ -480,6 +547,7 @@ exports.handler = async (event) => {
 
 // For the unit tests.
 exports.resetJwksCache = resetJwksCache;
+exports.anonymousPathPrefixes = () => [...ANONYMOUS_PATH_PREFIXES];
 
 // Also for the unit tests: the route key set as it was loaded from the package, so a test can assert
 // what the handler is actually enforcing rather than what it was handed.

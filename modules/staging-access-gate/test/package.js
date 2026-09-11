@@ -19,10 +19,11 @@ let counter = 0;
 
 // Renders identity_jwt_config.json exactly as locals.tf does: the same two keys, the route key list
 // sorted, and JSON.stringify standing in for jsonencode.
-function renderConfig({ routeKeys = [], signingPublicKeyPem = '' } = {}) {
+function renderConfig({ routeKeys = [], signingPublicKeyPem = '', anonymousPathPrefixes = [] } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
     signing_public_key_pem: signingPublicKeyPem,
+    anonymous_path_prefixes: anonymousPathPrefixes,
   });
 }
 

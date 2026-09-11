@@ -164,6 +164,14 @@ claims = auth.get("jwt", {}).get("claims") or json.loads(auth["lambda"]["jwt.cla
 - **JWKS caching.** Kept for `jwks_ttl_seconds` with concurrent fetches deduplicated, force-refreshed
   once on an unknown `kid` so a key rotation recovers without a redeploy, and on a fetch failure a
   stale cache is preferred over failing the request. Fetches have a 2 second timeout.
+- **The JWKS fetch presents the origin verification header**, and the issuer's `.well-known` subtree
+  is admitted with no credential at all. In this topology the issuer is usually the same API the
+  authorizer guards, so the authorizer's own fetch goes back through the gate carrying none of a
+  browser's credentials. Before 2.12.0 it was refused 403 and every identity token was denied
+  `JWKS unavailable`, which meant no authenticated request could succeed. The header is the same
+  credential the gate already accepts from CloudFront and from pipelines, and the exemption covers
+  public key material only: the discovery document and the key set, matched as an exact prefix on
+  `.well-known/`. See `identity_anonymous_path_prefixes` to widen, narrow or remove it.
 - **Order matters.** The gate cookie is checked first. A caller with a perfect access token and no
   gate session is still refused, which is the point of a staging gate.
 - **`OPTIONS` preflight is exempt**, as it is for the gate, because a browser sends no
@@ -235,6 +243,7 @@ frontend build at `https://www.staging.<domain>` instead of the API subdomain.
 | `log_retention_days` | Lambda log retention | `14` |
 | `identity_jwt` | `{ issuer, audience, jwks_url?, jwks_ttl_seconds?, clock_skew_seconds? }`; turns on access token verification in the authorizer | `null` |
 | `identity_jwt_route_keys` | Route keys that must present a valid token, usually `module.api.identity_jwt_route_keys`. Empty means the feature is off | `[]` |
+| `identity_anonymous_path_prefixes` | Paths admitted with no gate credential and no token, matched as prefixes. Null renders the issuer's `.well-known` subtree when enforcement is on; `[]` renders no exemption | `null` |
 
 ## Outputs
 

@@ -10,6 +10,52 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.12.0
+
+### `staging-access-gate`: the authorizer no longer depends on the API it guards
+
+Identity enforcement has never admitted a single authenticated request. Every valid RS256 token was
+answered 403, with one line in the authorizer log for each:
+
+```
+WARN access token rejected: JWKS unavailable: JWKS fetch returned 403
+```
+
+The authorizer verifies a token against the issuer's JWKS, which it fetches over HTTPS. In the gate
+topology the issuer is the same HTTP API the authorizer guards, and `/api/auth/.well-known/jwks.json`
+carries this very authorizer like every other route. The fetch is made by the Lambda itself, so it
+carries none of a browser's credentials: no gate cookie, no origin verification header. The gate
+refused it, `keyFor` threw, and the token was denied. The authorizer was, in effect, asking itself
+for permission to check permissions.
+
+Nothing in the module's own tests reached it, because they stub the JWKS endpoint, and nothing in
+staging verification reached it either: anonymous routes never fetch a key set at all, so a gate
+checked only against anonymous traffic looks perfectly healthy. 2.11.0 bundling a PEM into the
+package did not help and was never meant to. That PEM is the CloudFront signed cookie key pair,
+used for RSA-SHA1 policy verification; the identity signing key is a different key entirely and
+has always come from the JWKS.
+
+Two changes, either of which closes the loop, and both are wanted:
+
+- **The JWKS fetch presents the origin verification header.** It is the same credential the gate
+  already accepts from CloudFront and from pipelines, read from the same SSM parameter the inbound
+  check reads, so the authorizer presents something it already holds to a path that already accepts
+  it. Nothing new is granted and the value is never logged.
+- **The issuer's `.well-known` subtree is admitted anonymously.** The discovery document and the
+  JWKS are public key material, published so that anyone can verify a token this issuer signed.
+  They carry no user data and mutate nothing, and every other verifier of these tokens needs them
+  reachable without a credential. The new `identity_anonymous_path_prefixes` input renders this,
+  defaulting to `<issuer path>/.well-known/` when enforcement is on and to nothing when it is off.
+  Pass `[]` for no exemption at all.
+
+The exemption is an exact prefix on the `.well-known` subtree and nothing wider: `/api/auth/login`
+and `/api/auth/.well-knownish/secrets` are still gated, which the test suite asserts alongside a
+valid token accepted on an enforced route, an expired and a wrong-key token refused, and both
+`.well-known` documents answering with no credential.
+
+**Plan change:** one in-place update of the authorizer Lambda (`source_code_hash`, and the rendered
+`identity_jwt_config.json` inside the archive). No other resource moves.
+
 ## 2.11.0
 
 ### `staging-access-gate`: the enforced route key list moves into the deployment package
@@ -67,6 +113,28 @@ package and not from any environment variable, exact-match semantics are asserte
 anonymous guard routes and a prefix sibling that is enforced, method is asserted to be part of the
 key, and a size test measures the rendered environment against the 4096 byte cap with a 300 key
 list.
+
+## 2.10.0
+
+### `identity`: `attach_role_policies`, a plan-time boolean the role policies count off
+
+The three `aws_iam_role_policy` resources counted off `var.identity_role_name == null`. A consumer
+passes `module.lambda_domain["identity"].role_id`, which is `aws_iam_role.this.id`, and when that
+role is itself still to be created the id is unknown at plan time. Terraform does not defer an
+unknown `count`: it refuses to produce a plan at all and reports `Invalid count argument`. That is
+what a speculative plan of CarModPicker's `staging` tree against production state hit, in `kms.tf`
+and `dynamodb.tf`, and it blocked the production promotion.
+
+`attach_role_policies` is a bool defaulting to true, and all three counts move onto it. Its value is
+known by construction, so the count always is too. `identity_role_name = null` keeps its old meaning
+of attaching nothing, now written as the pair `attach_role_policies = false`; the halfway state,
+true with a null role name, is refused by a validation that reads only the input variables and so
+stays decidable even when the role name's value is not.
+
+Outputs are unchanged, including the three `*_policy_json` outputs a consumer attaches by hand when
+the policies are off.
+
+**Plan change:** none for a consumer that already passes a role name, which is the default.
 
 ## 2.9.1
 
