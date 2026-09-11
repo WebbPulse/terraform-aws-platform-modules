@@ -86,10 +86,6 @@ output "api_url" {
   value       = local.api_url
 }
 
-# ---------------------------------------------------------------------------
-# Identity JWT enforcement
-# ---------------------------------------------------------------------------
-
 output "identity_jwt_authorizer_id" {
   description = "Id of the JWT authorizer the marked routes are behind, whether this module created it or identity_jwt.authorizer_id supplied it. Null when identity_jwt is not set. Already attached to every route that sets require_identity_jwt, so a consumer needs this only to attach it to a route it creates outside the module."
   value       = local.identity_jwt_enabled ? coalesce(var.identity_jwt.authorizer_id, one(aws_apigatewayv2_authorizer.identity_jwt[*].id)) : null

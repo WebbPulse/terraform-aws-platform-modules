@@ -1,20 +1,3 @@
-# The authorizer package is assembled file by file rather than zipped from the source directory,
-# because one of its files does not exist on disk: identity_jwt_config.json is rendered from the
-# module's inputs at plan time and written straight into the archive.
-#
-# WHY THAT FILE EXISTS. The route keys that require an identity token used to travel to the function
-# in IDENTITY_JWT_ROUTE_KEYS, and the CloudFront signing public key in SIGNING_PUBLIC_KEY_PEM. A
-# Lambda's whole environment is capped at 4096 bytes across every variable, and the API measures it
-# only at UpdateFunctionConfiguration: Terraform's plan is green and the apply fails with
-# "environment variables exceeded the 4KB limit". CarModPicker staging hit it at 95 route keys,
-# where the list alone serialised to 3600 bytes against 869 bytes of everything else. The list
-# cannot be trimmed (a key missing from it is a route nobody enforces) and it cannot be prefix
-# matched (the anonymous guard routes exist precisely because prefix matching is unsafe), so the two
-# large values move out of the environment and into the deployment package, which has no such cap.
-#
-# source_content_filename entries participate in the archive's output_base64sha256 exactly as real
-# files do, so a route key added to the list changes source_code_hash and Terraform redeploys the
-# code. That is the whole reason this is rendered into the zip rather than uploaded beside it.
 data "archive_file" "authorizer" {
   type        = "zip"
   output_path = "${path.module}/.build/authorizer.zip"
@@ -83,11 +66,6 @@ resource "aws_lambda_function" "authorizer" {
   timeout          = 5
 
   environment {
-    # Small, bounded values only. Everything whose size grows with the consumer's configuration (the
-    # route key list, the signing public key PEM) lives in identity_jwt_config.json inside the
-    # package instead; see the archive above for why. Keeping this map bounded is what stops the
-    # 4096 byte whole-environment cap from being reachable at all, and local.authorizer_environment
-    # is asserted against that cap by the module's test suite.
     variables = local.authorizer_environment
   }
 
@@ -103,14 +81,8 @@ resource "aws_apigatewayv2_authorizer" "origin_verify" {
   authorizer_uri                    = aws_lambda_function.authorizer.invoke_arn
   authorizer_payload_format_version = "2.0"
   enable_simple_responses           = true
-  # No identity sources: the authorizer has two accepted credentials (the origin verification
-  # header and the gate's signed cookies), and API Gateway requires every listed identity source to
-  # be present or it answers 401 without invoking the function. Identity sources are optional, and
-  # dropping them means the answer cannot be cached ("To enable caching, your authorizer must have
-  # at least one identity source"), so the TTL is 0 and the function runs on every request. It is a
-  # 128 MB Node function whose only remote call is an SSM read cached per execution environment.
-  identity_sources                 = []
-  authorizer_result_ttl_in_seconds = 0
+  identity_sources                  = []
+  authorizer_result_ttl_in_seconds  = 0
 }
 
 resource "aws_lambda_permission" "authorizer" {

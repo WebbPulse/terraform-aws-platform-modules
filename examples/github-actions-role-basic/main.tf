@@ -1,8 +1,3 @@
-# A deploy role for a single-page app on S3 + CloudFront with a Lambda API. Every workflow in the
-# repository may assume it; narrow `subjects` to an environment or branch claim to tighten that.
-# The role ARN goes on the GitHub environment as AWS_DEPLOY_ROLE_ARN and into
-# aws-actions/configure-aws-credentials as role-to-assume.
-
 module "github_actions_role" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
   version = "~> 1.4"
@@ -47,25 +42,10 @@ module "github_actions_role" {
   ]
 }
 
-# A second stack in the same account cannot create the provider again; it points at this one.
-#
-# module "other_repo_role" {
-#   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
-#   version = "~> 1.4"
-#
-#   role_name            = "other-production-github-actions-deploy"
-#   subjects             = ["repo:WebbPulse/other:environment:production"]
-#   create_oidc_provider = false
-#   oidc_provider_arn    = module.github_actions_role.oidc_provider_arn
-#   policy_statements    = [...]
-# }
-
 output "github_actions_role_arn" {
   description = "IAM role ARN for GitHub Actions OIDC deployments"
   value       = module.github_actions_role.role_arn
 }
-
-# The application resources the role deploys to. Trimmed to what the example needs.
 
 resource "aws_s3_bucket" "frontend" {
   bucket = "example-production-frontend"

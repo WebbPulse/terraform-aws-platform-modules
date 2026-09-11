@@ -1,5 +1,3 @@
-# The GitHub Actions identity provider, one per AWS account. Separate from the HCP Terraform
-# provider (app.terraform.io) that the workspace's own dynamic credentials use.
 resource "aws_iam_openid_connect_provider" "this" {
   count = var.create_oidc_provider ? 1 : 0
 

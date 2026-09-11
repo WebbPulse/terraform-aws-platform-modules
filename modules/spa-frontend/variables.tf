@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------------
-# Naming
-# ---------------------------------------------------------------------------
-
 variable "name" {
   description = "Base name for everything this module creates, for example carmodpicker-production-frontend. It is the S3 bucket name and the origin access control name unless bucket_name or origin_access_control_name override them, so it has to be a valid bucket name."
   type        = string
@@ -58,10 +54,6 @@ variable "origin_id" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# Hostnames and certificate
-# ---------------------------------------------------------------------------
-
 variable "aliases" {
   description = "Alternate domain names served by the distribution, for example [\"www.example.com\", \"example.com\"]. The first entry is treated as the canonical host and becomes the frontend_url output. Empty means the site is served from the CloudFront default hostname with the default certificate."
   type        = list(string)
@@ -105,10 +97,6 @@ variable "minimum_protocol_version" {
     error_message = "minimum_protocol_version must be one of TLSv1.2_2018, TLSv1.2_2019, TLSv1.2_2021 or TLSv1.3_2025."
   }
 }
-
-# ---------------------------------------------------------------------------
-# Distribution settings
-# ---------------------------------------------------------------------------
 
 variable "price_class" {
   description = "CloudFront price class."
@@ -262,10 +250,6 @@ variable "viewer_request_function_arn" {
   nullable    = true
 }
 
-# ---------------------------------------------------------------------------
-# Staging access gate
-# ---------------------------------------------------------------------------
-
 variable "access_gate" {
   description = "Outputs of a staging-access-gate module instance, minus the origin verification header value, which is a separate input. When set, the distribution gains the login origin, an ordered behavior for the auth path pattern, an unsigned behavior for the SPA shell, trusted_key_groups on the default behavior, and the gate's viewer-request function on every behavior. The api_origin_domain_name, api_path_pattern and origin_verify_header_name members are optional and null by default: leave them null and the frontend calls the API directly at its own hostname, which is the shape the gate's authorizer is built for. Set all three to also proxy the API through this distribution; see the api_origin_domain_name note below. The secret is kept out of this object on purpose: an object with one sensitive member is sensitive as a whole at the module boundary, which would redact every path pattern, origin id and TTL read out of it and make the distribution plan a spurious in-place update where only the sensitivity marks differ."
   type = object({
@@ -278,7 +262,6 @@ variable "access_gate" {
     origin_request_policy_id_all_viewer_except_host_header = string
     login_origin_id                                        = optional(string, "access-gate-login")
 
-    # Proxy mode only. Null on all three means no API origin and no API behavior.
     api_origin_domain_name    = optional(string)
     api_path_pattern          = optional(string)
     origin_verify_header_name = optional(string)
@@ -331,10 +314,6 @@ variable "access_gate_origin_verify_header_value" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# DNS
-# ---------------------------------------------------------------------------
-
 variable "create_dns_records" {
   description = "Create Route 53 alias records for the hostnames in dns_records, in zone_id, using this module's aws provider. Leave false when the records live in a zone another account owns; see the README."
   type        = bool
@@ -379,10 +358,6 @@ variable "create_aaaa_records" {
   type        = bool
   default     = false
 }
-
-# ---------------------------------------------------------------------------
-# Tags
-# ---------------------------------------------------------------------------
 
 variable "tags" {
   description = "Tags applied to the bucket and the distribution, on top of any provider default_tags."

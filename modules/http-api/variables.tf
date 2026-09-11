@@ -137,11 +137,9 @@ variable "routes" {
                          slot, verifies the same token on it. An explicit authorization_type on the
                          same entry wins, so a route can still be forced open
 
-    API Gateway picks the most specific match, so an explicit route always wins over $default.
-
-    Note the two keys a resource collection needs. "ANY /api/v1/posts" does not match
-    /api/v1/posts/123, and "ANY /api/v1/posts/{proxy+}" does not match the bare collection path.
-    Both are needed to carve a prefix off the monolith cleanly.
+    API Gateway picks the most specific match, so an explicit route always wins over $default. A
+    resource collection needs both "ANY /path" and "ANY /path/{proxy+}"; neither key matches the
+    other's requests.
   EOT
 
   type = map(object({
@@ -174,9 +172,6 @@ variable "routes" {
     error_message = "A routes entry's authorization_type must be NONE, CUSTOM, AWS_IAM or JWT."
   }
 
-  # A route that both requires a token and is forced to NONE is a contradiction, and the one that
-  # loses silently is the security-relevant half. Saying so at plan time is cheaper than finding out
-  # from a request that should have been refused.
   validation {
     condition = alltrue([
       for k, r in var.routes :
@@ -418,10 +413,6 @@ variable "tags" {
   default     = {}
 }
 
-# ---------------------------------------------------------------------------
-# Identity JWT enforcement
-# ---------------------------------------------------------------------------
-
 variable "identity_jwt" {
   description = <<-EOT
     Turn on gateway level enforcement of the identity module's access tokens. Null, the default,
@@ -450,20 +441,8 @@ variable "identity_jwt" {
                        required, because they are what the validations check the configuration
                        against, but nothing here reads them when this is set
 
-    Set this in PRODUCTION, where a route marked require_identity_jwt gets authorization_type
-    "JWT" pointed at this authorizer. Leave it null in STAGING: the route already has to carry the
-    access gate's Lambda authorizer and a route takes exactly one authorizer, so there is no slot
-    for this one. Enforcement there moves into the gate's Lambda, which is handed the
-    identity_jwt_route_keys output as its identity_jwt_route_keys input and verifies the same token
-    on the same routes.
-
-    ORDERING. CreateAuthorizer fetches the discovery document synchronously and fails with
-    "Issuer must have a valid discovery endpoint" when it does not get one back. The two
-    .well-known routes therefore have to exist, answer anonymously, and already be deployed before
-    this resource is created. Because this module creates both the routes and the authorizer, the
-    graph is routes then authorizer then the protected routes' authorizer attachment, and Terraform
-    orders it correctly on its own. What it cannot order is the identity function being deployed
-    and warm: see identity_jwt_depends_on.
+    Set in production; leave null in staging, where the access gate's Lambda authorizer enforces the
+    same token on the routes named by the identity_jwt_route_keys output.
   EOT
 
   type = object({

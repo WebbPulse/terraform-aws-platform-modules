@@ -1,8 +1,3 @@
-# An account that already has a resource group and is monitored for anomalies from the payer
-# account still wants its own budgets. Turning the other two parts off makes the module create
-# nothing but the budgets, and a forecast alert gives warning before the money is spent rather
-# than after.
-
 variable "sns_topic_arn" {
   description = "Topic that pages on a budget breach, in addition to the email addresses. Its policy must allow budgets.amazonaws.com to publish."
   type        = string
@@ -30,9 +25,7 @@ module "app_baseline" {
       limit_amount = "500"
 
       thresholds = [
-        # 80 percent of the month's budget already spent.
         { threshold = 80 },
-        # On track to finish the month over budget, which arrives days earlier than the actual.
         { threshold = 100, notification_type = "FORECASTED" },
       ]
     }

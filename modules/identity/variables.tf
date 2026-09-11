@@ -80,11 +80,6 @@ variable "identity_role_name" {
   default     = null
 
   validation {
-    # attach_role_policies true with no role to attach to is a misconfiguration that would
-    # otherwise present as an apply-time error from IAM. The condition reads the two variables and
-    # nothing computed, so it is decidable at plan time even when the role name's value is not: a
-    # validation is checked against whether the value is null, and an unknown non-null value is
-    # not null. That is the whole reason the count moved off this variable and onto the boolean.
     condition     = !var.attach_role_policies || var.identity_role_name != null
     error_message = "attach_role_policies is true but identity_role_name is null. Pass the identity Lambda's role name, or set attach_role_policies to false to create no role policies."
   }
@@ -101,10 +96,6 @@ variable "identity_role_arn" {
   type        = string
   default     = null
 }
-
-# ---------------------------------------------------------------------------
-# Signing keys
-# ---------------------------------------------------------------------------
 
 variable "signing_key_count" {
   description = <<-EOT
@@ -192,10 +183,6 @@ variable "create_signing_key_alias" {
   type        = bool
   default     = true
 }
-
-# ---------------------------------------------------------------------------
-# The MFA envelope key
-# ---------------------------------------------------------------------------
 
 variable "enable_mfa_encryption_key" {
   description = <<-EOT
@@ -295,10 +282,6 @@ variable "mfa_encryption_context_purpose" {
   default = "totp"
 }
 
-# ---------------------------------------------------------------------------
-# Tables
-# ---------------------------------------------------------------------------
-
 variable "tables" {
   description = <<-EOT
     The identity tables to create, keyed by the logical name the package knows them by. The
@@ -335,9 +318,6 @@ variable "tables" {
   }))
 
   default = {
-    # Hash user_id, range credential_type, no TTL ever. Holds the password hash as
-    # credential_type = "password". Separating the hash from the user record means a route that
-    # returns a user cannot accidentally serialise one.
     credentials = {
       attributes = [
         { name = "user_id", type = "S" },
@@ -347,9 +327,6 @@ variable "tables" {
       range_key = "credential_type"
     }
 
-    # Hash token_hash, so the hot path "is this presented token valid" is a single GetItem on the
-    # primary key with no index in the way. The GSI is for the other operation, revoking a whole
-    # family, and is never on the verification path.
     "refresh-tokens" = {
       attributes = [
         { name = "token_hash", type = "S" },
@@ -367,20 +344,12 @@ variable "tables" {
       ttl_attribute = "expires_at"
     }
 
-    # One table for both verification and reset: the two differ only in a TTL and a template, and
-    # two tables would double the Terraform for that.
     "identity-tokens" = {
       attributes    = [{ name = "token_hash", type = "S" }]
       hash_key      = "token_hash"
       ttl_attribute = "expires_at"
     }
 
-    # Hash identity_key ("email#<lower>" or "ip#<addr>"), range attempted_at, so the range key is
-    # the timestamp and an append never overwrites. Rows expire after 30 days.
-    #
-    # No point in time recovery by default, and unlike the other three that is not the environment
-    # switch talking: every row is a failure counter inside a lookback window, so there is nothing
-    # here worth restoring to a point in time.
     "login-attempts" = {
       attributes = [
         { name = "identity_key", type = "S" },
@@ -392,29 +361,11 @@ variable "tables" {
       point_in_time_recovery = false
     }
 
-    # M4. Hash user_id, no range, no index. One factor per user, so user_id alone is the key: a
-    # second authenticator is not a second row, the user re-enrols and replaces the seed, which is
-    # what keeps the login challenge's factor list a derivation rather than a query.
-    #
-    # NO TTL, EVER. Section 4.1's rule applies with more force here than anywhere else in the map.
-    # An expiring refresh token costs a user one extra login; a TOTP factor that vanishes early
-    # costs them the account, silently, and if MFA is required for their role they cannot get in at
-    # all. The rows are deleted explicitly by a user disabling TOTP and never on a schedule.
-    #
-    # The seed itself is not stored in the clear: it is sealed under a data key from the envelope
-    # key below, and the three envelope fields are ordinary non-key attributes.
     "totp-factors" = {
       attributes = [{ name = "user_id", type = "S" }]
       hash_key   = "user_id"
     }
 
-    # M4. Hash user_id, range code_hash, no index. The range key is the hash of the code, so
-    # spending one is a point write on the primary key with no index and no scan, and reading a
-    # whole set is one Query on the partition.
-    #
-    # NO TTL, for the same reason as totp-factors: a recovery code that expires on its own is a
-    # user locked out of an account they hold the paper for. A set is replaced wholesale on
-    # regeneration and deleted outright when TOTP is disabled.
     "recovery-codes" = {
       attributes = [
         { name = "user_id", type = "S" },
@@ -424,21 +375,6 @@ variable "tables" {
       range_key = "code_hash"
     }
 
-    # M5. Hash user_id, range credential_id, with one index the other way round.
-    #
-    # The primary key is that way because the management page reads its own writes: listing a
-    # user's credentials has to be a consistent Query on the base table, and a GSI read cannot be
-    # consistent. The login lookup goes the other way, from a credential id to its owner, and that
-    # is what credential_id-index serves. Eventual consistency is fine there and the window is
-    # bounded: a credential missing from the index for the second after it was written cannot be
-    # one anybody is signing in with, because it was written by an already authenticated request.
-    #
-    # The index name is a literal in the package: PASSKEY_CREDENTIAL_INDEX in storage.py names it,
-    # so a rename here is a failed Query on the login path rather than a plan diff.
-    #
-    # NO TTL, EVER, for the reason totp-factors has none. A passkey is a second factor, or with
-    # passkeys_passwordless the only factor, and one that vanishes on a schedule is removed from
-    # the account silently. A credential goes when its owner removes it.
     passkeys = {
       attributes = [
         { name = "user_id", type = "S" },
@@ -454,51 +390,18 @@ variable "tables" {
       ]
     }
 
-    # M5. Hash challenge_id, no range, no index, and this is the one identity table whose rows are
-    # meant to disappear.
-    #
-    # A WebAuthn challenge exists to make an assertion unreplayable, which is a claim about state
-    # that a signed token cannot make. So a challenge is a row: written when options are generated,
-    # deleted when it is consumed, and refused past its deadline whether or not DynamoDB has got
-    # round to reclaiming it. TTL here is storage reclamation and never access control, which is
-    # the same rule every other expiring table in this map follows. Pointing it at a different
-    # attribute breaks nothing visibly and grows the table forever, so expires_at is contract.
     "webauthn-challenges" = {
       attributes    = [{ name = "challenge_id", type = "S" }]
       hash_key      = "challenge_id"
       ttl_attribute = "expires_at"
     }
 
-    # M6. Hash state, no range, no index, TTL on expires_at. The OAuth analogue of
-    # webauthn-challenges and a row for the same reason: a state exists to bind a callback to the
-    # request that started it, and it is spent by a conditional DeleteItem with ReturnValues=ALL_OLD
-    # so it is single use even under a concurrent replay. Expiry is re-checked on every read, so an
-    # unreclaimed row is refused rather than accepted; ten minutes is the package's deadline.
     "oauth-states" = {
       attributes    = [{ name = "state", type = "S" }]
       hash_key      = "state"
       ttl_attribute = "expires_at"
     }
 
-    # M6. Hash provider_subject ("<provider>#<subject>"), no range, with one index the other way
-    # round on user_id.
-    #
-    # The primary key is the provider identity, which makes the uniqueness constraint the primary
-    # key: attaching a provider is one conditional put on attribute_not_exists(provider_subject),
-    # so a race resolves to one winner with no read-then-write and no synthetic reservation rows.
-    # This deliberately diverges from section 4.2 of the standard, which sketched a synthetic id.
-    #
-    # user_id-index answers "every link for this user", which listing and the last-method count in
-    # unlink both need. A GSI rather than a second table keyed on user_id: two tables would need
-    # both rows written and deleted in step with no cross-table transaction available, and a
-    # half-failed pair is an orphaned link that unlink cannot find. An index cannot disagree with
-    # its base table. The price is eventual consistency, which the package buys out by re-reading
-    # the base table by primary key before counting a candidate as a remaining sign-in method.
-    #
-    # The index name is a literal in the package: OAUTH_LINK_USER_INDEX in storage.py names it.
-    #
-    # NO TTL. A link is a sign-in method, and it may be the only one; it goes when the user
-    # detaches the provider, which the package refuses when it would remove the last way in.
     "oauth-links" = {
       attributes = [
         { name = "provider_subject", type = "S" },
@@ -632,10 +535,6 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
-
-# ---------------------------------------------------------------------------
-# The JWT authorizer
-# ---------------------------------------------------------------------------
 
 variable "http_api_id" {
   description = <<-EOT

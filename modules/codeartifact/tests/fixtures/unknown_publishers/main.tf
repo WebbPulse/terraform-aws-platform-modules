@@ -1,10 +1,3 @@
-# The regression harness for the repository policy type unification bug.
-#
-# It wraps the module under test next to the IAM roles whose ARNs it publishes with, in one
-# configuration and therefore one plan graph. That is the whole point: an ARN read off an
-# aws_iam_role that does not exist yet is unknown at plan time, which is the condition the module
-# used to fail on. Passing literal ARNs, as every other example does, never reaches the bug.
-
 terraform {
   required_version = ">= 1.10"
 
@@ -61,10 +54,6 @@ module "codeartifact" {
     }
   }
 
-  # Four reader accounts, as the real estate has. This matters: with one reader the read statement's
-  # Principal.AWS is a plain string and unifies with anything, so the bug stays hidden. With four it
-  # is a tuple of four strings, which is the type the failing run reported against the unknown
-  # publisher side.
   reader_account_ids = [
     "036807648992",
     "621554169154",
@@ -72,14 +61,15 @@ module "codeartifact" {
     "748861776298",
   ]
 
-  # Unknown at plan time, which is the condition under test.
   publisher_principal_arns = aws_iam_role.publisher[*].arn
 }
 
 output "repository_names" {
-  value = module.codeartifact.repository_names
+  description = "Repository names the module created, for the fixture assertions."
+  value       = module.codeartifact.repository_names
 }
 
 output "consumer_policy_statements" {
-  value = module.codeartifact.consumer_policy_statements
+  description = "Consumer IAM statements the module produced, for the fixture assertions."
+  value       = module.codeartifact.consumer_policy_statements
 }

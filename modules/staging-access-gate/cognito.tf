@@ -65,8 +65,6 @@ resource "aws_cognito_user_pool_domain" "this" {
   domain       = "${var.name}-gate"
   user_pool_id = aws_cognito_user_pool.this.id
 
-  # Classic hosted UI. Managed login (version 2) needs an aws_cognito_managed_login_branding
-  # style or it renders nothing, and that resource only exists in provider 6.x.
   managed_login_version = 1
 }
 

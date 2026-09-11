@@ -43,8 +43,6 @@ variable "tags" {
   default     = {}
 }
 
-# --- Lambda -------------------------------------------------------------------------------------
-
 variable "lambda_function_name" {
   description = "Name of the single Lambda function behind the API, the FunctionName dimension of the per function Errors and Throttles alarms. It is the one function form of the input; an application with a function per domain passes lambda_function_names instead, and exactly one of the two forms may be set. null skips both per function Lambda alarms."
   type        = string
@@ -168,8 +166,6 @@ variable "lambda_aggregate_evaluation_periods" {
   }
 }
 
-# --- HTTP API -----------------------------------------------------------------------------------
-
 variable "http_api_id" {
   description = "Id of the API Gateway HTTP API, the ApiId dimension of the 5xx and integration latency alarms. Pass module.api.api_id when the API comes from the http-api module. null skips both API alarms."
   type        = string
@@ -249,8 +245,6 @@ variable "api_latency_evaluation_periods" {
   }
 }
 
-# --- DynamoDB -----------------------------------------------------------------------------------
-
 variable "dynamodb_tables" {
   description = "Tables to watch for read and write throttle events, as a map of for_each key to table name. The key becomes the alarm's resource address and the table name becomes the alarm name, <table name>-throttles, so a consumer adopting existing alarms keys the map exactly as its aws_dynamodb_table resource is keyed. A consumer starting fresh from a list of names can pass { for n in names : n => n }. An empty map creates no DynamoDB alarms."
   type        = map(string)
@@ -323,8 +317,6 @@ variable "dynamodb_aggregate_evaluation_periods" {
     error_message = "dynamodb_aggregate_evaluation_periods must be a whole number of at least 1."
   }
 }
-
-# --- Errors from the logs -----------------------------------------------------------------------
 
 variable "error_log_groups" {
   description = "CloudWatch log groups to watch for structured error records, as a map of short name to log group name. The key is the for_each key and goes into the filter name, <name_prefix>-<key>-errors, so it should be the domain or service the function serves, for example \"posts\" or \"users\". The value is the full log group name, normally /aws/lambda/<function name>. Every filter publishes to one shared metric with no dimensions, so however many log groups this holds there is still exactly one alarm summing them. An empty map, the default, creates no filters and no alarm, which is why an existing consumer sees no diff."
@@ -411,8 +403,6 @@ variable "lambda_errors_alarm_function_name" {
   nullable    = true
 }
 
-# --- Shared alarm behaviour ---------------------------------------------------------------------
-
 variable "comparison_operator" {
   description = "Comparison operator on every alarm in the module. The thresholds are all upper bounds, so GreaterThanThreshold is the sensible value."
   type        = string
@@ -446,8 +436,6 @@ variable "extra_alarm_actions" {
   type        = list(string)
   default     = []
 }
-
-# --- The rate limiter failing open --------------------------------------------------------------
 
 variable "rate_limit_fail_open_alarm" {
   description = "Create one <name_prefix>-rate-limit-failed-open alarm over the metric filters that count the rate limiter's fail open WARNINGs. false, the default, creates no filters and no alarm, which is why an existing consumer sees no diff. The limiter allows a request when it cannot reach its table, so this alarm is the compensating control that says the limit was not being enforced."

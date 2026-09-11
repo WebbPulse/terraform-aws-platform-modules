@@ -1,8 +1,3 @@
-# ---------------------------------------------------------------------------
-# Cost anomaly detection. Free, and the earliest warning an account gets that something started
-# costing money on its own. The monitor watches one dimension; the subscription decides who hears
-# about it and how large an anomaly has to be.
-# ---------------------------------------------------------------------------
 resource "aws_ce_anomaly_monitor" "this" {
   count = local.anomaly_detection_count
 

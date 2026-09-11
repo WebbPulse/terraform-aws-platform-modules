@@ -1,19 +1,9 @@
-# The staging shape: the same Lambda-backed HTTP API, switched behind the staging access gate when
-# the workspace factory sets staging_access_gate = true. With the gate on, the execute-api endpoint
-# is disabled and every route requires the gate's origin-verify authorizer, so the API answers only
-# to the CloudFront distribution that adds the header. With the gate off, the plan is the plain API.
-#
-# The distribution side of the gate (login origin, key group, behaviors) is shown in
-# examples/staging-access-gate-complete and is left out here.
-
 terraform {
   required_version = ">= 1.10"
 
   required_providers {
     aws = {
-      source = "hashicorp/aws"
-      # staging-access-gate requires >= 6.0; matching it here keeps the example honest about the
-      # provider it actually runs on.
+      source  = "hashicorp/aws"
       version = ">= 6.0, < 7.0"
     }
     archive = {
@@ -48,8 +38,6 @@ locals {
 data "aws_route53_zone" "this" {
   name = local.domain_name
 }
-
-# --- The function -----------------------------------------------------------------------------
 
 data "archive_file" "handler" {
   type        = "zip"
@@ -90,8 +78,6 @@ resource "aws_lambda_function" "api" {
   timeout          = 15
 }
 
-# --- The certificate --------------------------------------------------------------------------
-
 resource "aws_acm_certificate" "api" {
   domain_name       = local.api_host
   validation_method = "DNS"
@@ -123,11 +109,6 @@ resource "aws_acm_certificate_validation" "api" {
   validation_record_fqdns = [for r in aws_route53_record.api_cert_validation : r.fqdn]
 }
 
-# --- The gate ---------------------------------------------------------------------------------
-# The two modules reference each other: the gate attaches its authorizer to module.api's API id,
-# and module.api attaches that authorizer to its routes. Terraform resolves this at the resource
-# level (api -> authorizer -> routes), so there is no cycle.
-
 module "gate" {
   count  = var.staging_access_gate ? 1 : 0
   source = "../../modules/staging-access-gate"
@@ -138,8 +119,6 @@ module "gate" {
   allowed_emails = var.staging_access_users
   http_api_id    = module.api.api_id
 }
-
-# --- The API ----------------------------------------------------------------------------------
 
 module "api" {
   source = "../../modules/http-api"
@@ -153,7 +132,6 @@ module "api" {
     }
   }
 
-  # $default catches everything, so there is no route on this API the gate's authorizer misses.
   default_integration = "legacy"
 
   throttling_burst_limit = 200
@@ -163,8 +141,6 @@ module "api" {
   certificate_arn = aws_acm_certificate_validation.api.certificate_arn
   zone_id         = data.aws_route53_zone.this.zone_id
 
-  # authorizer_id is applied by the module to every route it creates, $default included. A route
-  # is never written without an authorization_type, so the gate cannot be forgotten on one path.
   disable_execute_api_endpoint = var.staging_access_gate
   authorizer_id                = var.staging_access_gate ? module.gate[0].http_api_authorizer_id : null
 }

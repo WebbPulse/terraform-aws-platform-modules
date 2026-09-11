@@ -86,10 +86,6 @@ resource "aws_lambda_function_url" "login" {
   invoke_mode        = "BUFFERED"
 }
 
-# CloudFront OAC for a function URL needs both grants: InvokeFunctionUrl for the URL itself and
-# InvokeFunction for the invocation behind it. With only the first, the signed request is refused
-# with a 403 before the function runs (see the AWS guide "Restrict access to an AWS Lambda
-# function URL origin").
 resource "aws_lambda_permission" "login_url" {
   statement_id           = "AllowCloudFrontInvokeFunctionUrl"
   action                 = "lambda:InvokeFunctionUrl"

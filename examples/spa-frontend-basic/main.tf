@@ -1,7 +1,3 @@
-# A production-shaped site: private bucket, CloudFront, www plus apex on a certificate the
-# consumer validates in us-east-1, an apex to www redirect function, and alias records written by
-# the module into a zone in the same account.
-
 terraform {
   required_version = ">= 1.10"
 
@@ -17,7 +13,6 @@ provider "aws" {
   region = "us-west-2"
 }
 
-# CloudFront only accepts certificates from us-east-1.
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"
@@ -32,11 +27,6 @@ locals {
 data "aws_route53_zone" "this" {
   name = local.domain
 }
-
-# ---------------------------------------------------------------------------
-# Certificate. The module takes the validated ARN; it never creates certificates itself because
-# the validation records land in a zone whose owner differs per consumer.
-# ---------------------------------------------------------------------------
 
 resource "aws_acm_certificate" "this" {
   provider = aws.us_east_1
@@ -74,10 +64,6 @@ resource "aws_acm_certificate_validation" "this" {
   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
 }
 
-# ---------------------------------------------------------------------------
-# Application viewer-request logic stays with the consumer.
-# ---------------------------------------------------------------------------
-
 resource "aws_cloudfront_function" "apex_redirect" {
   name    = "${local.name}-apex-redirect"
   runtime = "cloudfront-js-2.0"
@@ -98,10 +84,6 @@ resource "aws_cloudfront_function" "apex_redirect" {
   EOT
 }
 
-# ---------------------------------------------------------------------------
-# The site
-# ---------------------------------------------------------------------------
-
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
   version = "~> 1.5"
@@ -113,7 +95,6 @@ module "frontend" {
 
   viewer_request_function_arn = aws_cloudfront_function.apex_redirect.arn
 
-  # AWS managed policies: CachingOptimized (the default), CORS-S3Origin, SecurityHeadersPolicy.
   origin_request_policy_id   = "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf"
   response_headers_policy_id = "67f7725c-6f97-4210-82d7-5512b31e9d03"
 
@@ -126,7 +107,8 @@ module "frontend" {
 }
 
 output "frontend_url" {
-  value = module.frontend.frontend_url
+  description = "Public HTTPS URL the site is served from."
+  value       = module.frontend.frontend_url
 }
 
 output "deploy_targets" {

@@ -1,6 +1,3 @@
-# Throttling is layer 1 of the estate's rate limiting: the stage's default_route_settings covers
-# every route, and route_settings tightens one path without lowering the whole API.
-
 variables {
   name = "example-throttle-api"
 

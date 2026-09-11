@@ -1,7 +1,3 @@
-# An application's whole DynamoDB layer in one module block: on-demand tables named
-# <project>-<environment>-<key>, continuous backups and deletion protection in production only,
-# and one IAM statement that covers every table and every index.
-
 variable "environment" {
   description = "production or staging"
   type        = string
@@ -23,19 +19,15 @@ module "tables" {
 
   name_prefix = local.prefix
 
-  # Production gets continuous backups and a table AWS refuses to delete. Staging gets neither, so
-  # a staging environment can be torn down and rebuilt.
   point_in_time_recovery = local.production
   deletion_protection    = local.production
 
   tables = {
-    # Keyed only by a partition key, no indexes: the simplest table there is.
     users = {
       attributes = [{ name = "id", type = "S" }]
       hash_key   = "id"
     }
 
-    # A composite key plus an index that reads the same item collection the other way round.
     posts = {
       attributes = [
         { name = "id", type = "S" },
@@ -53,7 +45,6 @@ module "tables" {
       ]
     }
 
-    # A sort key on the table itself, and an index that projects only what a list view renders.
     memberships = {
       attributes = [
         { name = "org_id", type = "S" },
@@ -74,8 +65,6 @@ module "tables" {
       ]
     }
 
-    # Short-lived rows DynamoDB deletes on its own. Nothing here is worth a backup, so the table
-    # overrides the module-wide point_in_time_recovery even in production.
     sessions = {
       attributes             = [{ name = "pk", type = "S" }]
       hash_key               = "pk"
@@ -87,8 +76,6 @@ module "tables" {
 
 data "aws_caller_identity" "current" {}
 
-# One statement covering every table and every index, built from the module's outputs so a new
-# table in the map above needs no change here.
 data "aws_iam_policy_document" "tables_rw" {
   statement {
     actions = [
@@ -108,8 +95,6 @@ data "aws_iam_policy_document" "tables_rw" {
   }
 }
 
-# The application reads its table names from the environment rather than rebuilding them from a
-# prefix, so renaming the prefix never needs a matching change in the code.
 output "table_name_environment" {
   description = "Table names keyed by short key, ready to become Lambda environment variables."
   value       = module.tables.table_names

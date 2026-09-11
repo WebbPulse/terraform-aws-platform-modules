@@ -1,19 +1,9 @@
-# The authorizer, the two IAM grants, and the environment map.
-#
-# The authorizer runs are plan only, which means they check the arguments Terraform will send to
-# CreateAuthorizer and not whether the call succeeds. The part that actually fails in practice, API
-# Gateway synchronously fetching the discovery document, cannot be reached from a test with a
-# mocked provider; it is covered by authorizer_depends_on and the discovery poll instead.
-
 variables {
   name_prefix        = "example-staging"
   issuer             = "https://api.staging.example.com/api/auth"
   audience           = "example-staging-api"
   registrable_domain = "staging.example.com"
 
-  # No role to attach to at this level, so the grants are off by default here and each run that
-  # cares about them turns them on alongside the role name. attach_role_policies true with a null
-  # identity_role_name is refused by the variable validation, which is the point of the pair.
   attach_role_policies = false
 }
 
@@ -27,9 +17,6 @@ provider "aws" {
   skip_region_validation      = true
 }
 
-# The KMS key policy names the account root, which means a real GetCallerIdentity call. A mocked
-# provider has no credentials to make one, so the account id and partition are supplied here. They
-# are the only values the module reads from either data source.
 override_data {
   target = data.aws_caller_identity.current
   values = {
@@ -44,8 +31,6 @@ override_data {
   }
 }
 
-# The default is no authorizer, because the first apply of a new environment happens before the
-# identity function is serving anything and CreateAuthorizer would fail.
 run "no_authorizer_without_an_api_id" {
   command = plan
 
@@ -78,8 +63,6 @@ run "the_authorizer_validates_the_same_issuer_and_audience_the_signer_stamps" {
     error_message = "A JWT authorizer verifies the signature in the gateway, which is the point: an unauthenticated request never reaches the function."
   }
 
-  # Both come from the same module inputs the identity function is configured from, so the gateway
-  # and the signer cannot drift apart. A mismatch denies every request and logs no reason.
   assert {
     condition     = one(aws_apigatewayv2_authorizer.identity_jwt[0].jwt_configuration).issuer == var.issuer
     error_message = "The authorizer's issuer must be byte identical to the iss claim the function stamps."
@@ -101,8 +84,6 @@ run "the_authorizer_validates_the_same_issuer_and_audience_the_signer_stamps" {
   }
 }
 
-# The wait is what turns a race into a bounded, self-explaining failure, so it must be on unless a
-# consumer deliberately turns it off.
 run "the_discovery_poll_runs_by_default_alongside_the_authorizer" {
   command = plan
 
@@ -136,15 +117,9 @@ run "extra_audiences_replace_the_default_when_given" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# The grants
-# ---------------------------------------------------------------------------
-
 run "no_role_policies_when_the_policies_are_turned_off" {
   command = plan
 
-  # The pair that means "this module attaches nothing": no role named, and the boolean off. Both
-  # are required together, and the variable validation refuses the halfway states.
   variables {
     attach_role_policies = false
   }
@@ -154,29 +129,17 @@ run "no_role_policies_when_the_policies_are_turned_off" {
     error_message = "With attach_role_policies false the module must attach nothing and leave the caller to use the policy JSON outputs."
   }
 
-  # The MFA grant follows the same rule. The key is still created, because a consumer may well
-  # attach mfa_policy_json to a role this module was not told about.
   assert {
     condition     = length(aws_iam_role_policy.identity_mfa) == 0
     error_message = "With attach_role_policies false the MFA grant must not be attached either."
   }
 
-  # Turning the policies off must not take the keys or the JSON outputs with them: attaching those
-  # outputs by hand is the whole reason the switch exists.
   assert {
     condition     = length(aws_kms_key.identity_signing) == 1
     error_message = "attach_role_policies false must still create the signing key; it governs the grants only."
   }
 }
 
-# The regression this input was added for, and the reason the counts do not read identity_role_name.
-#
-# A consumer passes module.lambda_domain["identity"].role_id. When that role is still to be
-# created the id is unknown at plan time. A count reading it is an unknown count, and Terraform
-# refuses to plan at all with Invalid count argument rather than deferring the decision. There is
-# no way to write that unknown into a .tftest.hcl variable, since a test supplies concrete values,
-# so this run pins the property that actually protects against it: the count is decided by the
-# boolean alone, and naming a role changes nothing while the boolean is false.
 run "the_grants_count_off_the_boolean_and_not_the_role_name" {
   command = plan
 
@@ -196,8 +159,6 @@ run "the_grants_count_off_the_boolean_and_not_the_role_name" {
   }
 }
 
-# The other direction, and the behaviour the old null check gave for free. true with nothing to
-# attach to is a misconfiguration, caught at plan time rather than by IAM at apply time.
 run "attaching_with_no_role_named_is_refused" {
   command = plan
 
@@ -226,15 +187,11 @@ run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
     error_message = "Naming the role must attach both the signing grant and the table grant."
   }
 
-  # M4 adds a third: the envelope key grant, attached on the same condition as the other two.
   assert {
     condition     = length(aws_iam_role_policy.identity_mfa) == 1
     error_message = "Naming the role must also attach the MFA envelope grant, since the key defaults on."
   }
 
-  # GenerateDataKey and Decrypt and nothing else. The seed is encrypted locally under a data key,
-  # so nothing ever sends a plaintext seed to KMS and kms:Encrypt would widen the grant for a call
-  # that is never made.
   assert {
     condition     = contains(local.mfa_key_actions, "kms:GenerateDataKey") && contains(local.mfa_key_actions, "kms:Decrypt")
     error_message = "The envelope grant must allow kms:GenerateDataKey for sealing a seed and kms:Decrypt for opening one."
@@ -250,26 +207,16 @@ run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
     error_message = "kms:Encrypt must not be granted: the design is an envelope, so the plaintext seed never reaches KMS."
   }
 
-  # The two halves of the pair must not disagree. The key policy grants the same actions to the
-  # role that the role's own policy claims on the key.
   assert {
     condition     = length(setsubtract(local.mfa_key_actions, ["kms:GenerateDataKey", "kms:Decrypt"])) == 0
     error_message = "The key policy and the role policy are built from the same action list, so neither half can be wider than the other."
   }
 
-  # Only purpose is pinned. user_id is a different string for every user, so no static condition
-  # can name it; pinning purpose still stops this key being reused for anything but TOTP seeds.
-  # Asserted on the statement rather than on the rendered JSON: the document embeds the created
-  # key's ARN, which is unknown until apply, so the whole string is unknown at plan. The condition
-  # block is built from variables alone and is knowable here.
   assert {
     condition     = contains(keys(local.mfa_policy_statement.Condition.StringEquals), "kms:EncryptionContext:purpose")
     error_message = "The envelope grant must condition on the encryption context purpose, which is the half of the context that has a fixed value."
   }
 
-  # StringEquals, not a set operator. kms:EncryptionContext:<key> is a single valued condition key,
-  # and the AWS KMS documentation says using ForAllValues with it produces an overly permissive
-  # policy.
   assert {
     condition     = keys(local.mfa_policy_statement.Condition)[0] == "StringEquals" && length(keys(local.mfa_policy_statement.Condition)) == 1
     error_message = "The encryption context condition must use StringEquals and nothing else: the condition key is single valued and a set operator on it is overly permissive."
@@ -280,8 +227,6 @@ run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
     error_message = "The pinned purpose must be totp, which is crypto.TOTP_ENCRYPTION_PURPOSE and what the package sends on every call."
   }
 
-  # Sign and GetPublicKey and nothing else. The function never needs to manage the key, and
-  # kms:Decrypt on a signing key is meaningless.
   assert {
     condition     = contains(local.signing_actions, "kms:Sign") && contains(local.signing_actions, "kms:GetPublicKey")
     error_message = "The signing grant must allow kms:Sign for issuing tokens and kms:GetPublicKey for building the JWKS."
@@ -292,23 +237,16 @@ run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
     error_message = "The signing grant must not include key management or encryption actions: the identity function signs and reads public keys, nothing else."
   }
 
-  # Both keys, not only the active one. The function fetches the public half of every key in the
-  # list to build the JWKS, so a grant covering only the signer breaks the JWKS during a rotation.
   assert {
     condition     = length(local.signing_key_arns) == 2
     error_message = "The signing grant must cover every signing key, because the JWKS publishes the public half of all of them."
   }
 
-  # Not optional: the refresh token family query reads family_id-generation-index, and a policy
-  # naming only table ARNs denies it with an AccessDenied that points at the table.
-  # The ARN strings are unknown until apply, so what is checkable at plan is the shape: one table
-  # entry plus one index entry for every table. A table-only policy would be half this length.
   assert {
     condition     = length(local.table_policy_resources) == 2 * length(local.table_arns_list)
     error_message = "The table grant must cover indexes as well as tables: the family revocation query reads family_id-generation-index and a table-only policy denies it."
   }
 
-  # No Scan, deliberately. No identity flow scans a table, and granting it invites one that does.
   assert {
     condition     = !contains(var.table_policy_actions, "dynamodb:Scan")
     error_message = "The table grant must not include Scan: no identity flow scans, and granting it invites one that does."
@@ -320,10 +258,6 @@ run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# The environment map
-# ---------------------------------------------------------------------------
-
 run "the_environment_map_is_what_identity_settings_parses" {
   command = plan
 
@@ -332,8 +266,6 @@ run "the_environment_map_is_what_identity_settings_parses" {
     active_signing_key = 1
   }
 
-  # Every name here is a field of webbpulse.identity.IdentitySettings, whose env_prefix is
-  # IDENTITY_, so the composition root builds the settings object straight from the environment.
   assert {
     condition     = local.identity_environment["IDENTITY_ISSUER"] == var.issuer
     error_message = "IDENTITY_ISSUER must be the same string the authorizer validates."
@@ -344,8 +276,6 @@ run "the_environment_map_is_what_identity_settings_parses" {
     error_message = "IDENTITY_AUDIENCE must be the same string the authorizer requires."
   }
 
-  # A JSON array rather than a comma separated string: the settings field is a list and pydantic
-  # parses list fields as JSON, so a CSV value fails to parse at import time.
   assert {
     condition     = length(local.signing_key_arns) == 2
     error_message = "IDENTITY_SIGNING_KEY_ARNS must hold every signing key, because the JWKS publishes the public half of all of them."
@@ -356,8 +286,6 @@ run "the_environment_map_is_what_identity_settings_parses" {
     error_message = "The active signer must be first in the serialised list, because the package signs with signing_key_arns[0]."
   }
 
-  # The cookie is scoped to the registrable domain so www and any future subdomain share it, and
-  # the RP ID is the same value because a passkey is bound to it for life.
   assert {
     condition     = local.identity_environment["IDENTITY_COOKIE_DOMAIN"] == var.registrable_domain
     error_message = "The refresh cookie is scoped to the registrable domain so subdomains share the session."
@@ -368,15 +296,11 @@ run "the_environment_map_is_what_identity_settings_parses" {
     error_message = "The WebAuthn RP ID is the registrable domain, and it is hashed into every credential for that credential's life."
   }
 
-  # M4. The name is the settings field under the IDENTITY_ prefix: IdentitySettings.data_key_arn,
-  # which is what EnvelopeCipher is built from. Not "envelope" or "mfa" anything.
   assert {
     condition     = contains(keys(local.identity_environment), "IDENTITY_DATA_KEY_ARN")
     error_message = "With the envelope key on by default, IDENTITY_DATA_KEY_ARN must be in the map: it is IdentitySettings.data_key_arn and TOTP enrolment refuses without it."
   }
 
-  # Product strings this module has no resource behind are deliberately absent, so a consumer
-  # merging its own block on top is not fighting an invented default.
   assert {
     condition     = !contains(keys(local.identity_environment), "IDENTITY_PRODUCT_NAME") && !contains(keys(local.identity_environment), "IDENTITY_FRONTEND_BASE_URL")
     error_message = "The map must hold only variables that follow from this module's own resources; product strings belong to the consumer."

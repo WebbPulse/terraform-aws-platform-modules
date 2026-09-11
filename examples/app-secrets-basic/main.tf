@@ -1,7 +1,3 @@
-# The shape a serverless API uses: one JSON blob the function reads at cold start, plus the
-# individual secrets kept alongside it for anything that reads one value on its own. The read
-# policy the module hands back goes straight onto the function's role.
-
 module "app_secrets" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
   version = "~> 1.6"
@@ -23,7 +19,6 @@ module "app_secrets" {
     }
   }
 
-  # The function only ever reads the blob, so the grant names only the blob.
   policy_secret_keys = ["app"]
 }
 

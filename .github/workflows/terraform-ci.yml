@@ -1,19 +1,3 @@
-# Static Terraform checks for every module and example in this repository.
-#
-# The repository publishes to the HCP Terraform private registry, where a bad module or a
-# drifted example is only discovered by the consumer who hits it. Three examples broke
-# terraform validate across two minor releases before this workflow existed, so everything
-# here runs on every pull request and on every push to main.
-#
-# No cloud credentials are used anywhere in this workflow, and none are needed:
-#   * terraform init runs with -backend=false, so no state backend is contacted.
-#   * Provider plugins come from the public registry, which needs no authentication.
-#   * Examples that reference the published registry address are rewritten to point at
-#     this checkout first; see the override step below for why.
-#   * The terraform test suites are plan-only against mocked providers.
-# There is no aws-actions/configure-aws-credentials step and no secrets: block on purpose.
-# If a future test or example needs real credentials that should be reported and discussed,
-# not fixed by adding a secret here.
 name: Terraform CI
 
 on:
@@ -29,9 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # versions.tf declares required_version = ">= 1.10", a floor rather than a pin. CI pins one
-  # exact version so a Terraform release cannot change the result of a run that touched no
-  # files. Raise this deliberately.
   TERRAFORM_VERSION: "1.13.1"
   TF_IN_AUTOMATION: "true"
 
@@ -52,8 +33,6 @@ jobs:
       - name: terraform fmt -recursive -check
         run: terraform fmt -recursive -check -diff
 
-  # Enumerates the directories to check so the matrices pick up new modules, new examples
-  # and new test suites with no edit to this file.
   discover:
     name: Discover directories
     runs-on: ubuntu-latest
@@ -68,17 +47,6 @@ jobs:
       - id: find
         name: Build the validate and test matrices
         env:
-          # These two modules declare configuration_aliases (aws.records and aws.parent
-          # respectively), so the caller must pass a second, aliased aws provider through the
-          # providers meta-argument. Terraform cannot validate such a module standalone:
-          # there is no caller to supply the alias, so validate fails with a missing provider
-          # configuration error no matter what the module contains.
-          #
-          # Their examples do supply the aliases (acm-certificate-basic,
-          # acm-certificate-cross-account-dns, staging-dns-basic), so this workflow still
-          # covers the module code through those examples rather than directly.
-          #
-          # Remove a module from this list only when its configuration_aliases block goes away.
           VALIDATE_SKIP: "modules/acm-certificate modules/staging-dns"
         run: |
           set -euo pipefail
@@ -116,8 +84,6 @@ jobs:
     needs: discover
     runs-on: ubuntu-latest
     strategy:
-      # Report every failing directory by name rather than stopping at the first one.
-      # That is the whole point of running this as a matrix.
       fail-fast: false
       matrix:
         dir: ${{ fromJson(needs.discover.outputs.validate) }}
@@ -131,13 +97,6 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      # Examples reference the published address
-      # app.terraform.io/WebbPulse/platform-modules/aws//modules/<name>, because that is what
-      # a real consumer writes. Resolving it needs an HCP Terraform API token, and this
-      # workflow holds no credentials. This rewrites those source arguments in the checked
-      # out copy to point at ../../modules/<name>, which is also more useful: the pull
-      # request gets validated against the module code it changes rather than against the
-      # last published release. The runner throws the working copy away afterwards.
       - name: Point registry module sources at this checkout
         run: python3 .github/scripts/local_module_override.py "${{ matrix.dir }}" .
 
@@ -171,20 +130,10 @@ jobs:
         working-directory: ${{ matrix.dir }}
         run: terraform init -backend=false -input=false -no-color
 
-      # These suites are plan-only (every run block is command = plan against a mocked
-      # provider), so they reach no AWS API and need no credentials. A suite that switched to
-      # command = apply would need real credentials and must not be added without deciding
-      # separately how CI would obtain them.
       - name: terraform test
         working-directory: ${{ matrix.dir }}
         run: terraform test -no-color
 
-  # The staging-access-gate module ships three Node functions (the CloudFront gate function, the
-  # login Lambda and the authorizer Lambda) whose behaviour Terraform cannot check: fmt, validate and
-  # a plan-only test suite all pass over a handler that denies every request. The module carries a
-  # Node suite for exactly that, and until now nothing ran it, so a broken handler reached a consumer
-  # as a published tag. It needs no credentials: every key is generated in process, SSM is stubbed on
-  # the client prototype and the JWKS fetch is stubbed on globalThis.fetch.
   node-tests:
     name: node tests staging-access-gate
     runs-on: ubuntu-latest
@@ -197,9 +146,6 @@ jobs:
         with:
           node-version: "22"
 
-      # The Lambda sources require @aws-sdk/client-ssm, which the Lambda runtime provides and the
-      # archive therefore does not vendor. Node resolves it from the module directory, so it is
-      # installed there rather than under test/.
       - name: Install the test dependencies
         working-directory: modules/staging-access-gate
         run: npm install --no-save --no-package-lock @aws-sdk/client-ssm
@@ -212,12 +158,6 @@ jobs:
         working-directory: modules/staging-access-gate
         run: node test/run.js
 
-  # The one stable name for branch protection to require. The validate and test
-  # job names carry a directory and change whenever a module or example is added
-  # or removed, and a required context that no longer exists blocks every PR
-  # until someone edits the protection rule. This job depends on all of them and
-  # fails if any of them failed or was skipped, so requiring it alone gates the
-  # whole matrix.
   all-checks-passed:
     name: all-checks-passed
     runs-on: ubuntu-latest

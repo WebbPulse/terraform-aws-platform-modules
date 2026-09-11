@@ -1,9 +1,3 @@
-# A versioned, private bucket holding Lambda deployment packages, with a placeholder object the
-# function points at until the first real deploy replaces it.
-#
-# Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-artifacts-bucket"
-# with version = "~> 1.6"; the relative path here keeps the example runnable from the repository.
-
 terraform {
   required_version = ">= 1.10"
 
@@ -27,7 +21,6 @@ locals {
   name = "example-production"
 }
 
-# The placeholder zip is built by the caller, not the module, so its path stays put in state.
 data "archive_file" "placeholder" {
   type        = "zip"
   output_path = "${path.module}/.terraform/lambda-placeholder.zip"
@@ -65,8 +58,6 @@ module "artifacts" {
   placeholder_object_source_hash = data.archive_file.placeholder.output_base64sha256
 }
 
-# --- The function that reads from it -----------------------------------------------------------
-
 resource "aws_iam_role" "api" {
   name = "${local.name}-api-lambda"
 
@@ -91,8 +82,6 @@ resource "aws_lambda_function" "api" {
   s3_key           = module.artifacts.placeholder_object_key
   source_code_hash = data.archive_file.placeholder.output_base64sha256
 
-  # CI uploads a new object and updates the function out of band, so Terraform stops tracking
-  # which package is live after the first deploy.
   lifecycle {
     ignore_changes = [s3_key, s3_object_version, source_code_hash]
   }

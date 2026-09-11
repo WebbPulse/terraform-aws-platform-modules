@@ -1,22 +1,10 @@
-// Access gate viewer-request function. Rendered by Terraform from gate.js.tftpl.
-//
-// Order of operations:
-//   1. <auth_prefix>*  -> pass straight through to the login origin (the app handler never runs).
-//   2. <api_prefix>*   -> session check only; no session gives 401 JSON, never a redirect.
-//   3. everything else -> appHandler(event) first (redirects, URI rewrites), then the session check;
-//                          no session gives a 302 to <auth_prefix>login?next=<original path and query>.
-//
-// The session check only looks at the CloudFront-Policy cookie's expiry. The signature itself is
-// verified by CloudFront through the trusted key group on each protected behavior; this function
-// exists so that a browser with no or an expired cookie sees the login page instead of a bare 403.
-
 ${app_handler}
 
 var AUTH_PREFIX = '${auth_prefix}';
 var API_PREFIX = '${api_prefix}';
 var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-// CloudFront's URL-safe base64 (- _ ~ in place of + = /) to a string. Policies are ASCII JSON.
+/** Decodes CloudFront's URL-safe base64 alphabet into an ASCII string. */
 function decodePolicy(s) {
   s = s.replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/');
   var out = '';
@@ -42,6 +30,7 @@ function decodePolicy(s) {
   return out;
 }
 
+/** True when the CloudFront-Policy cookie is present and not about to expire. */
 function sessionLooksLive(request) {
   var cookies = request.cookies || {};
   var policy = cookies['CloudFront-Policy'];
@@ -52,10 +41,10 @@ function sessionLooksLive(request) {
   if (!match) {
     return false;
   }
-  // 30 seconds of slack so a session that is about to lapse is renewed before an API call fails.
   return parseInt(match[1], 10) > Math.floor(Date.now() / 1000) + 30;
 }
 
+/** Rebuilds the request query string, preserving multi-value parameters. */
 function queryString(request) {
   var parts = [];
   var qs = request.querystring || {};
@@ -73,6 +62,10 @@ function queryString(request) {
   return parts.length ? '?' + parts.join('&') : '';
 }
 
+/**
+ * Viewer-request gate. Passes the auth prefix through, runs the app handler on
+ * non-API requests, then answers 401 (API) or redirects to login without a session.
+ */
 async function handler(event) {
   var request = event.request;
   var uri = request.uri;

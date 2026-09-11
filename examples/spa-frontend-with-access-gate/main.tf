@@ -1,22 +1,9 @@
-# A staging site behind the staging-access-gate module. The frontend module does all the
-# distribution wiring the gate's consumer checklist asks for; the consumer passes the gate's
-# outputs through as one object. Real consumers gate the access_gate argument on a variable so
-# the production workspace passes null and plans a no-op.
-#
-# This example uses the direct subdomain shape, which is the default: the browser calls
-# https://api.staging.example.com itself and the gate's authorizer on that API checks the same
-# signed cookies, because they are scoped to the staging apex. CloudFront carries only the sign-in
-# wall. See examples/spa-frontend-with-access-gate-proxy for the alternative where /api/* is
-# proxied through this distribution instead.
-
 terraform {
   required_version = ">= 1.10"
 
   required_providers {
     aws = {
-      source = "hashicorp/aws"
-      # staging-access-gate requires >= 6.0; matching it here keeps the example honest about the
-      # provider it actually runs on.
+      source  = "hashicorp/aws"
       version = ">= 6.0, < 7.0"
     }
   }
@@ -50,8 +37,6 @@ locals {
   api_host = "api.${local.domain}"
 }
 
-# The staging child zone lives in this account; its NS delegation from example.com is written by
-# the parent zone's owner and is out of scope here.
 resource "aws_route53_zone" "staging" {
   name = local.domain
 }
@@ -92,8 +77,6 @@ resource "aws_acm_certificate_validation" "this" {
   validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
 }
 
-# The application's own viewer-request logic, used directly when the gate is off. When the gate is
-# on, the same code goes to the gate as viewer_request_handler_js and the gate's function wraps it.
 resource "aws_cloudfront_function" "apex_redirect" {
   count = var.staging_access_gate ? 0 : 1
 
@@ -119,10 +102,6 @@ locals {
   EOT
 }
 
-# ---------------------------------------------------------------------------
-# The gate
-# ---------------------------------------------------------------------------
-
 module "gate" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
   version = "~> 1.4"
@@ -136,15 +115,7 @@ module "gate" {
   allowed_emails   = var.staging_access_users
 
   viewer_request_handler_js = local.app_handler_js
-
-  # cloudfront_distribution_arn stays unset: the distribution below consumes this module's
-  # outputs, so naming it here would be a cycle. http_api_id and the route authorizer wiring are
-  # shown in examples/staging-access-gate-complete.
 }
-
-# ---------------------------------------------------------------------------
-# The site
-# ---------------------------------------------------------------------------
 
 module "frontend" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
@@ -155,7 +126,6 @@ module "frontend" {
   aliases             = [local.www_host, local.domain]
   acm_certificate_arn = aws_acm_certificate_validation.this.certificate_arn
 
-  # Ignored while the gate is on; the gate's function takes over the viewer-request slot.
   viewer_request_function_arn = one(aws_cloudfront_function.apex_redirect[*].arn)
 
   access_gate = var.staging_access_gate ? {
@@ -166,10 +136,6 @@ module "frontend" {
     auth_path_pattern                                      = module.gate[0].auth_path_pattern
     cache_policy_id_caching_disabled                       = module.gate[0].cache_policy_id_caching_disabled
     origin_request_policy_id_all_viewer_except_host_header = module.gate[0].origin_request_policy_id_all_viewer_except_host_header
-
-    # api_origin_domain_name, api_path_pattern and origin_verify_header_name are left unset, so
-    # this distribution gets no API origin and no /api/* behavior. The frontend build points at
-    # https://api.staging.example.com and the API's own authorizer checks the gate's cookies.
   } : null
 
   create_dns_records = true
@@ -181,7 +147,8 @@ module "frontend" {
 }
 
 output "frontend_url" {
-  value = module.frontend.frontend_url
+  description = "Public HTTPS URL the site is served from, behind the access gate."
+  value       = module.frontend.frontend_url
 }
 
 output "frontend_api_base_url" {

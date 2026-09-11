@@ -1,7 +1,3 @@
-# Alias records in the consumer's own account. Records that belong in a zone another account owns
-# stay with the consumer, because a module has exactly one aws provider and it is the one that
-# owns the bucket and the distribution.
-
 resource "aws_route53_record" "alias_a" {
   for_each = local.dns_records_a
 

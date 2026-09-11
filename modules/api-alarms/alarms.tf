@@ -1,5 +1,3 @@
-# --- Lambda ---------------------------------------------------------------------------------
-
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   count = local.lambda_count
 
@@ -37,27 +35,6 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
   ok_actions          = local.ok_actions
   tags                = var.tags
 }
-
-# --- Lambda, aggregated over a function per domain ---------------------------------------------
-#
-# An application split into a function per domain wants one Errors alarm and one Throttles alarm
-# for the whole estate, not a pair per function. Each of these is a metric math alarm: one
-# metric_query per name in the group carrying that function's FunctionName dimension with
-# return_data = false, plus a SUM expression that returns data to the alarm.
-#
-# Summing named metrics rather than alarming on AWS/Lambda Errors with no FunctionName dimension
-# is the deliberate choice. A dimensionless AWS/Lambda alarm is account wide, so it also counts
-# the access gate's authorizer function and anything else in the account, and the threshold stops
-# meaning what it says. These alarms cover exactly the listed functions.
-#
-# A CloudWatch alarm's metric math expression may reference at most 10 metrics. That used to cap
-# lambda_function_names at 10 names; it now chunks the list into groups of at most 10 instead, one
-# alarm pair per group. Group 0 keeps the unsuffixed alarm names and the [0] addresses, so a
-# consumer at 10 or fewer functions plans nothing. See locals.tf for why count survives here.
-#
-# Within a group the alarm names carry no function name, so adding a domain changes the expression
-# on an existing alarm rather than creating another alarm to subscribe and document, right up until
-# the group fills and the next one opens.
 
 resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_errors" {
   count = local.lambda_aggregate_count
@@ -137,8 +114,6 @@ resource "aws_cloudwatch_metric_alarm" "lambda_aggregate_throttles" {
   }
 }
 
-# --- HTTP API -------------------------------------------------------------------------------
-
 resource "aws_cloudwatch_metric_alarm" "api_5xx" {
   count = local.api_count
 
@@ -176,10 +151,6 @@ resource "aws_cloudwatch_metric_alarm" "api_integration_latency" {
   ok_actions          = local.ok_actions
   tags                = var.tags
 }
-
-# --- DynamoDB -------------------------------------------------------------------------------
-# One alarm per table on read plus write throttle events. The two metrics are summed by a metric
-# math expression rather than alarmed separately, so a table raises one alarm however it throttles.
 
 resource "aws_cloudwatch_metric_alarm" "dynamodb_throttles" {
   for_each = var.dynamodb_tables
@@ -223,19 +194,6 @@ resource "aws_cloudwatch_metric_alarm" "dynamodb_throttles" {
     }
   }
 }
-
-# One alarm for the whole environment, on throttled requests across every table in the account and
-# Region. It is a single CloudWatch Metrics Insights query, which is the most an alarm can carry:
-# PutMetricAlarm rejects an alarm holding two Metrics Insights queries with "Invalid metrics list",
-# so ReadThrottleEvents and WriteThrottleEvents cannot be summed here the way the per table alarms
-# sum them. ThrottledRequests is the one metric covering both directions on its own.
-#
-# SCHEMA("AWS/DynamoDB", TableName, Operation) matches the series ThrottledRequests is published
-# with. Those are per table and per operation, so the SUM is every throttled request in the
-# account whatever table or operation it hit.
-#
-# The query is re-resolved on every evaluation, so a table created after the apply is covered
-# without a Terraform change and a deleted table drops out on its own.
 
 resource "aws_cloudwatch_metric_alarm" "dynamodb_aggregate_throttles" {
   count = var.dynamodb_aggregate_alarm ? 1 : 0

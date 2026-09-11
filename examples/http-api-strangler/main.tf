@@ -1,18 +1,3 @@
-# The strangler shape: one monolith Lambda still answering everything, with two prefixes already
-# carved off onto their own per-domain functions.
-#
-# The monolith is the "legacy" integration and default_integration points at it, so $default keeps
-# catching every path nobody has claimed yet. Each prefix moved off it is two more routes entries,
-# because API Gateway matches the most specific route first: an explicit route always beats
-# $default, and everything else falls through to the monolith unchanged.
-#
-# Moving the next domain is a two-line diff: add its function to integrations, add its two route
-# keys to routes. Nothing about the monolith changes, so there is no window where a request has
-# nowhere to go.
-#
-# Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/http-api"
-# with version = "~> 2.0"; the relative path here keeps the example runnable from the repository.
-
 terraform {
   required_version = ">= 1.10"
 
@@ -35,13 +20,8 @@ provider "aws" {
 locals {
   name = "example-production"
 
-  # The domains already living outside the monolith. Adding a third is one entry here.
   migrated = ["posts", "users"]
 }
-
-# --- The functions ----------------------------------------------------------------------------
-# The monolith and one function per migrated domain. In the real estate these are module
-# "lambda-function" blocks and the images come from CI; here they are the smallest thing that runs.
 
 data "archive_file" "handler" {
   type        = "zip"
@@ -95,8 +75,6 @@ resource "aws_lambda_function" "domain" {
   timeout          = 29
 }
 
-# --- The API ----------------------------------------------------------------------------------
-
 module "api" {
   source = "../../modules/http-api"
 
@@ -120,12 +98,8 @@ module "api" {
     },
   )
 
-  # The monolith holds everything not claimed below.
   default_integration = "legacy"
 
-  # Two route keys per domain, and both are needed. "ANY /api/v1/posts" does not match
-  # /api/v1/posts/123, and "ANY /api/v1/posts/{proxy+}" does not match the bare collection path.
-  # Leave one out and half the domain's traffic quietly keeps hitting the monolith.
   routes = merge([
     for d in local.migrated : {
       "ANY /api/v1/${d}"          = { integration = d }
@@ -133,20 +107,15 @@ module "api" {
     }
   ]...)
 
-  # Layer 1 of the rate limiting. The stage default covers $default and anything without an
-  # override; the per-route entries are where a hot or expensive prefix gets its own ceiling.
   throttling_burst_limit = 200
   throttling_rate_limit  = 100
 
   route_settings = {
-    # The monolith is the one nobody has load tested lately, so it gets the tighter limit.
     "$default" = {
       throttling_burst_limit = 100
       throttling_rate_limit  = 50
     }
 
-    # Per-domain metrics only for the paths that have moved, so the migration is measurable without
-    # paying for a metric dimension on every route.
     "ANY /api/v1/posts/{proxy+}" = {
       detailed_metrics_enabled = true
     }

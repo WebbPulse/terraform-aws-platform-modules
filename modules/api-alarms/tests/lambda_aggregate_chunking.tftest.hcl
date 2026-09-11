@@ -1,23 +1,7 @@
-# Chunking the aggregate Lambda alarms past the CloudWatch metric math ceiling.
-#
-# A CloudWatch alarm's metric math expression may reference at most 10 metrics. Up to and including
-# v2.1.0 that was a hard cap on lambda_function_names. It is now a chunk size instead: the list is
-# split into groups of at most 10, in list order, and each group gets its own errors and throttles
-# alarm pair.
-#
-# The assertions below pin the two things a consumer depends on:
-#
-#   * A list of 10 or fewer names produces exactly what v2.1.0 produced. Same alarm names, same
-#     count, same expression, and, because the resources stayed on count, the same addresses
-#     lambda_aggregate_errors[0] and lambda_aggregate_throttles[0]. That is the zero-change plan.
-#   * A longer list chunks in order, group 0 keeps the unsuffixed name, and later groups are
-#     numbered from 2.
-
 variables {
   name_prefix            = "example-staging"
   lambda_aggregate_alarm = true
 
-  # Twelve names, which is two groups: ten then two.
   lambda_function_names = [
     "example-staging-d01",
     "example-staging-d02",
@@ -44,8 +28,6 @@ provider "aws" {
   skip_region_validation      = true
 }
 
-# --- Twelve names: two groups ------------------------------------------------------------------
-
 run "twelve_names_make_two_alarm_pairs" {
   command = plan
 
@@ -59,7 +41,6 @@ run "twelve_names_make_two_alarm_pairs" {
     error_message = "Twelve function names must chunk into two aggregate throttles alarms."
   }
 
-  # Group 0 keeps the v2.1.0 name; group 1 is numbered from 2 so it reads as the second group.
   assert {
     condition     = aws_cloudwatch_metric_alarm.lambda_aggregate_errors[0].alarm_name == "example-staging-lambda-errors-aggregate"
     error_message = "The first group's errors alarm must keep the unsuffixed name."
@@ -80,7 +61,6 @@ run "twelve_names_make_two_alarm_pairs" {
     error_message = "The second group's throttles alarm must be suffixed -2."
   }
 
-  # No alarm may exceed the ceiling: 10 contributing metrics plus the one expression query.
   assert {
     condition = alltrue([
       for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors :
@@ -103,7 +83,6 @@ run "twelve_names_make_two_alarm_pairs" {
 run "chunks_split_in_list_order_and_cover_every_name_once" {
   command = plan
 
-  # Group 0 is the first ten names, in order.
   assert {
     condition = jsonencode([
       for q in aws_cloudwatch_metric_alarm.lambda_aggregate_errors[0].metric_query : q.label if !q.return_data
@@ -118,7 +97,6 @@ run "chunks_split_in_list_order_and_cover_every_name_once" {
     error_message = "The second group must be the remaining names in lambda_function_names order."
   }
 
-  # Every listed function is covered exactly once across the groups: no gaps, no double counting.
   assert {
     condition = sort(flatten([
       for a in aws_cloudwatch_metric_alarm.lambda_aggregate_errors :
@@ -138,9 +116,6 @@ run "metric_ids_restart_at_m0_in_every_chunk" {
     error_message = "The first group's expression must sum m0 through m9."
   }
 
-  # The ids are scoped to the alarm they appear in, so the second group starts over at m0 rather
-  # than carrying a global offset. That keeps a full group byte-identical to the same ten names
-  # passed on their own.
   assert {
     condition = one([
       for q in aws_cloudwatch_metric_alarm.lambda_aggregate_errors[1].metric_query : q.expression if q.return_data
@@ -155,7 +130,6 @@ run "metric_ids_restart_at_m0_in_every_chunk" {
     error_message = "The throttles alarm must chunk and number its ids the same way as the errors alarm."
   }
 
-  # Each alarm's description counts its own group, not the whole estate.
   assert {
     condition     = aws_cloudwatch_metric_alarm.lambda_aggregate_errors[1].alarm_description == "Lambda invocation errors across 2 functions"
     error_message = "Each aggregate alarm must describe the number of functions in its own group."
@@ -181,7 +155,6 @@ run "outputs_report_every_chunk" {
     error_message = "lambda_aggregate_throttles_alarm_names must list one name per group in chunk order."
   }
 
-  # The plural names output carries every alarm: errors first, then throttles, each in chunk order.
   assert {
     condition     = length(output.lambda_aggregate_alarm_names) == 4
     error_message = "lambda_aggregate_alarm_names must carry all four alarms when there are two groups."
@@ -192,22 +165,11 @@ run "outputs_report_every_chunk" {
     error_message = "lambda_aggregate_function_name_chunks must report the grouping the alarms used."
   }
 
-  # The pre-chunking singular ARN outputs still resolve on a list this long rather than failing the
-  # way one() would on more than one element; that they evaluate at all is what this run proves,
-  # since an output that raised would fail the run. The ARN values themselves are unknown until
-  # apply, so what is checkable here is the shape of the plural outputs beside them.
   assert {
     condition     = length(output.lambda_aggregate_errors_alarm_arns) == 2 && length(output.lambda_aggregate_throttles_alarm_arns) == 2
     error_message = "The plural ARN outputs must carry one entry per group."
   }
 }
-
-# --- Five names: one group, byte-identical to v2.1.0 -------------------------------------------
-#
-# This is the compatibility guarantee. Five names is the shape an existing consumer runs, and it
-# must produce one alarm pair at the same addresses, with the same names and the same expression
-# v2.1.0 produced. Because the resources are still count-indexed, [0] here is the same address the
-# existing state holds, so the plan is empty and no moved block is needed.
 
 run "five_names_make_one_unsuffixed_pair_at_index_zero" {
   command = plan
@@ -254,8 +216,6 @@ run "five_names_make_one_unsuffixed_pair_at_index_zero" {
     error_message = "A single group's description must count the whole list, as it did before chunking."
   }
 
-  # The outputs an existing consumer already wires stay the shape they were: two names, errors
-  # first, and a singular ARN per alarm.
   assert {
     condition = output.lambda_aggregate_alarm_names == [
       "example-staging-lambda-errors-aggregate",
@@ -265,8 +225,6 @@ run "five_names_make_one_unsuffixed_pair_at_index_zero" {
   }
 }
 
-# Exactly ten, the old ceiling, is still one group and still one pair. This is the case that
-# decided the chunk boundary: CarModPicker's nine domain functions plus the monolith.
 run "exactly_ten_names_stay_one_group" {
   command = plan
 
@@ -301,8 +259,6 @@ run "exactly_ten_names_stay_one_group" {
   }
 }
 
-# Twenty-one names is three groups: ten, ten, one. The trailing group of one proves the singular
-# wording in the alarm description survives chunking.
 run "twenty_one_names_make_three_groups" {
   command = plan
 
