@@ -7,6 +7,7 @@
 
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const ssmMod = require('@aws-sdk/client-ssm');
 const { loadAuthorizer } = require('./package.js');
 
 const ISSUER = 'https://api.staging.example.com/api/auth';
@@ -100,12 +101,22 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   let served = [jwk(signer.publicKey, KID)];
   let fetches = 0;
   let failNext = false;
-  globalThis.fetch = async (url) => {
+  // Every fetch is recorded with the headers it carried, so the origin verification header can be
+  // asserted rather than assumed. `gated` makes the stub behave like the real gated endpoint:
+  // 403 unless the request presents the header, which is exactly the topology that produced the
+  // fail-closed defect.
+  let lastFetchHeaders = null;
+  let gated = false;
+  globalThis.fetch = async (url, init = {}) => {
     assert.strictEqual(url, `${ISSUER}/.well-known/jwks.json`, 'JWKS URL is derived from the issuer');
     fetches += 1;
+    lastFetchHeaders = init.headers || {};
     if (failNext) {
       failNext = false;
       return { ok: false, status: 503, json: async () => ({}) };
+    }
+    if (gated && lastFetchHeaders['x-origin-verify'] !== 'S3CRET') {
+      return { ok: false, status: 403, json: async () => ({ message: 'Forbidden' }) };
     }
     return { ok: true, status: 200, json: async () => ({ keys: served }) };
   };
@@ -315,6 +326,115 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await plain.handler(req(PROTECTED, null));
   assert.deepStrictEqual(r, { isAuthorized: true }, 'with no route keys configured, no route requires a token');
   assert.strictEqual(fetches, 0, 'and the JWKS is never fetched');
+
+  // --- the JWKS fetch carries the origin verification header ------------------------------------
+  //
+  // THE FAIL-CLOSED DEFECT. The issuer is the same API this authorizer guards, so the JWKS fetch
+  // goes back through this gate. Before this fix it carried no credential, the gate answered 403,
+  // and every identity token was denied "JWKS unavailable": no authenticated request could ever
+  // succeed. `gated` below makes the stub refuse an unheadered fetch the way the real endpoint did.
+
+  fresh();
+  gated = true;
+  r = await auth.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(
+    r.isAuthorized,
+    true,
+    'a valid token is accepted even when the JWKS endpoint is itself behind the gate',
+  );
+  assert.strictEqual(
+    lastFetchHeaders['x-origin-verify'],
+    'S3CRET',
+    'the JWKS fetch presents the origin verification header the authorizer already holds',
+  );
+
+  // The regression assertion, stated from the other side. If the value the authorizer presents is
+  // not the one the gated endpoint accepts, the fetch is refused and the token is denied: the
+  // failure is closed, not open. A fresh package is loaded because `expected()` memoises the SSM
+  // read per module instance, so the stub has to be in place before the first call.
+  //
+  // This is the defect exactly: before the fix the header was absent rather than wrong, and this
+  // was the answer to every authenticated request in CarModPicker staging.
+  ssmMod.SSMClient.prototype.send = async () => ({ Parameter: { Value: 'NOT-THE-GATE-SECRET' } });
+  const mismatched = loadAuthorizer({ routeKeys: ENFORCED, signingPublicKeyPem: publicPem });
+  mismatched.resetJwksCache();
+  gated = true;
+  r = await mismatched.handler({
+    version: '2.0',
+    routeKey: PROTECTED,
+    requestContext: { http: { method: 'GET' }, routeKey: PROTECTED },
+    headers: { authorization: `Bearer ${sign(claims())}`, 'x-origin-verify': 'NOT-THE-GATE-SECRET' },
+  });
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'when the JWKS fetch cannot authenticate, the token is denied and the failure is closed',
+  );
+  gated = false;
+  ssmMod.SSMClient.prototype.send = async () => ({ Parameter: { Value: 'S3CRET' } });
+
+  // --- the well-known documents answer anonymously ---------------------------------------------
+  //
+  // The discovery document and the JWKS are public key material. They have to be reachable without
+  // a gate cookie and without a token, both for this authorizer's own fetch and for any other
+  // verifier of these tokens. Standing them behind the gate is what created the loop above.
+
+  const anon = loadAuthorizer({
+    routeKeys: ENFORCED,
+    signingPublicKeyPem: publicPem,
+    anonymousPathPrefixes: ['/api/auth/.well-known/'],
+  });
+
+  assert.deepStrictEqual(
+    anon.anonymousPathPrefixes(),
+    ['/api/auth/.well-known/'],
+    'the exempt prefixes come from the package',
+  );
+
+  const wellKnown = (rawPath) => ({
+    version: '2.0',
+    rawPath,
+    routeKey: 'GET /api/auth/{proxy+}',
+    requestContext: { http: { method: 'GET', path: rawPath }, routeKey: 'GET /api/auth/{proxy+}' },
+    headers: {},
+  });
+
+  for (const path of [
+    '/api/auth/.well-known/jwks.json',
+    '/api/auth/.well-known/openid-configuration',
+  ]) {
+    r = await anon.handler(wellKnown(path));
+    assert.deepStrictEqual(
+      r,
+      { isAuthorized: true },
+      `${path} is admitted with no gate credential and no token`,
+    );
+  }
+
+  // The exemption is a prefix on the `.well-known` subtree and nothing wider. An application path
+  // that merely begins with the same directory name, or the identity prefix itself, is still gated.
+  for (const path of [
+    '/api/auth/login',
+    '/api/auth/.well-knownish/secrets',
+    '/api/auth',
+    '/api/users/me',
+    '/',
+  ]) {
+    r = await anon.handler(wellKnown(path));
+    assert.deepStrictEqual(
+      r,
+      { isAuthorized: false },
+      `${path} is not exempt and is still refused without a gate credential`,
+    );
+  }
+
+  // A package that renders no exemption keeps the old behaviour: nothing is anonymous.
+  r = await auth.handler(wellKnown('/api/auth/.well-known/jwks.json'));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'with no exempt prefixes rendered, the well-known paths are gated as before',
+  );
 
   console.log('identity jwt authorizer tests passed');
 };

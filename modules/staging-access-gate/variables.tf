@@ -252,3 +252,34 @@ variable "identity_jwt_route_keys" {
     error_message = "identity_jwt_route_keys contains the same route key twice."
   }
 }
+
+variable "identity_anonymous_path_prefixes" {
+  description = <<-EOT
+    Paths the gate authorizer admits with no gate credential and no identity token, matched as
+    prefixes of the request path.
+
+    Null, the default, renders the issuer's `.well-known` subtree when identity enforcement is on
+    and nothing at all when it is off. That default exists because of a fail-closed defect: the
+    authorizer verifies tokens against the issuer's JWKS, and in the gate topology the issuer is the
+    same API the authorizer guards, so the authorizer's own fetch went back through the gate with no
+    credentials, was refused, and every identity token was denied. The authorizer now sends the
+    origin verification header on that fetch, and these prefixes make the discovery document and the
+    JWKS reachable to every other verifier as well.
+
+    Only public key material belongs here. The two `.well-known` documents are published so that
+    anyone can verify a token this issuer signed: they carry no user data and mutate nothing. Adding
+    an application path to this list is a hole straight past the gate.
+
+    Pass [] to render no exemption at all.
+  EOT
+
+  type    = list(string)
+  default = null
+
+  validation {
+    condition = var.identity_anonymous_path_prefixes == null || alltrue([
+      for p in var.identity_anonymous_path_prefixes : startswith(p, "/")
+    ])
+    error_message = "Every identity_anonymous_path_prefixes entry must start with a slash."
+  }
+}

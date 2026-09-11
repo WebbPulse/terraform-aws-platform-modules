@@ -97,10 +97,49 @@ locals {
   # Written even when nothing is enforced, with an empty route key list, so the package has the same
   # shape in both states and the handler has one code path. jsonencode sorts object keys, and the
   # route key list is sorted above, so the rendered bytes are stable across plans.
+  #   anonymous_path_prefixes
+  #               the paths the authorizer admits with no credential at all. See
+  #               local.identity_anonymous_path_prefixes below for why the key material belongs
+  #               here.
   identity_jwt_config_json = jsonencode({
-    route_keys             = local.identity_jwt_enabled ? local.identity_jwt_route_keys : []
-    signing_public_key_pem = tls_private_key.signing.public_key_pem
+    route_keys              = local.identity_jwt_enabled ? local.identity_jwt_route_keys : []
+    signing_public_key_pem  = tls_private_key.signing.public_key_pem
+    anonymous_path_prefixes = local.identity_anonymous_path_prefixes
   })
+
+  # The paths admitted with no gate credential and no token.
+  #
+  # THE DEFECT THIS FIXES. The authorizer verifies an identity token against the issuer's JWKS,
+  # which it fetches over HTTPS. In the gate topology the issuer is the same API the authorizer
+  # guards, so that fetch goes straight back through this authorizer carrying none of a browser's
+  # credentials, is refused 403, and every identity token is denied with "JWKS unavailable". No
+  # authenticated request can succeed. The authorizer now presents the origin verification header on
+  # that fetch, which closes the loop on its own; these prefixes are the other half, because the
+  # discovery document and the JWKS are public key material that every other verifier of these
+  # tokens needs to reach without a credential too.
+  #
+  # Defaulted from the issuer rather than hardcoded, so it follows a consumer that mounts identity
+  # somewhere other than /api/auth. Only the `.well-known` subtree is opened: it holds the discovery
+  # document and the key set and nothing else. A consumer that wants no hole at all passes [].
+  identity_anonymous_path_prefixes = var.identity_anonymous_path_prefixes != null ? var.identity_anonymous_path_prefixes : (
+    local.identity_jwt_enabled ? ["${local.identity_issuer_path}/.well-known/"] : []
+  )
+
+  # The path component of the issuer, which is the prefix the identity routes are mounted under.
+  # `https://api.example.com/api/auth` gives `/api/auth`, and an issuer with no path at all gives
+  # the empty string, so the rendered prefix is plain `/.well-known/`.
+  #
+  # Taken by splitting off scheme and host rather than by regex: the host cannot contain a slash, so
+  # everything from the third slash on is the path, and that holds for any https URL. The trailing
+  # slash is trimmed here and added back where the prefix is built, so an issuer written with or
+  # without one renders the same bytes.
+  identity_issuer_host_and_path = local.identity_jwt_enabled ? trimprefix(var.identity_jwt.issuer, "https://") : ""
+  identity_issuer_path_segments = compact(slice(
+    split("/", local.identity_issuer_host_and_path),
+    1,
+    length(split("/", local.identity_issuer_host_and_path)),
+  ))
+  identity_issuer_path = length(local.identity_issuer_path_segments) > 0 ? "/${join("/", local.identity_issuer_path_segments)}" : ""
 }
 
 data "aws_region" "current" {}
