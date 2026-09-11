@@ -334,6 +334,45 @@ only to hold the policies back deliberately, for instance to attach the `*_polic
 hand, and leave `identity_role_name` null when you do. The two are validated together: true with a
 null role name is refused at plan time, which is the same behaviour the old null check gave.
 
+### Granting a second role on an identity table
+
+`identity_role_name` is the identity function, and it is the only role the three generated policies
+reach. Sometimes another function has to touch one identity table without becoming the identity
+function. The case this was built for is a users domain whose own routes still create an account and
+change a password: those writes belong in `credentials`, and the users role is not the identity role.
+
+A consumer cannot express that grant on its own side without naming ARNs this module owns. It would
+have to rebuild `"<name_prefix>-credentials"` from the prefix, or read `table_arns["credentials"]`
+and hand-write the statement including the index wildcard, and in either case nothing keeps the
+result in step with a later change to `tables` or to `table_policy_actions`.
+
+`additional_table_grants` keeps that inside the module. Each entry names a role, the logical tables
+it reaches, and optionally a narrower action list than the identity function has:
+
+```hcl
+additional_table_grants = {
+  users-credentials = {
+    role_name = module.lambda_domain["users"].role_id
+    tables    = ["credentials"]
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+  }
+}
+```
+
+Leave `actions` out to take `table_policy_actions`, which is the identity function's own set and the
+ceiling for anything granted here. Naming a narrower list is the usual reason to use this input: a
+users function that writes a password hash needs three actions, not nine.
+
+Every name in `tables` is checked against the keys of `var.tables` at plan time, so a typo fails the
+plan rather than attaching a policy that grants nothing. The grant covers each named table and its
+indexes, the same shape the identity grant takes.
+
+The map key, not the role name, is what the resource's `for_each` reads, which is the same plan-time
+concern `attach_role_policies` exists for. The key is a literal a consumer writes, so the count is
+always known; the role name may be unknown, which is what lets a consumer pass
+`module.lambda_domain["users"].role_id` on the apply that also creates that role. The inline policy
+is named `identity-tables-<key>`, so two grants on one role do not collide.
+
 ## Inputs
 
 | Name | Type | Default | Description |
@@ -364,6 +403,7 @@ null role name is refused at plan time, which is the same behaviour the old null
 | `billing_mode` | `string` | `"PAY_PER_REQUEST"` | `PAY_PER_REQUEST` or `PROVISIONED`. |
 | `server_side_encryption` | `object` | `null` | Encrypt tables with a customer managed key instead of the AWS owned one. |
 | `table_policy_actions` | `list(string)` | item level actions | DynamoDB actions the table grant allows. No `Scan` by default. |
+| `additional_table_grants` | `map(object)` | `{}` | Extra roles granted on named tables of this module, keyed by a name that becomes the inline policy's name. `tables` must be keys of `tables`; `actions` defaults to `table_policy_actions`. For a second function that writes an identity table without being the identity function. |
 | `name_tag` | `bool` | `false` | Add a `Name` tag equal to each table's full name. |
 | `tags` | `map(string)` | `{}` | Tags for every resource the module creates. |
 | `http_api_id` | `string` | `null` | HTTP API to create the JWT authorizer on. Leave null until the discovery document answers. |
@@ -394,6 +434,7 @@ null role name is refused at plan time, which is the same behaviour the old null
 | `table_arns_list` | Every table ARN as a list, sorted by key. |
 | `tables` | Logical key to `{ name, arn, id }`. |
 | `table_policy_json` | The table grant as a policy document, including the index wildcard. |
+| `additional_table_grant_policy_json` | Grant name to the policy document attached to that grant's role. |
 | `authorizer_id` | Id of the JWT authorizer, null when `http_api_id` was not given. Attach it to protected routes. |
 | `authorizer_name` | Name of the authorizer, null when not created. |
 | `identity_environment` | The `IDENTITY_*` variables that follow from this module's own resources. |

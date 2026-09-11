@@ -306,3 +306,135 @@ run "the_environment_map_is_what_identity_settings_parses" {
     error_message = "The map must hold only variables that follow from this module's own resources; product strings belong to the consumer."
   }
 }
+
+run "no_additional_grants_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.additional_table_grants) == 0
+    error_message = "additional_table_grants defaults to an empty map, so an existing consumer that does not set it must plan no new resource at all."
+  }
+}
+
+run "an_additional_grant_reaches_only_the_tables_it_names" {
+  command = plan
+
+  variables {
+    additional_table_grants = {
+      users-credentials = {
+        role_name = "example-staging-users"
+        tables    = ["credentials"]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.additional_table_grants) == 1
+    error_message = "One entry must attach exactly one inline policy."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.additional_table_grants["users-credentials"].name == "identity-tables-users-credentials"
+    error_message = "The policy name must carry the map key, so two grants on the same role do not collide on one inline policy name."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.additional_table_grants["users-credentials"].role == "example-staging-users"
+    error_message = "The grant must attach to the role the entry names, which is a different role from identity_role_name."
+  }
+
+  assert {
+    condition     = length(local.additional_grant_resources["users-credentials"]) == 2
+    error_message = "One table must produce two resources, the table and its index wildcard, the same shape the identity table grant takes. A table-only policy denies a Query against an index."
+  }
+
+  assert {
+    condition     = length(local.additional_grant_resources["users-credentials"]) < length(local.table_policy_resources)
+    error_message = "A grant naming one table must be narrower than the identity function's grant over every table, which is the point of naming tables rather than granting the set."
+  }
+}
+
+run "an_additional_grant_takes_the_module_actions_unless_it_names_its_own" {
+  command = plan
+
+  variables {
+    additional_table_grants = {
+      broad = {
+        role_name = "example-staging-users"
+        tables    = ["credentials"]
+      }
+      narrow = {
+        role_name = "example-staging-users"
+        tables    = ["credentials"]
+        actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+      }
+    }
+  }
+
+  assert {
+    condition     = coalesce(var.additional_table_grants["broad"].actions, var.table_policy_actions) == var.table_policy_actions
+    error_message = "A grant with no actions must take table_policy_actions, so it never exceeds what the identity function itself is allowed."
+  }
+
+  assert {
+    condition     = coalesce(var.additional_table_grants["narrow"].actions, var.table_policy_actions) == tolist(["dynamodb:GetItem", "dynamodb:PutItem"])
+    error_message = "A grant that names actions must take exactly those, which is how a consumer gives a second role less than the identity function has."
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.additional_table_grants) == 2
+    error_message = "Two entries must attach two policies, and the map key keeps their inline policy names distinct on the one role."
+  }
+}
+
+run "a_grant_naming_a_table_the_module_does_not_create_is_refused" {
+  command = plan
+
+  variables {
+    additional_table_grants = {
+      typo = {
+        role_name = "example-staging-users"
+        tables    = ["credential"]
+      }
+    }
+  }
+
+  expect_failures = [
+    var.additional_table_grants,
+  ]
+}
+
+run "a_grant_naming_no_tables_is_refused" {
+  command = plan
+
+  variables {
+    additional_table_grants = {
+      empty = {
+        role_name = "example-staging-users"
+        tables    = []
+      }
+    }
+  }
+
+  expect_failures = [
+    var.additional_table_grants,
+  ]
+}
+
+run "a_grant_with_an_empty_actions_list_is_refused" {
+  command = plan
+
+  variables {
+    additional_table_grants = {
+      empty-actions = {
+        role_name = "example-staging-users"
+        tables    = ["credentials"]
+        actions   = []
+      }
+    }
+  }
+
+  expect_failures = [
+    var.additional_table_grants,
+  ]
+}

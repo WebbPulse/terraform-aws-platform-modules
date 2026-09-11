@@ -524,6 +524,72 @@ variable "table_policy_actions" {
   }
 }
 
+variable "additional_table_grants" {
+  description = <<-EOT
+    Extra roles that get a grant on some of this module's tables, keyed by a stable name that
+    becomes the inline policy's name on the role. The identity function itself is granted through
+    identity_role_name and is not expressed here.
+
+    This exists because a second function sometimes has to write an identity-owned table without
+    becoming the identity function. The case that drove it is a users domain whose own routes still
+    create an account and change a password: those writes belong in the credentials table, the users
+    role is not the identity role, and a consumer cannot express the grant itself without naming
+    table ARNs this module owns and hard-coding a resource list that a change to tables would
+    silently desynchronise.
+
+    Each entry names a role and the logical table keys it reaches. tables must be keys of var.tables,
+    checked at plan time, so a typo or a table this module does not create fails the plan rather than
+    producing a policy that grants nothing. actions defaults to table_policy_actions; pass a narrower
+    list to give a consumer less than the identity function has, which is the usual reason to use
+    this. Every grant covers the named tables and their indexes, the same shape the identity grant
+    takes.
+
+    The map key is known at plan time and the role name need not be, which is what lets a consumer
+    pass module.lambda_domain["users"].role_id on the apply that also creates that role. A for_each
+    over unknown values would be undecidable; a for_each over known keys is not.
+
+        additional_table_grants = {
+          users-credentials = {
+            role_name = module.lambda_domain["users"].role_id
+            tables    = ["credentials"]
+            actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+          }
+        }
+  EOT
+
+  type = map(object({
+    role_name = string
+    tables    = list(string)
+    actions   = optional(list(string))
+  }))
+
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for grant in var.additional_table_grants : length(grant.tables) > 0
+    ])
+    error_message = "Every entry of additional_table_grants must name at least one table. An empty list would attach an inline policy whose resource list is empty, which AWS refuses."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for grant in var.additional_table_grants : [
+        for table in grant.tables : contains(keys(var.tables), table)
+      ]
+    ]))
+    error_message = "Every table named in additional_table_grants must be a key of var.tables. Only the tables this module creates can be granted here, and a name that is not one of them would silently grant nothing."
+  }
+
+  validation {
+    condition = alltrue([
+      for grant in var.additional_table_grants :
+      grant.actions == null || length(coalesce(grant.actions, [])) > 0
+    ])
+    error_message = "An actions list given in additional_table_grants must not be empty. Leave it null to take table_policy_actions."
+  }
+}
+
 variable "name_tag" {
   description = "Add a Name tag equal to each table's full name, matching the hand-written resources of an estate that carries one. It merges under tags and a table's own tags, so either can override it."
   type        = bool

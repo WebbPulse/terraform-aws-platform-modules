@@ -120,3 +120,8 @@ output "audience" {
   description = "The audience, echoed back. Byte identical to the aud claim the identity function stamps and to what the authorizer requires."
   value       = var.audience
 }
+
+output "additional_table_grant_policy_json" {
+  description = "Grant name to the IAM policy document attached to that grant's role, covering the named tables and their indexes. Already attached; this output is for a consumer composing one inline policy out of several statements, and for a reviewer reading what an apply granted without decoding state."
+  value       = local.additional_grant_policy_json
+}
