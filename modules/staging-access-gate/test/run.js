@@ -1,6 +1,7 @@
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 const gate = require('./gate.rendered.js');
+const { loadAuthorizer, loadAuthorizerWithoutConfig } = require('./package.js');
 
 function cfsafe(b){return b.toString('base64').replace(/\+/g,'-').replace(/=/g,'_').replace(/\//g,'~');}
 function policyCookie(exp){return cfsafe(Buffer.from(JSON.stringify({Statement:[{Resource:'https://*staging.example.com/*',Condition:{DateLessThan:{'AWS:EpochTime':exp}}}]})));}
@@ -145,9 +146,10 @@ function ev(uri, opts={}) {
 
   process.env.HEADER_NAME='x-origin-verify'; process.env.ORIGIN_VERIFY_PARAM='/o';
   process.env.KEY_PAIR_ID='KPUB1'; process.env.COOKIE_DOMAIN='staging.example.com';
-  process.env.SIGNING_PUBLIC_KEY_PEM=apub;
   ssmMod.SSMClient.prototype.send = async () => ({ Parameter: { Value: 'S3CRET' } });
-  const auth = require('../lambda/authorizer/index.js');
+  // The signing public key reaches the function through the deployment package now, not through an
+  // environment variable, so the tests build the package the way the module does.
+  const auth = loadAuthorizer({ signingPublicKeyPem: apub });
 
   // CORS preflight is always allowed: it carries neither the header nor the cookies.
   assert.deepStrictEqual(await auth.handler(areq({method:'OPTIONS'})), {isAuthorized:true}, 'OPTIONS allowed');
@@ -191,14 +193,19 @@ function ev(uri, opts={}) {
   assert.deepStrictEqual(await auth.handler(areq({cookies: ['CloudFront-Policy=!!!','CloudFront-Signature=!!!','CloudFront-Key-Pair-Id=KPUB1']})), {isAuthorized:false}, 'garbage cookies denied');
 
   // The cookies the login Lambda actually issued in the test above are accepted end to end.
-  process.env.SIGNING_PUBLIC_KEY_PEM = pub.export({type:'spki', format:'pem'});
-  delete require.cache[require.resolve('../lambda/authorizer/index.js')];
-  const auth2 = require('../lambda/authorizer/index.js');
+  const auth2 = loadAuthorizer({ signingPublicKeyPem: pub.export({type:'spki', format:'pem'}) });
   assert.deepStrictEqual(await auth2.handler(areq({cookies: [
     `CloudFront-Policy=${policyB64}`,
     set['CloudFront-Signature'].split(';')[0],
     'CloudFront-Key-Pair-Id=KPUB1',
   ]})), {isAuthorized:true}, 'login lambda cookies accepted by the authorizer');
+
+  // A package whose config file is missing fails closed rather than open: with no public key nothing
+  // verifies, so a valid cookie set is refused instead of being waved through.
+  const broken = loadAuthorizerWithoutConfig();
+  assert.deepStrictEqual(await broken.handler(areq({cookies: gateCookies(good)})), {isAuthorized:false}, 'a package with no config file refuses signed cookies');
+  // The origin verification header still works, because that credential does not depend on the file.
+  assert.deepStrictEqual(await broken.handler(areq({headers:{'x-origin-verify':'S3CRET'}})), {isAuthorized:true}, 'the origin header is unaffected by a missing config file');
 
   console.log('authorizer tests passed');
 
@@ -210,4 +217,7 @@ function ev(uri, opts={}) {
     signPolicy,
     publicPem: apub,
   });
+
+  // ---- the rendered Lambda environment stays under the 4096 byte cap
+  await require('./environment_size.js')();
 })().catch(e => { console.error(e); process.exit(1); });

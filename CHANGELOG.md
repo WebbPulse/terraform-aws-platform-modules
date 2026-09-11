@@ -10,6 +10,64 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.11.0
+
+### `staging-access-gate`: the enforced route key list moves into the deployment package
+
+An apply that turned on identity enforcement in CarModPicker staging failed after a green plan:
+
+```
+InvalidParameterValueException: Lambda was unable to configure your environment variables because
+the environment variables you have provided exceeded the 4KB limit. Measured size: 4545 bytes
+```
+
+Lambda caps the whole environment, keys and values together, at 4096 bytes, and it measures that
+only at `UpdateFunctionConfiguration`. Terraform's plan cannot see the limit, so the configuration
+was valid right up to the apply. With 95 route keys `IDENTITY_JWT_ROUTE_KEYS` serialised to 3600
+bytes on its own, against 869 bytes for the other ten variables including the 451 byte signing
+public key PEM.
+
+Neither obvious escape was available. Trimming the list is not a size fix, it is a security change:
+a key missing from the list is a route that nobody enforces. Collapsing the list to path prefixes is
+worse, because the anonymous guard routes sit under the same prefixes as enforced ones and would
+start demanding tokens they must never demand. Exact matching is the point of the design.
+
+So the two values that grow move out of the environment and into the authorizer's deployment
+package. The module renders `identity_jwt_config.json` holding the sorted route key list and the
+signing public key PEM, writes it into the archive alongside `index.js`, and the handler reads it
+once at import time. The environment now holds only short scalars, and it measures the same 397
+bytes whether the consumer enforces nothing or three hundred routes.
+
+Because the config file is an `archive_file` source block, its bytes are part of
+`output_base64sha256` and therefore part of `source_code_hash`. Adding a route key still changes the
+package hash and still redeploys the function, exactly as changing the environment variable did.
+
+A package that somehow lacks the config file fails closed: with no public key nothing verifies, so
+signed cookies are refused rather than waved through.
+
+**Not breaking.** The module's inputs are unchanged. Consumers pass `identity_jwt_route_keys` and
+the module decides how it reaches the function; that was never part of the interface.
+
+**Plan change:** for a consumer with `identity_jwt` set, one in-place update of the authorizer
+function, changing `source_code_hash`, `filename` and the `environment` block. Nothing else moves. A
+consumer with `identity_jwt` unset also sees that one update, because the signing public key PEM
+left the environment for the package there too.
+
+### CI: the `staging-access-gate` Node suite now runs on every pull request
+
+The module ships three Node functions and a test suite that covers them, and nothing ran it. `fmt`,
+`validate` and the plan-only `terraform test` suites all pass over a handler that denies every
+request, so a broken handler could reach a consumer as a published tag. `terraform-ci.yml` gains a
+`node-tests` job, and `all-checks-passed` now depends on it. The job uses no credentials: keys are
+generated in process, SSM is stubbed on the client prototype and the JWKS fetch is stubbed on
+`globalThis.fetch`.
+
+The suite gained the coverage this release needed: the enforced list is asserted to come from the
+package and not from any environment variable, exact-match semantics are asserted against two
+anonymous guard routes and a prefix sibling that is enforced, method is asserted to be part of the
+key, and a size test measures the rendered environment against the 4096 byte cap with a 300 key
+list.
+
 ## 2.9.1
 
 ### `staging-access-gate`: authorizer description fits the Lambda limit

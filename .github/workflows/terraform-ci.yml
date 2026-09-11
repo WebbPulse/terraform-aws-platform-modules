@@ -179,6 +179,39 @@ jobs:
         working-directory: ${{ matrix.dir }}
         run: terraform test -no-color
 
+  # The staging-access-gate module ships three Node functions (the CloudFront gate function, the
+  # login Lambda and the authorizer Lambda) whose behaviour Terraform cannot check: fmt, validate and
+  # a plan-only test suite all pass over a handler that denies every request. The module carries a
+  # Node suite for exactly that, and until now nothing ran it, so a broken handler reached a consumer
+  # as a published tag. It needs no credentials: every key is generated in process, SSM is stubbed on
+  # the client prototype and the JWKS fetch is stubbed on globalThis.fetch.
+  node-tests:
+    name: node tests staging-access-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The Lambda sources require @aws-sdk/client-ssm, which the Lambda runtime provides and the
+      # archive therefore does not vendor. Node resolves it from the module directory, so it is
+      # installed there rather than under test/.
+      - name: Install the test dependencies
+        working-directory: modules/staging-access-gate
+        run: npm install --no-save --no-package-lock @aws-sdk/client-ssm
+
+      - name: Render the CloudFront gate function
+        working-directory: modules/staging-access-gate
+        run: python3 test/render.py
+
+      - name: node test/run.js
+        working-directory: modules/staging-access-gate
+        run: node test/run.js
+
   # The one stable name for branch protection to require. The validate and test
   # job names carry a directory and change whenever a module or example is added
   # or removed, and a required context that no longer exists blocks every PR
@@ -188,7 +221,7 @@ jobs:
   all-checks-passed:
     name: all-checks-passed
     runs-on: ubuntu-latest
-    needs: [fmt, discover, validate, test]
+    needs: [fmt, discover, validate, test, node-tests]
     if: always()
     steps:
       - name: Fail unless every upstream job succeeded

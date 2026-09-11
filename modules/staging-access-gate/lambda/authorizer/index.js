@@ -17,7 +17,7 @@
 //      https://api.<cookie_domain> directly: the cookies are set on the parent domain, so they
 //      ride along on same-site credentialed requests.
 //
-// THE IDENTITY ACCESS TOKEN, when IDENTITY_JWT_ROUTE_KEYS lists this request's route key. The gate
+// THE IDENTITY ACCESS TOKEN, when identity_jwt_config.json lists this request's route key. The gate
 // check above still has to pass first; this is an additional requirement, never a replacement. The
 // request must then also carry `Authorization: Bearer <token>` holding an RS256 JWT that verifies
 // against the issuer's JWKS and whose iss, aud, exp and nbf all check out. The claims are handed to
@@ -43,28 +43,71 @@
 
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 const { timingSafeEqual, createVerify, createPublicKey, verify: verifySignature } = require('node:crypto');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
+
+// WHY THE BIG VALUES ARE NOT IN THE ENVIRONMENT. A Lambda's environment is capped at 4096 bytes
+// across every variable together, and the API measures it only at UpdateFunctionConfiguration:
+// Terraform's plan is green and the apply fails with "environment variables exceeded the 4KB
+// limit". The enforced route key list is the value that grows without bound (95 keys serialised to
+// 3600 bytes in CarModPicker staging, which put the whole environment at 4545 bytes) and the
+// signing public key PEM is another 451 bytes. The list cannot be trimmed, because a key missing
+// from it is a route nobody enforces, and it cannot be prefix matched, because the anonymous guard
+// routes sit under the same prefixes as enforced ones and prefix matching would enforce on them.
+//
+// So the Terraform module renders both into identity_jwt_config.json and writes that file into the
+// deployment package, which has no such cap. It is read once here at import time, so it costs one
+// synchronous read per execution environment and nothing per request. The file is always present:
+// the module writes it with an empty route_keys list when nothing is enforced, so there is one code
+// path rather than two.
+//
+// The file is part of the archive, so its bytes are part of source_code_hash and a changed route
+// key list redeploys the function.
+const CONFIG_PATH = path.join(__dirname, 'identity_jwt_config.json');
+
+function loadConfig() {
+  try {
+    const parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+    return {
+      routeKeys: Array.isArray(parsed.route_keys) ? parsed.route_keys : [],
+      signingPublicKeyPem: typeof parsed.signing_public_key_pem === 'string' ? parsed.signing_public_key_pem : '',
+    };
+  } catch (err) {
+    // A package without the file is a packaging bug, not a request the function should answer
+    // permissively. Returning empty values makes the gate's cookie check fail closed (no public key
+    // means no signed cookie verifies) rather than silently dropping token enforcement while still
+    // admitting traffic.
+    console.error('identity_jwt_config.json could not be read, failing closed:', err.message);
+    return { routeKeys: [], signingPublicKeyPem: '' };
+  }
+}
+
+const CONFIG = loadConfig();
 
 const ssm = new SSMClient({});
 const HEADER_NAME = (process.env.HEADER_NAME || 'x-origin-verify').toLowerCase();
 const KEY_PAIR_ID = process.env.KEY_PAIR_ID || '';
-const PUBLIC_KEY_PEM = process.env.SIGNING_PUBLIC_KEY_PEM || '';
+const PUBLIC_KEY_PEM = CONFIG.signingPublicKeyPem;
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || '';
 const EXPECTED_RESOURCE = `https://*${COOKIE_DOMAIN}/*`;
 
-// Identity JWT configuration. All three have to be present for enforcement to be possible at all;
-// an issuer with no routes listed is a gate that checks nothing extra, which is the default.
+// Identity JWT configuration. The issuer and audience are short scalars and stay in the
+// environment; the route key list is in the package. All three have to be present for enforcement to
+// be possible at all; an issuer with no routes listed is a gate that checks nothing extra, which is
+// the default.
 const ISSUER = process.env.IDENTITY_ISSUER || '';
 const AUDIENCE = process.env.IDENTITY_AUDIENCE || '';
 const JWKS_URL = process.env.IDENTITY_JWKS_URL || (ISSUER ? `${ISSUER}/.well-known/jwks.json` : '');
 
-// The route keys that require a token. Sorted by the module that produces it, so this string is
-// stable across plans and a reordered map does not redeploy the function.
-const JWT_ROUTE_KEYS = new Set(
-  (process.env.IDENTITY_JWT_ROUTE_KEYS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
-);
+// The route keys that require a token, read from the package rather than the environment (see the
+// top of this file). Matched exactly, never by prefix: a Set of the literal "<METHOD> <path>"
+// strings the http-api module keys its routes by, compared against requestContext.routeKey. A key
+// that is not in this Set is a route that is not enforced, which is how the anonymous guard routes
+// stay anonymous while sharing a path prefix with enforced ones.
+//
+// The module sorts the list before rendering it, so the file's bytes, and therefore the function's
+// source hash, do not move when a consumer reorders its input.
+const JWT_ROUTE_KEYS = new Set(CONFIG.routeKeys.map((s) => String(s).trim()).filter(Boolean));
 
 // How long a fetched JWKS is reused, and how long a fetch may take. Short, because the cost of a
 // stale key set is requests failing after a rotation and the cost of a fetch is one HTTPS call per
@@ -139,8 +182,9 @@ function parseCookies(event) {
 }
 
 // The same policy the login Lambda signs: RSA-SHA1 over the compact policy JSON, checked against
-// the public half of the CloudFront key pair. The PEM is public, so it lives in an environment
-// variable rather than SSM.
+// the public half of the CloudFront key pair. The PEM is public (CloudFront publishes it and it only
+// verifies signatures), so it needs no SSM read; it rides in identity_jwt_config.json rather than an
+// environment variable only because of the 4096 byte environment cap.
 function signedCookiesValid(event) {
   if (!KEY_PAIR_ID || !PUBLIC_KEY_PEM || !COOKIE_DOMAIN) {
     return false;
@@ -436,3 +480,7 @@ exports.handler = async (event) => {
 
 // For the unit tests.
 exports.resetJwksCache = resetJwksCache;
+
+// Also for the unit tests: the route key set as it was loaded from the package, so a test can assert
+// what the handler is actually enforcing rather than what it was handed.
+exports.enforcedRouteKeys = () => [...JWT_ROUTE_KEYS].sort();
