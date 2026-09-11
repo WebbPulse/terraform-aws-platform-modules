@@ -12,6 +12,11 @@ variables {
   issuer             = "https://api.staging.example.com/api/auth"
   audience           = "example-staging-api"
   registrable_domain = "staging.example.com"
+
+  # No role to attach to at this level, so the grants are off by default here and each run that
+  # cares about them turns them on alongside the role name. attach_role_policies true with a null
+  # identity_role_name is refused by the variable validation, which is the point of the pair.
+  attach_role_policies = false
 }
 
 provider "aws" {
@@ -137,6 +142,7 @@ run "the_envelope_key_can_be_turned_off_entirely" {
   variables {
     enable_mfa_encryption_key = false
     identity_role_name        = "example-staging-identity"
+    attach_role_policies      = true
     identity_role_arn         = "arn:aws:iam::123456789012:role/example-staging-identity"
   }
 
@@ -182,6 +188,7 @@ run "a_supplied_key_is_granted_and_exported_the_same_way_a_created_one_is" {
     enable_mfa_encryption_key = false
     mfa_encryption_key_arn    = "arn:aws:kms:us-west-2:123456789012:key/11111111-2222-3333-4444-555555555555"
     identity_role_name        = "example-staging-identity"
+    attach_role_policies      = true
     identity_role_arn         = "arn:aws:iam::123456789012:role/example-staging-identity"
   }
 
@@ -234,6 +241,7 @@ run "the_context_condition_can_be_dropped_for_a_package_that_sends_a_different_o
   variables {
     mfa_encryption_context_purpose = null
     identity_role_name             = "example-staging-identity"
+    attach_role_policies           = true
     identity_role_arn              = "arn:aws:iam::123456789012:role/example-staging-identity"
   }
 
@@ -256,6 +264,7 @@ run "a_custom_purpose_reaches_both_halves_of_the_pair" {
   variables {
     mfa_encryption_context_purpose = "totp-v2"
     identity_role_name             = "example-staging-identity"
+    attach_role_policies           = true
     identity_role_arn              = "arn:aws:iam::123456789012:role/example-staging-identity"
   }
 

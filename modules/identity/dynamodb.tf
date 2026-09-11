@@ -89,8 +89,13 @@ resource "aws_dynamodb_table" "this" {
 # and listing a user's OAuth links reads user_id-index. A policy naming only the table ARNs denies
 # all three. DynamoDB treats an index as its own resource, so table/<name> alone does not imply
 # table/<name>/index/<index>.
+#
+# The count reads var.attach_role_policies rather than var.identity_role_name, because the role name
+# a consumer passes is usually module.lambda_domain["identity"].role_id and that id is unknown at
+# plan time while the role is still to be created. An unknown count makes Terraform refuse to plan
+# at all. var.tables is an input and so is known either way.
 resource "aws_iam_role_policy" "identity_tables" {
-  count = var.identity_role_name == null || length(var.tables) == 0 ? 0 : 1
+  count = var.attach_role_policies && length(var.tables) > 0 ? 1 : 0
 
   name   = "identity-tables"
   role   = var.identity_role_name

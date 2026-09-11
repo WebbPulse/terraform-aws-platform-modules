@@ -303,8 +303,9 @@ module "identity" {
   audience           = "${local.prefix}-api"
   registrable_domain = local.registrable_domain
 
-  identity_role_name = module.lambda_domain["identity"].role_id
-  identity_role_arn  = module.lambda_domain["identity"].role_arn
+  identity_role_name   = module.lambda_domain["identity"].role_id
+  identity_role_arn    = module.lambda_domain["identity"].role_arn
+  attach_role_policies = true
 
   point_in_time_recovery = true
   deletion_protection    = var.environment == "production"
@@ -314,6 +315,25 @@ module "identity" {
 A fuller worked example, including the environment block and the authorizer wiring, is in
 [`examples/identity-basic`](../../examples/identity-basic).
 
+### The role policies and the first apply
+
+The three `aws_iam_role_policy` resources, `identity-signing`, `identity-mfa` and
+`identity-tables`, count off `attach_role_policies` rather than off whether
+`identity_role_name` is null. That looks like a redundant input and it is not.
+
+A consumer passes `module.lambda_domain["identity"].role_id`, which is
+`aws_iam_role.this.id`. When that role already exists the id is known at plan time and either
+form of the count works. When the role is itself still to be created, in the apply that first
+introduces the identity domain, the id is unknown until apply. A `count` built from an unknown
+value is not a count Terraform defers: it refuses to produce a plan at all, and the error is
+`Invalid count argument`. A boolean the consumer sets is known by construction, so the count
+always is too.
+
+So the ordinary case is `attach_role_policies = true` and nothing to think about. Set it false
+only to hold the policies back deliberately, for instance to attach the `*_policy_json` outputs by
+hand, and leave `identity_role_name` null when you do. The two are validated together: true with a
+null role name is refused at plan time, which is the same behaviour the old null check gave.
+
 ## Inputs
 
 | Name | Type | Default | Description |
@@ -322,7 +342,8 @@ A fuller worked example, including the environment block and the authorizer wiri
 | `issuer` | `string` | required | The issuer, byte for byte, carrying the `/api/auth` path. `https`, no trailing slash. |
 | `audience` | `string` | required | The `aud` claim the function stamps and the authorizer requires. |
 | `registrable_domain` | `string` | required | Registrable domain for the refresh cookie and the WebAuthn RP ID. A bare domain, not a URL. |
-| `identity_role_name` | `string` | `null` | Role name to attach the signing and table policies to. `null` attaches nothing. |
+| `identity_role_name` | `string` | `null` | Role name to attach the signing and table policies to. Required when `attach_role_policies` is true. |
+| `attach_role_policies` | `bool` | `true` | Set false to create no role policies even when `identity_role_name` is given. The three policies count off this, not off the role name, so the count is known at plan time. |
 | `identity_role_arn` | `string` | `null` | Role ARN named as a principal in the KMS key policy. Separate from the name because a key policy takes an ARN. |
 | `signing_key_count` | `number` | `1` | How many signing keys exist, 1 to 4. |
 | `active_signing_key` | `number` | `0` | Zero-based index of the key that signs. Decides the order of `signing_key_arns`. |

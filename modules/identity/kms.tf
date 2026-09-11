@@ -111,8 +111,15 @@ data "aws_iam_policy_document" "signing_key" {
 # Scoped to these keys' ARNs and to the same two actions the key policy grants, so neither half of
 # the pair is wider than the other. A key added for a rotation joins both halves at once, because
 # both are built from the same resource.
+#
+# The count reads var.attach_role_policies and not var.identity_role_name, for the same reason the
+# MFA policy below reads the input variables rather than a computed ARN. A consumer passes
+# module.lambda_domain["identity"].role_id, and when that role is itself still to be created its id
+# is unknown at plan time. A count built from an unknown value is not a count Terraform can defer:
+# it refuses to plan at all with Invalid count argument. The boolean is known by construction.
+# identity_role_name must be non-null when the boolean is true, which variables.tf validates.
 resource "aws_iam_role_policy" "identity_signing" {
-  count = var.identity_role_name == null ? 0 : 1
+  count = var.attach_role_policies ? 1 : 0
 
   name   = "identity-signing"
   role   = var.identity_role_name
@@ -225,13 +232,15 @@ data "aws_iam_policy_document" "mfa_key" {
 # The matching identity-side grant, scoped to exactly this key and exactly the two calls the
 # envelope makes. Both halves carry the same condition, so neither is wider than the other.
 #
-# The count is built from the two input variables rather than from local.mfa_key_arn, even though
-# that local says the same thing more directly. A created key's ARN is unknown until apply, so a
-# count reading it makes the instance count itself unknown and Terraform refuses to plan at all.
-# The variables are known at plan time and answer the same question: there is a key when the module
-# creates one or when the consumer supplied one.
+# The count is built from input variables rather than from local.mfa_key_arn, even though that local
+# says the same thing more directly. A created key's ARN is unknown until apply, so a count reading
+# it makes the instance count itself unknown and Terraform refuses to plan at all. The same argument
+# rules out var.identity_role_name, which is usually a role id that is unknown while the role is
+# still to be created. Both parts below are known at plan time and answer the same two questions:
+# the consumer wants the policies, and there is a key, because the module creates one or the
+# consumer supplied one.
 resource "aws_iam_role_policy" "identity_mfa" {
-  count = var.identity_role_name == null || !local.mfa_key_exists ? 0 : 1
+  count = var.attach_role_policies && local.mfa_key_exists ? 1 : 0
 
   name   = "identity-mfa"
   role   = var.identity_role_name

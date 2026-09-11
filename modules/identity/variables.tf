@@ -75,9 +75,25 @@ variable "registrable_domain" {
 }
 
 variable "identity_role_name" {
-  description = "Name of the identity Lambda's IAM role, which is what an aws_iam_role_policy takes as its role argument. The module attaches the signing and table policies to it. Usually module.lambda_domain[\"identity\"].role_id. Leave null to create no role policies at all and attach the policy JSON outputs by hand."
+  description = "Name of the identity Lambda's IAM role, which is what an aws_iam_role_policy takes as its role argument. The module attaches the signing and table policies to it. Usually module.lambda_domain[\"identity\"].role_id. Leave null, with attach_role_policies false, to create no role policies at all and attach the policy JSON outputs by hand."
   type        = string
   default     = null
+
+  validation {
+    # attach_role_policies true with no role to attach to is a misconfiguration that would
+    # otherwise present as an apply-time error from IAM. The condition reads the two variables and
+    # nothing computed, so it is decidable at plan time even when the role name's value is not: a
+    # validation is checked against whether the value is null, and an unknown non-null value is
+    # not null. That is the whole reason the count moved off this variable and onto the boolean.
+    condition     = !var.attach_role_policies || var.identity_role_name != null
+    error_message = "attach_role_policies is true but identity_role_name is null. Pass the identity Lambda's role name, or set attach_role_policies to false to create no role policies."
+  }
+}
+
+variable "attach_role_policies" {
+  description = "Set false to create no role policies even when identity_role_name is given. The three aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back."
+  type        = bool
+  default     = true
 }
 
 variable "identity_role_arn" {
