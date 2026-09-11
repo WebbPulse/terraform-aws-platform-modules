@@ -45,7 +45,7 @@ resource "aws_iam_role_policy" "authorizer" {
 
 resource "aws_lambda_function" "authorizer" {
   function_name = "${var.name}-access-gate-authorizer"
-  description   = local.identity_jwt_enabled ? "HTTP API REQUEST authorizer for the ${var.name} access gate: admits CORS preflights, requests carrying the origin verification header, and browsers presenting the gate's own valid CloudFront signed cookies, and additionally requires a valid identity access token on the routes named in IDENTITY_JWT_ROUTE_KEYS." : "HTTP API REQUEST authorizer for the ${var.name} access gate: admits CORS preflights, requests carrying the origin verification header, and browsers presenting the gate's own valid CloudFront signed cookies."
+  description   = local.identity_jwt_enabled ? "REQUEST authorizer for the ${var.name} access gate: CORS preflights, origin header, signed cookies, plus identity JWT on IDENTITY_JWT_ROUTE_KEYS routes." : "REQUEST authorizer for the ${var.name} access gate: CORS preflights, origin header, and the gate signed cookies."
   role          = aws_iam_role.authorizer.arn
 
   filename         = data.archive_file.authorizer.output_path
