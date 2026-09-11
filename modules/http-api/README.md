@@ -187,6 +187,13 @@ on the request path.
   identity_jwt_depends_on = [module.lambda_identity]
 ```
 
+Set `identity_jwt.authorizer_id` instead when the identity module already creates an authorizer for
+the same issuer and audience. This module then attaches that one rather than creating a second
+identical one, which is worth doing because the identity module polls the discovery document before
+creating its authorizer, a stronger ordering guarantee than `identity_jwt_depends_on` gives.
+`issuer` and `audience` are still required, since they are what the variable's validations check,
+but nothing reads them when `authorizer_id` is set.
+
 **Staging.** Leave `identity_jwt` null. The routes keep the gate's authorizer exactly as they have
 it today, and enforcement moves into the gate's own Lambda, which verifies the same token. The
 wiring is one output into one input:
@@ -378,7 +385,7 @@ Configuring both places and having them disagree is a bad afternoon. The module 
 | `lambda_permission_statement_id` | Base `statement_id` of the invoke permissions; see below | `"AllowHttpApiInvoke"` |
 | `disable_execute_api_endpoint` | Turn off the execute-api hostname; requires `domain_name` | `false` |
 | `authorizer_id` | Authorizer for every route (`CUSTOM`), null for `NONE`. Never applied to a route whose effective type is `NONE` or `AWS_IAM` | `null` |
-| `identity_jwt` | `{ issuer, audience, name?, audiences?, identity_sources? }`; creates the native JWT authorizer and puts marked routes behind it. Production only | `null` |
+| `identity_jwt` | `{ issuer, audience, name?, audiences?, identity_sources?, authorizer_id? }`; creates the native JWT authorizer and puts marked routes behind it. Production only | `null` |
 | `identity_jwt_depends_on` | What must already be serving the discovery document before the authorizer is created, usually the identity function's module | `[]` |
 | `cors_configuration` | API-level CORS; null creates no block | `null` |
 | `domain_name` | Custom hostname; null for no custom domain | `null` |
