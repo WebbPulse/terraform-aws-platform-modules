@@ -10,6 +10,11 @@ variables {
   issuer             = "https://api.staging.example.com/api/auth"
   audience           = "example-staging-api"
   registrable_domain = "staging.example.com"
+
+  # No role to attach to at this level, so the grants are off by default here and each run that
+  # cares about them turns them on alongside the role name. attach_role_policies true with a null
+  # identity_role_name is refused by the variable validation, which is the point of the pair.
+  attach_role_policies = false
 }
 
 provider "aws" {
@@ -135,29 +140,85 @@ run "extra_audiences_replace_the_default_when_given" {
 # The grants
 # ---------------------------------------------------------------------------
 
-run "no_role_policies_when_no_role_was_named" {
+run "no_role_policies_when_the_policies_are_turned_off" {
   command = plan
+
+  # The pair that means "this module attaches nothing": no role named, and the boolean off. Both
+  # are required together, and the variable validation refuses the halfway states.
+  variables {
+    attach_role_policies = false
+  }
 
   assert {
     condition     = length(aws_iam_role_policy.identity_signing) == 0 && length(aws_iam_role_policy.identity_tables) == 0
-    error_message = "With identity_role_name null the module must attach nothing and leave the caller to use the policy JSON outputs."
+    error_message = "With attach_role_policies false the module must attach nothing and leave the caller to use the policy JSON outputs."
   }
 
   # The MFA grant follows the same rule. The key is still created, because a consumer may well
   # attach mfa_policy_json to a role this module was not told about.
   assert {
     condition     = length(aws_iam_role_policy.identity_mfa) == 0
-    error_message = "With identity_role_name null the MFA grant must not be attached either."
+    error_message = "With attach_role_policies false the MFA grant must not be attached either."
   }
+
+  # Turning the policies off must not take the keys or the JSON outputs with them: attaching those
+  # outputs by hand is the whole reason the switch exists.
+  assert {
+    condition     = length(aws_kms_key.identity_signing) == 1
+    error_message = "attach_role_policies false must still create the signing key; it governs the grants only."
+  }
+}
+
+# The regression this input was added for, and the reason the counts do not read identity_role_name.
+#
+# A consumer passes module.lambda_domain["identity"].role_id. When that role is still to be
+# created the id is unknown at plan time. A count reading it is an unknown count, and Terraform
+# refuses to plan at all with Invalid count argument rather than deferring the decision. There is
+# no way to write that unknown into a .tftest.hcl variable, since a test supplies concrete values,
+# so this run pins the property that actually protects against it: the count is decided by the
+# boolean alone, and naming a role changes nothing while the boolean is false.
+run "the_grants_count_off_the_boolean_and_not_the_role_name" {
+  command = plan
+
+  variables {
+    attach_role_policies = false
+    identity_role_name   = "example-staging-identity"
+    identity_role_arn    = "arn:aws:iam::123456789012:role/example-staging-identity"
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role_policy.identity_signing) == 0 &&
+      length(aws_iam_role_policy.identity_tables) == 0 &&
+      length(aws_iam_role_policy.identity_mfa) == 0
+    )
+    error_message = "attach_role_policies false must win over a named role: the count must not read identity_role_name, or an unknown role id makes the plan undecidable."
+  }
+}
+
+# The other direction, and the behaviour the old null check gave for free. true with nothing to
+# attach to is a misconfiguration, caught at plan time rather than by IAM at apply time.
+run "attaching_with_no_role_named_is_refused" {
+  command = plan
+
+  variables {
+    attach_role_policies = true
+    identity_role_name   = null
+  }
+
+  expect_failures = [
+    var.identity_role_name,
+  ]
 }
 
 run "the_role_gets_exactly_the_two_grants_the_identity_flows_need" {
   command = plan
 
   variables {
-    identity_role_name = "example-staging-identity"
-    identity_role_arn  = "arn:aws:iam::123456789012:role/example-staging-identity"
-    signing_key_count  = 2
+    identity_role_name   = "example-staging-identity"
+    attach_role_policies = true
+    identity_role_arn    = "arn:aws:iam::123456789012:role/example-staging-identity"
+    signing_key_count    = 2
   }
 
   assert {

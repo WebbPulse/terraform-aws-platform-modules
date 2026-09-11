@@ -11,6 +11,11 @@ variables {
   issuer             = "https://api.staging.example.com/api/auth"
   audience           = "example-staging-api"
   registrable_domain = "staging.example.com"
+
+  # No role to attach to at this level, so the grants are off by default here and each run that
+  # cares about them turns them on alongside the role name. attach_role_policies true with a null
+  # identity_role_name is refused by the variable validation, which is the point of the pair.
+  attach_role_policies = false
 }
 
 provider "aws" {

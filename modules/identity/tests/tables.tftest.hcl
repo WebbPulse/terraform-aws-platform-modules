@@ -11,6 +11,11 @@ variables {
   issuer             = "https://api.staging.example.com/api/auth"
   audience           = "example-staging-api"
   registrable_domain = "staging.example.com"
+
+  # No role to attach to at this level, so the grants are off by default here and each run that
+  # cares about them turns them on alongside the role name. attach_role_policies true with a null
+  # identity_role_name is refused by the variable validation, which is the point of the pair.
+  attach_role_policies = false
 }
 
 provider "aws" {
@@ -450,7 +455,8 @@ run "the_table_grant_reaches_the_index_on_every_indexed_table" {
   command = plan
 
   variables {
-    identity_role_name = "example-staging-identity"
+    identity_role_name   = "example-staging-identity"
+    attach_role_policies = true
   }
 
   # The refresh token family revocation, the passkey login lookup and the OAuth link listing.
@@ -479,7 +485,8 @@ run "an_index_resource_is_the_table_arn_with_index_appended" {
   command = plan
 
   variables {
-    identity_role_name = "example-staging-identity"
+    identity_role_name   = "example-staging-identity"
+    attach_role_policies = true
     tables = {
       passkeys = {
         attributes = [
@@ -521,8 +528,9 @@ run "tables_can_be_turned_off_entirely" {
   command = plan
 
   variables {
-    tables             = {}
-    identity_role_name = "example-staging-identity"
+    tables               = {}
+    identity_role_name   = "example-staging-identity"
+    attach_role_policies = true
   }
 
   assert {
