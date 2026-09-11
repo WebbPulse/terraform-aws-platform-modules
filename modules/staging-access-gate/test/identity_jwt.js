@@ -7,11 +7,20 @@
 
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const { loadAuthorizer } = require('./package.js');
 
 const ISSUER = 'https://api.staging.example.com/api/auth';
 const AUDIENCE = 'example-staging-api';
 const PROTECTED = 'GET /api/auth/me';
 const OPEN = 'POST /api/auth/login';
+
+// Two routes that sit under an enforced prefix and must stay anonymous. They are the reason the
+// route key list is matched exactly and never by prefix: "GET /api/reports/count" answers
+// unauthenticated callers while "GET /api/reports/{id}" requires a token, and both begin
+// "GET /api/reports/".
+const GUARD_ONE = 'GET /api/reports/count';
+const GUARD_TWO = 'GET /api/health';
+const PREFIX_SIBLING = 'GET /api/reports/{id}';
 
 // The signing key the "identity function" uses, and a second one nothing trusts.
 const signer = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -50,20 +59,41 @@ function claims(overrides = {}) {
 }
 
 module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
-  // The environment the Terraform module renders. IDENTITY_JWT_ROUTE_KEYS is the comma joined,
-  // already sorted list the http-api module's identity_jwt_route_keys output produces.
+  // The environment the Terraform module renders. The route key list and the signing public key are
+  // no longer in it: they are rendered into identity_jwt_config.json inside the deployment package,
+  // because the whole environment is capped at 4096 bytes and the list is what overran it.
   process.env.HEADER_NAME = 'x-origin-verify';
   process.env.ORIGIN_VERIFY_PARAM = '/o';
   process.env.KEY_PAIR_ID = 'KPUB1';
   process.env.COOKIE_DOMAIN = 'staging.example.com';
-  process.env.SIGNING_PUBLIC_KEY_PEM = publicPem;
   process.env.IDENTITY_ISSUER = ISSUER;
   process.env.IDENTITY_AUDIENCE = AUDIENCE;
-  process.env.IDENTITY_JWT_ROUTE_KEYS = `${PROTECTED},ANY /api/v1/{proxy+}`;
   process.env.IDENTITY_JWKS_TTL_SECONDS = '300';
+  delete process.env.SIGNING_PUBLIC_KEY_PEM;
+  delete process.env.IDENTITY_JWT_ROUTE_KEYS;
 
-  delete require.cache[require.resolve('../lambda/authorizer/index.js')];
-  const auth = require('../lambda/authorizer/index.js');
+  const ENFORCED = [PROTECTED, 'ANY /api/v1/{proxy+}', PREFIX_SIBLING];
+  const auth = loadAuthorizer({ routeKeys: ENFORCED, signingPublicKeyPem: publicPem });
+
+  // --- the list comes from the package, not the environment ------------------------------------
+
+  // What the handler is enforcing is exactly what the module rendered into the package, and it got
+  // there with no environment variable carrying it.
+  assert.deepStrictEqual(
+    auth.enforcedRouteKeys(),
+    [...ENFORCED].sort(),
+    'the enforced route keys are the ones the package was built with',
+  );
+  assert.strictEqual(
+    process.env.IDENTITY_JWT_ROUTE_KEYS,
+    undefined,
+    'no environment variable carries the route key list',
+  );
+  assert.strictEqual(
+    process.env.SIGNING_PUBLIC_KEY_PEM,
+    undefined,
+    'no environment variable carries the signing public key',
+  );
 
   // The stubbed JWKS endpoint. `served` is what it returns and `fetches` counts calls, which is how
   // the caching and the unknown-kid refresh are asserted rather than assumed.
@@ -124,6 +154,36 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await auth.handler(req(OPEN, null));
   assert.deepStrictEqual(r, { isAuthorized: true }, 'a route not in the list needs no token');
   assert.strictEqual(fetches, 0, 'an open route does not fetch the JWKS at all');
+
+  // --- exact match, never prefix match -----------------------------------------------------------
+
+  // The two anonymous guard routes stay anonymous even though one of them shares its whole path
+  // prefix with an enforced route. Anything looser than an exact match breaks this, which is the
+  // reason the list cannot be shortened by prefixes to fit in an environment variable.
+  for (const guard of [GUARD_ONE, GUARD_TWO]) {
+    fresh();
+    r = await auth.handler(req(guard, null));
+    assert.deepStrictEqual(r, { isAuthorized: true }, `${guard} is an anonymous guard route and needs no token`);
+    assert.strictEqual(fetches, 0, `${guard} does not fetch the JWKS`);
+  }
+
+  // Its prefix sibling, which is in the list, is enforced.
+  fresh();
+  r = await auth.handler(req(PREFIX_SIBLING, null));
+  assert.deepStrictEqual(r, { isAuthorized: false }, 'the enforced sibling under the same prefix still requires a token');
+
+  // Method is part of the key: the same path under a different method is a different route and is
+  // not enforced unless it is listed in its own right.
+  fresh();
+  r = await auth.handler(req('POST /api/auth/me', null));
+  assert.deepStrictEqual(r, { isAuthorized: true }, 'a different method on an enforced path is a different route key');
+
+  // And a key that is a strict prefix or a strict extension of an enforced one does not match.
+  for (const near of ['GET /api/auth', 'GET /api/auth/me/extra', 'GET /api/auth/mex']) {
+    fresh();
+    r = await auth.handler(req(near, null));
+    assert.deepStrictEqual(r, { isAuthorized: true }, `${near} is not the enforced key and is not enforced`);
+  }
 
   // --- missing header when required -----------------------------------------------------------
 
@@ -248,11 +308,9 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
 
   // --- enforcement off ---------------------------------------------------------------------------
 
-  // No route keys means the gate behaves exactly as it did before this feature, which is the
-  // default every existing consumer gets.
-  process.env.IDENTITY_JWT_ROUTE_KEYS = '';
-  delete require.cache[require.resolve('../lambda/authorizer/index.js')];
-  const plain = require('../lambda/authorizer/index.js');
+  // An empty route key list in the package means the gate behaves exactly as it did before this
+  // feature, which is the default every existing consumer gets.
+  const plain = loadAuthorizer({ routeKeys: [], signingPublicKeyPem: publicPem });
   fetches = 0;
   r = await plain.handler(req(PROTECTED, null));
   assert.deepStrictEqual(r, { isAuthorized: true }, 'with no route keys configured, no route requires a token');

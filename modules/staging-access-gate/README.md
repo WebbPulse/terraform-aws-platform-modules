@@ -100,6 +100,39 @@ already wrote: it is the map key in `http-api`'s `routes`. So `http-api` publish
 Lambda, one authorizer, no new resource. `$default` is rejected by a variable validation, because as
 the catch-all it would silently enforce on every path nobody has routed.
 
+### Why the route key list travels in the deployment package
+
+A Lambda's environment is capped at 4096 bytes across every variable together, and the API measures
+that only at `UpdateFunctionConfiguration`. Terraform's plan never sees it, so an oversized map is a
+green plan followed by
+
+```
+InvalidParameterValueException: ... the environment variables you have provided exceeded the 4KB
+limit. Measured size: 4545 bytes
+```
+
+CarModPicker staging hit that at 95 route keys: the list alone serialised to 3600 bytes, against 869
+bytes for everything else including the 451 byte signing public key PEM. Neither of the obvious
+escapes is available. The list cannot be trimmed, because a key missing from it is a route nobody
+enforces, so trimming silently opens routes. It cannot be collapsed to prefixes either, because the
+anonymous guard routes sit under the same path prefixes as enforced ones, which is the whole reason
+matching is exact.
+
+So the route key list and the signing public key PEM are rendered into `identity_jwt_config.json`
+and written into the authorizer's deployment package, which has no such cap. The handler reads the
+file next to itself once at import time. The file is one of the `archive_file` source blocks, so its
+bytes are part of `output_base64sha256` and therefore part of `source_code_hash`: adding a route key
+changes the package hash and Terraform redeploys the code, exactly as it redeployed on an
+environment change before.
+
+What stays in the environment is only short scalars whose length does not grow with the consumer's
+configuration: the header name, the SSM parameter path, the cookie domain, the key pair id, and the
+issuer, audience, JWKS URL, TTL and clock skew. The module's test suite measures that map against
+the 4096 byte cap with a 300 key list, so the failure mode cannot come back unnoticed.
+
+Consumers are unaffected: the inputs are the same (`identity_jwt_route_keys` and the key pair the
+module creates), and how they reach the function was never part of the module's interface.
+
 ### What the application reads
 
 A Lambda authorizer's context always lands under `requestContext.authorizer.lambda`, API Gateway
@@ -246,6 +279,10 @@ session; the API starts answering 401 as soon as the cookies are cleared or the 
 - Callers that are not browsers (a Chrome extension, a deploy pipeline health check) cannot
   complete the hosted UI flow. They call `api.staging.<domain>` directly with the origin-verify
   header, read from SSM.
+- The authorizer's environment must stay small. Lambda caps it at 4096 bytes and only measures it at
+  apply time, so anything added there that scales with the consumer's configuration reappears as a
+  failed apply on a green plan. The route key list and the signing public key are in the deployment
+  package for that reason; keep new values out of the environment unless they are short scalars.
 - The gate itself answers allow or deny for the whole API, not per route: simple responses with no
   identity sources cannot express finer permissions. `identity_jwt_route_keys` is per route, but it
   only decides whether a token is demanded, not what the token may do. Application level
@@ -265,10 +302,21 @@ session; the API starts answering 401 as soon as the cookies are cleared or the 
 
 ## Tests
 
-`node --check` on both handlers plus a small harness that exercises the CloudFront Function, the
-login flow with stubbed SSM and token endpoint, the authorizer, and the identity token
-verification against locally generated RSA keys and a stubbed JWKS endpoint:
+A harness that exercises the CloudFront Function, the login flow with stubbed SSM and token
+endpoint, the authorizer, the identity token verification against locally generated RSA keys and a
+stubbed JWKS endpoint, and the size of the rendered Lambda environment. It reaches no network and no
+AWS API, and the `node-tests` job in `terraform-ci.yml` runs exactly these three commands on every
+pull request:
 
 ```
-cd test && python3 render.py && npm install @aws-sdk/client-ssm && NODE_PATH=$PWD/node_modules node run.js
+npm install --no-save --no-package-lock @aws-sdk/client-ssm
+python3 test/render.py
+node test/run.js
 ```
+
+Run them from `modules/staging-access-gate`, not from `test/`: the Lambda sources require
+`@aws-sdk/client-ssm` and Node resolves it upward from `lambda/*/index.js`.
+
+The authorizer suite loads the handler out of a package built the way `archive_file` builds it
+(`test/package.js`), because the handler reads `identity_jwt_config.json` from beside itself and
+that file exists only inside the archive.

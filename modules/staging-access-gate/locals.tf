@@ -47,8 +47,12 @@ locals {
   # one.
   identity_jwt_route_keys = sort(var.identity_jwt_route_keys)
 
-  # The environment block, merged into the function only when there is something to enforce, so a
-  # consumer that leaves both inputs alone sees no change to the function at all.
+  # The identity settings that stay in the environment. Every one of these is a short scalar whose
+  # length does not grow with the consumer's configuration, which is the rule this map follows: see
+  # identity_jwt_config_json below for the two values that broke it.
+  #
+  # Merged in only when there is something to enforce, so a consumer that leaves both inputs alone
+  # sees no change to the function at all.
   identity_jwt_environment = local.identity_jwt_enabled ? {
     IDENTITY_ISSUER   = var.identity_jwt.issuer
     IDENTITY_AUDIENCE = var.identity_jwt.audience
@@ -57,13 +61,46 @@ locals {
     # same URL the native JWT authorizer reads in production.
     IDENTITY_JWKS_URL = coalesce(var.identity_jwt.jwks_url, "${var.identity_jwt.issuer}/.well-known/jwks.json")
 
-    # One comma separated string because a Lambda environment holds strings. A route key cannot
-    # contain a comma, which the variable validates.
-    IDENTITY_JWT_ROUTE_KEYS = join(",", local.identity_jwt_route_keys)
-
     IDENTITY_JWKS_TTL_SECONDS   = tostring(coalesce(var.identity_jwt.jwks_ttl_seconds, 300))
     IDENTITY_CLOCK_SKEW_SECONDS = tostring(coalesce(var.identity_jwt.clock_skew_seconds, 60))
   } : {}
+
+  # The whole environment the authorizer function gets, named here rather than inline in the
+  # resource so the test suite can assert its serialised size against Lambda's 4096 byte cap without
+  # planning a real function.
+  #
+  # A Lambda's environment limit is measured over the whole map, keys and values together, and only
+  # at UpdateFunctionConfiguration. Terraform's plan cannot see it, so an oversized map is a green
+  # plan and a failed apply. Nothing in this map is allowed to scale with the number of routes, the
+  # number of hosts or the size of a key.
+  authorizer_environment = merge({
+    HEADER_NAME         = lower(var.origin_verify_header_name)
+    ORIGIN_VERIFY_PARAM = aws_ssm_parameter.origin_verify.name
+    COOKIE_DOMAIN       = var.cookie_domain
+    KEY_PAIR_ID         = aws_cloudfront_public_key.signing.id
+    },
+    local.identity_jwt_environment,
+  )
+
+  # The two values that cannot live in the environment, rendered into the authorizer's deployment
+  # package as identity_jwt_config.json and read by the handler at import time.
+  #
+  #   route_keys  the full enforced route key list. At 95 keys this serialised to 3600 bytes, which
+  #               with the other variables put the environment at 4545 bytes and made every apply
+  #               fail. It cannot be shortened: a key missing from the list is a route that is not
+  #               enforced, and prefix matching is unsafe because anonymous guard routes sit under
+  #               the same prefixes as enforced ones.
+  #   signing_public_key_pem
+  #               the public half of the CloudFront signing key pair, 451 bytes. Not a secret:
+  #               CloudFront publishes it and it only verifies signatures. It moved for size alone.
+  #
+  # Written even when nothing is enforced, with an empty route key list, so the package has the same
+  # shape in both states and the handler has one code path. jsonencode sorts object keys, and the
+  # route key list is sorted above, so the rendered bytes are stable across plans.
+  identity_jwt_config_json = jsonencode({
+    route_keys             = local.identity_jwt_enabled ? local.identity_jwt_route_keys : []
+    signing_public_key_pem = tls_private_key.signing.public_key_pem
+  })
 }
 
 data "aws_region" "current" {}

@@ -3,6 +3,11 @@
 *.tfstate*
 modules/*/test/node_modules/
 modules/*/test/package*.json
+
+# The Lambda sources require @aws-sdk/client-ssm from the module directory (Node resolves up from
+# lambda/*/index.js, not from test/), so the test dependency installs there.
+modules/*/node_modules/
+modules/*/package*.json
 modules/*/test/gate.rendered.js
 .claude/
 
