@@ -1,20 +1,5 @@
 'use strict';
 
-// Access gate login handler, reached through a CloudFront ordered behavior on <AUTH_PREFIX>* whose
-// origin is this function's URL (IAM auth, signed by a CloudFront origin access control).
-//
-//   GET <AUTH_PREFIX>login?next=/path   -> remember next in a short-lived state cookie, send the
-//                                          browser to the Cognito hosted UI
-//   GET <AUTH_PREFIX>callback?code&state -> check state, exchange the code for tokens using the
-//                                          client secret, confirm the email is allowed, then set
-//                                          CloudFront signed cookies and go to next
-//   GET <AUTH_PREFIX>logout             -> clear the cookies, sign out of Cognito
-//   GET <AUTH_PREFIX>logged-out         -> a plain page saying so
-//
-// The signed cookies use a CloudFront custom policy that covers https://*<COOKIE_DOMAIN>/* and
-// expires after SESSION_SECONDS; CloudFront verifies them on every protected behavior via the key
-// group, so nothing here has to be consulted again until the session lapses.
-
 const crypto = require('node:crypto');
 const { SSMClient, GetParametersCommand } = require('@aws-sdk/client-ssm');
 
@@ -29,6 +14,7 @@ const SESSION_COOKIES = ['CloudFront-Policy', 'CloudFront-Signature', 'CloudFron
 const ssm = new SSMClient({});
 let secretsPromise;
 
+/** Reads the signing key and Cognito client secret from SSM once per execution environment. */
 function secrets() {
   if (!secretsPromise) {
     secretsPromise = ssm
@@ -50,21 +36,22 @@ function secrets() {
   return secretsPromise;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Small helpers
-
+/** Encodes to CloudFront's URL-safe base64 alphabet. */
 function cloudFrontSafeBase64(buf) {
   return buf.toString('base64').replace(/\+/g, '-').replace(/=/g, '_').replace(/\//g, '~');
 }
 
+/** Encodes a UTF-8 string as base64url. */
 function b64url(str) {
   return Buffer.from(str, 'utf8').toString('base64url');
 }
 
+/** Decodes a base64url string to UTF-8. */
 function fromB64url(str) {
   return Buffer.from(str, 'base64url').toString('utf8');
 }
 
+/** Parses the payload 2.0 cookie array into a name to value map. */
 function parseCookies(event) {
   const out = {};
   for (const raw of event.cookies || []) {
@@ -76,6 +63,7 @@ function parseCookies(event) {
   return out;
 }
 
+/** Case-insensitive header lookup against an already lowercased name. */
 function header(event, name) {
   const headers = event.headers || {};
   for (const key of Object.keys(headers)) {
@@ -86,16 +74,16 @@ function header(event, name) {
   return undefined;
 }
 
-// The host the viewer used. CloudFront rewrites Host to the function URL, so the gate function
-// copies the viewer's Host into x-forwarded-host; anything not on the allow list falls back to
-// SITE_HOST so a spoofed header cannot steer the redirect_uri or the post-login redirect.
+/**
+ * Resolves the host the viewer used from x-forwarded-host, falling back to
+ * SITE_HOST so a spoofed header cannot steer a redirect.
+ */
 function viewerHost(event) {
   const forwarded = (header(event, 'x-forwarded-host') || '').toLowerCase().split(':')[0];
   return ALLOWED_HOSTS.has(forwarded) ? forwarded : env.SITE_HOST;
 }
 
-// Only same-site, absolute-path targets. Anything else (open redirects, protocol-relative URLs,
-// the auth prefix itself) collapses to the site root.
+/** Accepts only same-site absolute-path targets, collapsing anything else to the site root. */
 function safeNext(value) {
   if (typeof value !== 'string' || value === '') {
     return '/';
@@ -109,6 +97,7 @@ function safeNext(value) {
   return value;
 }
 
+/** Builds a Secure, HttpOnly, SameSite=Lax Set-Cookie value. */
 function cookie(name, value, attrs) {
   const parts = [`${name}=${value}`, 'Path=' + (attrs.path || '/'), 'Secure', 'HttpOnly', 'SameSite=Lax'];
   if (attrs.domain) {
@@ -120,10 +109,12 @@ function cookie(name, value, attrs) {
   return parts.join('; ');
 }
 
+/** Returns Set-Cookie values that expire every signed session cookie. */
 function clearedSessionCookies() {
   return SESSION_COOKIES.map((name) => cookie(name, '', { domain: env.COOKIE_DOMAIN, maxAge: 0 }));
 }
 
+/** Builds a payload 2.0 HTML response with no-store and hardening headers. */
 function respond(statusCode, body, extra = {}) {
   return {
     statusCode,
@@ -139,17 +130,17 @@ function respond(statusCode, body, extra = {}) {
   };
 }
 
+/** Builds a 302 to `location` carrying the given cookies. */
 function redirect(location, cookies) {
   return respond(302, '', { headers: { location }, cookies });
 }
 
+/** Renders the minimal HTML page used for every non-redirect response. */
 function page(title, message) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}h1{font-size:1.4rem}a{color:#0a58ca}</style></head><body><h1>${title}</h1><p>${message}</p></body></html>`;
 }
 
-// ---------------------------------------------------------------------------------------------
-// CloudFront signed cookies
-
+/** Signs a CloudFront custom policy for the cookie domain and returns the session cookies. */
 function signedCookies(signingKey) {
   const expires = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
   const policy = JSON.stringify({
@@ -169,9 +160,7 @@ function signedCookies(signingKey) {
   ];
 }
 
-// ---------------------------------------------------------------------------------------------
-// Routes
-
+/** Starts sign-in: stores the state and next target in a short-lived cookie and redirects to Cognito. */
 function login(event) {
   const host = viewerHost(event);
   const next = safeNext((event.queryStringParameters || {}).next);
@@ -189,6 +178,7 @@ function login(event) {
   return redirect(authorize.toString(), [stateCookie]);
 }
 
+/** Decodes a JWT payload without verifying it. */
 function decodeJwtPayload(token) {
   const parts = String(token).split('.');
   if (parts.length !== 3) {
@@ -197,6 +187,10 @@ function decodeJwtPayload(token) {
   return JSON.parse(fromB64url(parts[1]));
 }
 
+/**
+ * Completes sign-in: checks state, exchanges the code for tokens, validates the
+ * id token claims and the email allow list, then issues the signed cookies.
+ */
 async function callback(event) {
   const host = viewerHost(event);
   const query = event.queryStringParameters || {};
@@ -241,9 +235,6 @@ async function callback(event) {
   const claims = decodeJwtPayload(tokens.id_token);
   const now = Math.floor(Date.now() / 1000);
 
-  // The token came straight from Cognito's token endpoint over TLS in exchange for the client
-  // secret, so its signature has not been forged in transit; the claims are still checked so a
-  // misconfigured client or pool cannot let the wrong audience through.
   if (claims.iss !== env.COGNITO_ISSUER || claims.aud !== env.CLIENT_ID || claims.token_use !== 'id' || !(claims.exp > now)) {
     console.error('rejected id token claims', { iss: claims.iss, aud: claims.aud, token_use: claims.token_use });
     return respond(403, page('Sign-in refused', 'The identity token did not belong to this site.'), { cookies: [clearState] });
@@ -259,6 +250,7 @@ async function callback(event) {
   return redirect(`https://${host}${next}`, [clearState, ...signedCookies(signingKey)]);
 }
 
+/** Clears the session cookies and redirects to the Cognito logout endpoint. */
 function logout(event) {
   const host = viewerHost(event);
   const url = new URL(`${env.COGNITO_DOMAIN}/logout`);
@@ -267,20 +259,24 @@ function logout(event) {
   return redirect(url.toString(), clearedSessionCookies());
 }
 
+/** Renders the signed-out page and clears the session cookies again. */
 function loggedOut() {
   return respond(200, page('Signed out', `Your staging session has ended. <a href="/">Sign in again</a>.`), { cookies: clearedSessionCookies() });
 }
 
+/** Escapes HTML special characters for interpolation into a page. */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+/** Constant-time string comparison. */
 function timingSafeEqualStrings(a, b) {
   const ab = Buffer.from(String(a));
   const bb = Buffer.from(String(b));
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
+/** Access gate login handler, routing the login, callback, logout and logged-out paths. */
 exports.handler = async (event) => {
   const method = ((event.requestContext || {}).http || {}).method || 'GET';
   const path = event.rawPath || '/';

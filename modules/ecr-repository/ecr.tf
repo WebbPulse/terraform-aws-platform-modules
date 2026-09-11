@@ -9,8 +9,6 @@ resource "aws_ecr_repository" "this" {
     scan_on_push = coalesce(each.value.scan_on_push, var.scan_on_push)
   }
 
-  # Encryption is fixed at creation, so changing either input replaces the repository. kms_key is
-  # left null under AES256, which is what a repository created without one stores.
   encryption_configuration {
     encryption_type = var.encryption_type
     kms_key         = var.encryption_type == "AES256" ? null : var.encryption_kms_key
@@ -33,13 +31,7 @@ resource "aws_ecr_repository_policy" "this" {
   policy     = coalesce(var.repository_policy_json, data.aws_iam_policy_document.cross_account_pull.json)
 }
 
-# The cross-account pull policy the module builds when repository_policy_principals is set. It is
-# evaluated even when no repository uses it, which costs nothing: a policy document data source
-# makes no API call.
 data "aws_iam_policy_document" "cross_account_pull" {
-  # Lets the named accounts pull, and create or update a function from, an image in this
-  # repository. Cross-account access needs both sides to allow the action, so this is the half the
-  # repository owner writes; the consuming account still grants the same actions on its own role.
   statement {
     sid = "CrossAccountPull"
 
@@ -55,10 +47,6 @@ data "aws_iam_policy_document" "cross_account_pull" {
     ]
   }
 
-  # Lambda re-fetches a container image on its own behalf, to optimise and cache it and to bring a
-  # function back from Inactive. Without this statement a cross-account container-image function
-  # deploys and then fails later, which is the failure mode worth spending a statement to avoid.
-  # The source-ARN condition keeps the grant to functions in the accounts named above.
   statement {
     sid = "LambdaCrossAccountImageRetrieval"
 

@@ -52,8 +52,6 @@ output "consumer_policy_statements" {
       Resource = sort(values(local.repository_arns))
     },
     {
-      # sts:GetServiceBearerToken has no resource of its own. The condition pins it to CodeArtifact
-      # so the grant cannot be reused to mint a bearer token for another service.
       Sid      = "CodeArtifactBearerToken"
       Effect   = "Allow"
       Action   = ["sts:GetServiceBearerToken"]

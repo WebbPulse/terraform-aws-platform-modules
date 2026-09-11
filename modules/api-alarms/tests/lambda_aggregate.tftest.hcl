@@ -1,8 +1,3 @@
-# The aggregate Lambda alarms: two alarms summing AWS/Lambda Errors and Throttles across a function
-# per domain, instead of a per function pair. The assertions below pin the three things the shape
-# depends on: the alarm names carry no function name, every listed function contributes exactly one
-# metric_query that returns no data, and the one query that does return data is the SUM over them.
-
 variables {
   name_prefix = "example-staging"
 
@@ -39,7 +34,6 @@ run "aggregate_alarms_are_created_and_named_without_function_names" {
     error_message = "The aggregate throttles alarm name must be <name_prefix>-lambda-throttles-aggregate and must not embed a function name."
   }
 
-  # The per function alarms are the other form of the input and must not appear alongside these.
   assert {
     condition     = length(aws_cloudwatch_metric_alarm.lambda_errors) == 0 && length(aws_cloudwatch_metric_alarm.lambda_throttles) == 0
     error_message = "lambda_function_names must not create the per function alarm pair: that is what lambda_function_name is for."
@@ -49,7 +43,6 @@ run "aggregate_alarms_are_created_and_named_without_function_names" {
 run "errors_alarm_is_metric_math_over_every_listed_function" {
   command = plan
 
-  # Four functions plus the expression that sums them.
   assert {
     condition     = length(one(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].metric_query)) == 5
     error_message = "Expected one metric_query per function plus one expression query."
@@ -74,8 +67,6 @@ run "errors_alarm_is_metric_math_over_every_listed_function" {
     error_message = "Every contributing query must be AWS/Lambda Errors summed."
   }
 
-  # Each contributing query carries its own FunctionName, which is what makes the alarm cover the
-  # listed functions rather than every function in the account.
   assert {
     condition = toset(flatten([
       for q in one(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].metric_query) :
@@ -84,7 +75,6 @@ run "errors_alarm_is_metric_math_over_every_listed_function" {
     error_message = "The FunctionName dimensions must be exactly the functions in lambda_function_names."
   }
 
-  # The function name rides in the label, so the notification still names the per function series.
   assert {
     condition = toset([
       for q in one(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[*].metric_query) : q.label if !q.return_data
@@ -140,8 +130,6 @@ run "shared_period_threshold_and_evaluation_reach_both_alarms" {
   }
 }
 
-# The backward-compatibility guarantee: the one function form is untouched, and the aggregate
-# resources have a count of 0 unless asked for.
 run "the_one_function_form_still_creates_exactly_the_old_pair" {
   command = plan
 

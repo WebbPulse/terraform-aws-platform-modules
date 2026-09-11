@@ -28,10 +28,6 @@ output "signing_policy_json" {
   value       = local.signing_policy_json
 }
 
-# ---------------------------------------------------------------------------
-# The MFA envelope key
-# ---------------------------------------------------------------------------
-
 output "mfa_encryption_key_arn" {
   description = "ARN of the symmetric KMS key TOTP seeds are sealed under, which is what the package reads as IDENTITY_DATA_KEY_ARN. The key this module created, or mfa_encryption_key_arn when a consumer supplied its own, or null when neither exists. Null is the signal that TOTP enrolment will refuse: EnvelopeCipher will not construct without a key id."
   value       = local.mfa_key_arn
@@ -56,10 +52,6 @@ output "mfa_policy_json" {
   description = "IAM policy document granting kms:GenerateDataKey and kms:Decrypt on the MFA envelope key, conditioned on the encryption context purpose. Null when there is no key. Already attached to identity_role_name when that is set; this output is for a consumer composing one inline policy out of several statements or attaching it to a role the module was not told about."
   value       = local.mfa_key_exists ? local.mfa_policy_json : null
 }
-
-# ---------------------------------------------------------------------------
-# Tables
-# ---------------------------------------------------------------------------
 
 output "table_names" {
   description = "Logical key to full table name. This is the map an application passes to its Lambda so the code never rebuilds a table name from a prefix. The keys are the package's logical names, so table_names[\"refresh-tokens\"] is what webbpulse.dynamodb.table_name resolves to."
@@ -92,10 +84,6 @@ output "table_policy_json" {
   value       = local.table_policy_json
 }
 
-# ---------------------------------------------------------------------------
-# The authorizer
-# ---------------------------------------------------------------------------
-
 output "authorizer_id" {
   description = "Id of the JWT authorizer, null when http_api_id was not given. Attach it to the routes that require a token, either as the http-api module's per-route authorizer_id or on a standalone aws_apigatewayv2_route. It is deliberately not attached to anything here: a route naming this authorizer must be created after it while the discovery routes must be created before it, and one for_each cannot express both."
   value       = one(aws_apigatewayv2_authorizer.identity_jwt[*].id)
@@ -106,10 +94,6 @@ output "authorizer_name" {
   value       = one(aws_apigatewayv2_authorizer.identity_jwt[*].name)
 }
 
-# ---------------------------------------------------------------------------
-# The environment block
-# ---------------------------------------------------------------------------
-
 output "identity_environment" {
   description = <<-EOT
     The IDENTITY_ environment variables that follow from this module's own resources, ready to
@@ -119,19 +103,9 @@ output "identity_environment" {
       first), IDENTITY_COOKIE_DOMAIN, IDENTITY_RP_ID and, when an MFA envelope key exists,
       IDENTITY_DATA_KEY_ARN.
 
-    Every name is a field of webbpulse.identity.IdentitySettings, whose env_prefix is IDENTITY_, so
-    the composition root builds the settings object straight from the environment.
-
-    IDENTITY_DATA_KEY_ARN is present only when there is a key to name, either one this module
-    created or one supplied through mfa_encryption_key_arn. IdentitySettings.data_key_arn defaults
-    to an empty string and EnvelopeCipher refuses to construct on one, so an absent variable and an
-    empty one mean the same thing to the package and omitting it keeps the rendered environment
-    honest about which keys exist.
-
-    It is deliberately not the whole block. IDENTITY_ENVIRONMENT, IDENTITY_RP_NAME,
-    IDENTITY_PRODUCT_NAME, IDENTITY_SUPPORT_EMAIL and IDENTITY_FRONTEND_BASE_URL are product
-    strings this module has no resource behind and no business inventing, so the consumer merges
-    them alongside this map. Merge this one last so a product override wins.
+    Product strings this module owns no resource for (IDENTITY_ENVIRONMENT, IDENTITY_RP_NAME,
+    IDENTITY_PRODUCT_NAME, IDENTITY_SUPPORT_EMAIL, IDENTITY_FRONTEND_BASE_URL) are not included;
+    merge this map first so a product override wins.
   EOT
 
   value = local.identity_environment

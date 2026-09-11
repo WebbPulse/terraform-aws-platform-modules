@@ -1,5 +1,7 @@
-// Runs before the gate on every non-API, non-auth request. Return a response to end the request
-// early (redirects), or return event.request, rewritten or not, to continue into the gate check.
+/**
+ * Runs before the gate on non-API, non-auth requests. Return a response to end
+ * the request early, or return the request to continue into the session check.
+ */
 function appHandler(event) {
   var request = event.request;
   var host = request.headers.host && request.headers.host.value;

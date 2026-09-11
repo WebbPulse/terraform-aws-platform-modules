@@ -1,9 +1,3 @@
-# The rate limiter fail open alarm: one metric filter per log group and exactly one alarm summing
-# them, off unless asked for. The assertions pin the four things the shape depends on: the feature
-# creates nothing by default, the log groups default to error_log_groups, every filter publishes to
-# one dimensionless metric so a single plain alarm is the total, and the alarm is a plain metric
-# alarm rather than metric math so it carries no 10 metric ceiling.
-
 variables {
   name_prefix = "example-staging"
 
@@ -25,8 +19,6 @@ provider "aws" {
   skip_region_validation      = true
 }
 
-# The backward compatibility guarantee. An existing consumer already passing error_log_groups must
-# see no new resource until it sets the switch, which is what makes 2.4.0 a no plan change release.
 run "off_by_default_even_with_error_log_groups_set" {
   command = plan
 
@@ -53,7 +45,6 @@ run "one_filter_per_log_group_and_exactly_one_alarm" {
     error_message = "The log groups must default to error_log_groups, which holds four entries, so there must be one filter each."
   }
 
-  # The whole point of the aggregate shape: four log groups, still one alarm.
   assert {
     condition     = length(aws_cloudwatch_metric_alarm.rate_limit_failed_open) == 1
     error_message = "Four log groups must still produce exactly one alarm: that is what keeps the alarm count flat as the estate grows."
@@ -70,10 +61,6 @@ run "one_filter_per_log_group_and_exactly_one_alarm" {
   }
 }
 
-# Dimensions are part of a metric's unique identifier, so a dimension here would split the metric
-# into one series per function and a plain alarm would watch one of them rather than the total.
-# default_value = 0 keeps the metric reporting a real 0 in quiet periods instead of a gap, and a
-# filter with dimensions cannot also set a default value.
 run "every_filter_publishes_one_dimensionless_metric_with_a_zero_default" {
   command = plan
 
@@ -105,8 +92,6 @@ run "every_filter_publishes_one_dimensionless_metric_with_a_zero_default" {
     error_message = "default_value must be 0 so the metric reports a real zero in quiet periods rather than a gap."
   }
 
-  # The metric is deliberately separate from the application errors metric: a fail open is a
-  # request that went through unprotected, not a request that went wrong.
   assert {
     condition     = one(aws_cloudwatch_metric_alarm.rate_limit_failed_open[*].metric_name) != one(aws_cloudwatch_metric_alarm.errors[*].metric_name)
     error_message = "The fail open metric must not be the application errors metric: the two mean different things and want separate thresholds."
@@ -125,8 +110,6 @@ run "the_alarm_is_a_plain_sum_metric_alarm" {
     error_message = "The alarm must take the Sum: on a dimensionless metric that is already the total across every filter."
   }
 
-  # No metric_query means no metric math, which is what keeps this off the 10 metric ceiling that
-  # caps the aggregate Lambda alarms.
   assert {
     condition     = length(one(aws_cloudwatch_metric_alarm.rate_limit_failed_open[*].metric_query)) == 0
     error_message = "The alarm must be a plain metric alarm, not metric math, so the number of log groups it covers has no ceiling."
@@ -143,8 +126,6 @@ run "the_alarm_is_a_plain_sum_metric_alarm" {
   }
 }
 
-# The override replaces the error_log_groups list rather than merging with it, so a consumer whose
-# limiter runs in only some functions, or in one the error filters do not watch, can say so.
 run "the_log_group_override_replaces_rather_than_merges" {
   command = plan
 
@@ -167,8 +148,6 @@ run "the_log_group_override_replaces_rather_than_merges" {
   }
 }
 
-# Turning the switch on with nothing to watch must create nothing, rather than an alarm that can
-# never leave INSUFFICIENT_DATA.
 run "the_switch_alone_creates_nothing" {
   command = plan
 

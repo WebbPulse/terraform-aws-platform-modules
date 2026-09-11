@@ -1,7 +1,3 @@
-# The three secrets the gate depends on. All land in SSM SecureString under one prefix so the
-# Lambda role can be scoped to exactly that prefix, and so a deploy pipeline that needs the
-# origin header (for a health check against the API host) has one well-known place to read it.
-
 resource "tls_private_key" "signing" {
   algorithm = "RSA"
   rsa_bits  = 2048

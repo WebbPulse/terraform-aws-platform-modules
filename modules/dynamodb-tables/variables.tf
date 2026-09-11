@@ -27,12 +27,9 @@ variable "tables" {
                   input. null takes the module-wide value.
       deletion_protection  per-table override of the module-wide deletion_protection input.
                   null takes the module-wide value.
-      stream_view_type  per-table stream. A non-null value turns the stream on for this
-                  table alone and sets what its records carry: KEYS_ONLY, NEW_IMAGE,
-                  OLD_IMAGE or NEW_AND_OLD_IMAGES. null takes the module-wide
-                  stream_enabled and stream_view_type pair, so a consumer that sets
-                  neither gets the table it has today. This is the field to use when only
-                  some of the tables in one module call need a stream.
+      stream_view_type  per-table stream: KEYS_ONLY, NEW_IMAGE, OLD_IMAGE or
+                  NEW_AND_OLD_IMAGES turns it on for this table alone. null takes the
+                  module-wide stream_enabled and stream_view_type pair.
       tags        extra tags for this table on top of tags and the provider default_tags.
 
     Every field except attributes and hash_key is optional.

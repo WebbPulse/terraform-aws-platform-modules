@@ -113,18 +113,6 @@ resource "aws_lambda_function" "this" {
   tags = var.tags
 }
 
-# X-Ray write permission for the execution role. The two actions here are the whole of what a
-# runtime needs to publish a trace; they are granted inline rather than through the AWS managed
-# AWSXRayDaemonWriteAccess policy, which also carries xray:GetSamplingRules,
-# xray:GetSamplingTargets and xray:GetSamplingStatisticSummaries. Those three matter to a process
-# that runs its own X-Ray sampler and asks the service which requests to record. A Lambda function
-# does not: the service decides sampling before the invoke and hands the runtime a trace header
-# that already carries the decision. Granting them would be three permissions no function here
-# uses, so the smaller inline statement is the one that ships.
-#
-# xray:PutTraceSegments and xray:PutTelemetryRecords take no resource-level permissions, so "*" is
-# the only resource an X-Ray write policy can name. That is a property of the service's IAM
-# surface, not a wildcard chosen for convenience.
 data "aws_iam_policy_document" "xray_write" {
   count = local.attach_xray_write_policy ? 1 : 0
 

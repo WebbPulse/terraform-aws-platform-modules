@@ -1,9 +1,3 @@
-# A staging workspace that owns staging.example.com and delegates it from example.com, which lives
-# in another account. The workspace's own credentials create the child zone; the NS record in the
-# parent is written through a second provider configuration that assumes a narrowly scoped Route 53
-# write role in the parent's account. The production workspace of the same application sets
-# enabled = false and the module plans nothing.
-
 variable "environment" {
   description = "production or staging"
   type        = string
@@ -31,8 +25,6 @@ provider "aws" {
   region = "us-west-2"
 }
 
-# Only used for the delegation record. Keep the assume_role dynamic so the same configuration
-# works where no cross-account role is needed.
 provider "aws" {
   alias  = "parent_dns"
   region = "us-west-2"
@@ -60,9 +52,6 @@ module "staging_dns" {
   parent_zone_id = var.parent_zone_id
 }
 
-# Certificate validation must wait for the delegation, otherwise ACM asks the parent's resolvers
-# for a record they do not know about yet. depends_on cannot name an output, so depend on the
-# module: it holds nothing but the zone and the delegation.
 resource "aws_acm_certificate" "site" {
   count = local.staging ? 1 : 0
 

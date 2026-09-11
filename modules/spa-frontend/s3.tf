@@ -1,5 +1,3 @@
-# Private bucket. Nothing reads it except CloudFront through the origin access control below.
-
 resource "aws_s3_bucket" "this" {
   bucket = local.bucket_name
 

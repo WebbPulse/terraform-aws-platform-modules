@@ -74,11 +74,6 @@ output "lambda_aggregate_alarm_arns" {
   )
 }
 
-# The two singular outputs below predate chunking, when there was at most one alarm of each kind.
-# They keep their names and their meaning for the estate they were written for, a list of 10 or
-# fewer functions, and report the first group's alarm once the list is long enough to chunk rather
-# than failing or silently changing which alarm they name. A consumer past 10 functions wants the
-# plural outputs instead; a composite alarm built on the singular one would cover only group 0.
 output "lambda_aggregate_errors_alarm_arn" {
   description = "ARN of the first aggregate Lambda errors alarm, which is the only one until lambda_function_names passes 10 names. null when lambda_aggregate_alarm is false. Use lambda_aggregate_errors_alarm_arns to cover every group."
   value       = try(aws_cloudwatch_metric_alarm.lambda_aggregate_errors[0].arn, null)

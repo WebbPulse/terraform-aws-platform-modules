@@ -1,13 +1,7 @@
-// Builds the authorizer deployment package the way the Terraform module builds it, so the unit
-// tests load the handler out of a real package rather than out of the module source directory.
-//
-// The module's archive_file has two source blocks: lambda/authorizer/index.js verbatim, and
-// identity_jwt_config.json rendered from the module's inputs. index.js reads that JSON next to
-// itself at import time, so a test that required ../lambda/authorizer/index.js directly would be
-// testing a package that can never be deployed: the config file is not on disk in the source tree
-// and must not be, because Terraform renders it per consumer.
-//
-// Everything lands under test/.build/, which .gitignore already covers.
+/**
+ * Builds the authorizer deployment package under test/.build/ the way the
+ * Terraform module builds it, so the tests load the handler from a real package.
+ */
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,8 +11,7 @@ const ROOT = path.join(__dirname, '.build');
 
 let counter = 0;
 
-// Renders identity_jwt_config.json exactly as locals.tf does: the same two keys, the route key list
-// sorted, and JSON.stringify standing in for jsonencode.
+/** Renders identity_jwt_config.json exactly as locals.tf does, with the route keys sorted. */
 function renderConfig({ routeKeys = [], signingPublicKeyPem = '', anonymousPathPrefixes = [] } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
@@ -27,9 +20,10 @@ function renderConfig({ routeKeys = [], signingPublicKeyPem = '', anonymousPathP
   });
 }
 
-// Writes a fresh package and returns the freshly required handler module. Each call gets its own
-// directory and its own require path, so two packages with different route key lists can be loaded
-// side by side without fighting over the module cache.
+/**
+ * Writes a fresh package and requires the handler from it. Each call gets its own
+ * directory, so packages with different configs load side by side.
+ */
 function loadAuthorizer(config) {
   counter += 1;
   const dir = path.join(ROOT, `authorizer-${counter}`);
@@ -41,7 +35,7 @@ function loadAuthorizer(config) {
   return require(entry);
 }
 
-// A package with the config file deliberately missing, for the fail-closed assertion.
+/** Builds a package with the config file missing, for the fail-closed assertion. */
 function loadAuthorizerWithoutConfig() {
   counter += 1;
   const dir = path.join(ROOT, `authorizer-${counter}`);

@@ -21,8 +21,6 @@ resource "aws_secretsmanager_secret" "this" {
   tags = merge(var.tags, each.value.tags)
 }
 
-# Secrets whose value Terraform owns: generated, passed in, or composed into JSON. A change to the
-# value replaces the version, which is the intended behaviour here.
 resource "aws_secretsmanager_secret_version" "this" {
   for_each = local.managed_keys
 
@@ -30,8 +28,6 @@ resource "aws_secretsmanager_secret_version" "this" {
   secret_string = local.version_strings[each.key]
 }
 
-# Placeholder secrets: seeded once so the secret has a version, then left alone. An operator sets
-# the real value with `aws secretsmanager put-secret-value` and Terraform never plans it back.
 resource "aws_secretsmanager_secret_version" "placeholder" {
   for_each = local.placeholder_keys
 

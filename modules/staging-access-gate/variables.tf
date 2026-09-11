@@ -139,10 +139,6 @@ variable "log_retention_days" {
   default     = 14
 }
 
-# ---------------------------------------------------------------------------
-# Identity access token enforcement
-# ---------------------------------------------------------------------------
-
 variable "identity_jwt" {
   description = <<-EOT
     Make the gate's authorizer also require a valid identity access token on the routes named in
@@ -160,14 +156,8 @@ variable "identity_jwt" {
       clock_skew_seconds  optional leeway on exp and nbf, for skew between the signer and this
                           function. Default 60
 
-    This exists because an HTTP API route takes exactly one authorizer and in staging that one is
-    the gate's, so the identity token cannot be enforced by a native JWT authorizer alongside it.
-    The gate's Lambda verifies the token itself instead: RS256 only, signature against the issuer's
-    JWKS, then iss, aud, exp and nbf. The gate check still runs first and still has to pass, so this
-    only ever narrows access.
-
-    Production does not use this. There the native JWT authorizer does the work, configured through
-    the http-api module's own identity_jwt input.
+    Staging only; production enforces the same token through the http-api module's identity_jwt
+    input. The gate credential check still runs first, so this only narrows access.
   EOT
 
   type = object({

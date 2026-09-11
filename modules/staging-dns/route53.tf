@@ -1,6 +1,3 @@
-# The child zone lives in the consumer's own account (default aws provider). Only the NS record
-# that points the parent at it is written through aws.parent.
-
 resource "aws_route53_zone" "this" {
   count = local.zone_count
 

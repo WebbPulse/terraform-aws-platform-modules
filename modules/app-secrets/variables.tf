@@ -77,9 +77,8 @@ variable "secrets" {
       `generate_min_special`,
       `generate_min_numeric`,
       `generate_min_upper`,
-      `generate_min_lower`     : passed to random_password when `generate` is true. They match the
-                                 provider's own defaults so an existing random_password can be moved in
-                                 without the generator's arguments changing.
+      `generate_min_lower`     : passed to random_password when `generate` is true, defaulting to
+                                 the provider's own defaults.
   EOT
 
   type = map(object({

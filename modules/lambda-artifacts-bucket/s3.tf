@@ -1,6 +1,3 @@
-# The bucket GitHub Actions uploads Lambda deployment packages to, and the Lambda function reads
-# its code from. Versioned so a bad deploy can be rolled back to the previous object version, and
-# swept so old versions and stalled multipart uploads do not accumulate.
 resource "aws_s3_bucket" "this" {
   bucket        = var.bucket
   force_destroy = var.force_destroy
@@ -8,7 +5,6 @@ resource "aws_s3_bucket" "this" {
   tags = var.tags
 }
 
-# Deployment packages are never public. Nothing here is served to a browser.
 resource "aws_s3_bucket_public_access_block" "this" {
   bucket = aws_s3_bucket.this.id
 
@@ -41,8 +37,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   }
 }
 
-# One rule, unfiltered: drop noncurrent versions after their retention and abort multipart uploads
-# that were never completed. Current versions are kept, the Lambda reads one of them.
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
   bucket = aws_s3_bucket.this.id
 
@@ -61,13 +55,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
     }
   }
 
-  # A noncurrent-version rule needs versioning on the bucket, which only matters on the first
-  # apply. Toggling this changes no attribute of the configuration itself.
   depends_on = [aws_s3_bucket_versioning.this]
 }
 
-# A stand-in deployment package so the Lambda has an object to point at before the first real
-# deploy. The zip is built by the caller; this only puts it in place.
 resource "aws_s3_object" "placeholder" {
   count = local.placeholder_count
 

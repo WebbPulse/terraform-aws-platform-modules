@@ -1,9 +1,3 @@
-# Minimal consumer: an existing S3-backed SPA distribution and an existing HTTP API with a custom
-# domain, both moved behind the gate. The SPA calls https://api.staging.example.com directly, the
-# way it does in production; the gate's authorizer verifies the same signed cookies the browser
-# already holds, so the API never has to be proxied through CloudFront. Real consumers gate every
-# block below on a variable so the production plan is a no-op; see the module README.
-
 module "gate" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
   version = "~> 1.0"
@@ -13,9 +7,6 @@ module "gate" {
   site_host      = "www.staging.example.com"
   allowed_emails = ["someone@example.com"]
 
-  # cloudfront_distribution_arn is left unset on purpose: the distribution below consumes this
-  # module's outputs, so naming it here would be a cycle. The invoke permission then covers any
-  # distribution in the account.
   http_api_id = aws_apigatewayv2_api.api.id
 
   viewer_request_handler_js = file("${path.module}/app_handler.js")
@@ -26,8 +17,6 @@ resource "aws_cloudfront_distribution" "frontend" {
   default_root_object = "index.html"
   aliases             = ["www.staging.example.com"]
 
-  # The SPA's own origin. A real consumer already has this bucket and an origin access
-  # control on it; only the gate specific blocks below are new.
   origin {
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
     origin_id                = "s3-frontend"
@@ -76,8 +65,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  # The SPA fallback page must be reachable by CloudFront's own custom_error_response fetch, which
-  # carries no cookies; the gate function still turns away browsers that ask for it directly.
   ordered_cache_behavior {
     path_pattern           = "/index.html"
     target_origin_id       = "s3-frontend"
@@ -92,7 +79,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  # SPA fallback: CloudFront serves the app shell for client side routes.
   custom_error_response {
     error_code         = 403
     response_code      = 200
@@ -111,8 +97,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  # A real consumer points this at the ACM certificate covering the alias above, issued in
-  # us-east-1. The default certificate keeps this example free of cross region plumbing.
   viewer_certificate {
     cloudfront_default_certificate = true
   }
@@ -134,9 +118,6 @@ resource "aws_apigatewayv2_api" "api" {
   protocol_type                = "HTTP"
   disable_execute_api_endpoint = true
 
-  # The browser calls this API from the SPA host, so the origin must be listed explicitly and
-  # credentials allowed; a wildcard origin is not permitted alongside credentials. The gate's
-  # authorizer lets OPTIONS through so this preflight answer is the one the browser sees.
   cors_configuration {
     allow_origins     = ["https://www.staging.example.com"]
     allow_methods     = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -146,8 +127,6 @@ resource "aws_apigatewayv2_api" "api" {
   }
 }
 
-# The application Lambda behind the API, and the integration the route below targets. A real
-# consumer already has these, usually from the lambda-function module.
 resource "aws_apigatewayv2_integration" "lambda" {
   api_id                 = aws_apigatewayv2_api.api.id
   integration_type       = "AWS_PROXY"
@@ -176,10 +155,6 @@ resource "aws_iam_role" "api" {
   })
 }
 
-# Every route carries the gate authorizer. It admits CORS preflights, the origin verification
-# header (for pipelines and health checks, value in module.gate.origin_verify_ssm_parameter_name),
-# and the gate's own signed cookies, which the browser sends because they are scoped to
-# Domain=staging.example.com.
 resource "aws_apigatewayv2_route" "default" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "$default"

@@ -1,6 +1,3 @@
-# One distribution in front of the bucket. Everything that varies between consumers is a variable
-# so that an existing hand-written distribution can be moved here without a replacement.
-
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
   is_ipv6_enabled     = var.ipv6_enabled
@@ -15,7 +12,6 @@ resource "aws_cloudfront_distribution" "this" {
     origin_access_control_id = aws_cloudfront_origin_access_control.this.id
   }
 
-  # Login Lambda function URL, only with an access gate.
   dynamic "origin" {
     for_each = local.gate_enabled ? [1] : []
 
@@ -33,7 +29,6 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # API host with the origin verification header, only in proxy mode.
   dynamic "origin" {
     for_each = local.gate_api_proxy_enabled ? [1] : []
 
@@ -95,10 +90,6 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # Ordered behaviors exist only with an access gate. Their order matters: CloudFront evaluates
-  # path patterns top to bottom. The API behavior in the middle exists only in proxy mode, so
-  # without it the auth and SPA shell behaviors keep the same relative order.
-
   dynamic "ordered_cache_behavior" {
     for_each = local.gate_enabled ? [1] : []
 
@@ -118,7 +109,6 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # The API behavior exists only in proxy mode.
   dynamic "ordered_cache_behavior" {
     for_each = local.gate_api_proxy_enabled ? [1] : []
 
@@ -139,10 +129,6 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # The SPA shell must stay reachable without signed cookies, because CloudFront's own
-  # custom_error_response fetch carries none. The gate function still turns away browsers that
-  # ask for it directly without a session. Caching mirrors the default behavior unless
-  # index_cache_mode or index_cache_policies says otherwise.
   dynamic "ordered_cache_behavior" {
     for_each = local.gate_enabled ? [1] : []
 
@@ -182,7 +168,6 @@ resource "aws_cloudfront_distribution" "this" {
     }
   }
 
-  # Client-side routing: S3 misses come back as the SPA shell with a 200.
   dynamic "custom_error_response" {
     for_each = toset(var.spa_fallback_error_codes)
 

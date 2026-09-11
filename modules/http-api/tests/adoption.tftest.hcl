@@ -1,8 +1,3 @@
-# Adoption from 1.x. These prove the two inputs an adopting consumer must get exactly right so that
-# the plan reads "2 to move, 0 to add, 0 to change, 0 to destroy": the integration key is "legacy",
-# which is the key the module's own moved blocks target, and the route keys are unchanged, which is
-# what keeps every route at its 1.x address.
-
 variables {
   name = "example-adopt-api"
 
@@ -27,7 +22,6 @@ provider "aws" {
   skip_region_validation      = true
 }
 
-# CarModPicker's 1.x shape: route_keys = ["$default"], one integration, the default statement id.
 run "carmodpicker_shape" {
   command = plan
 
@@ -47,9 +41,6 @@ run "carmodpicker_shape" {
   }
 }
 
-# WebbPulse-Portfolio's 1.x shape: two explicit route keys, no $default at all, and a custom
-# statement id. Portfolio's monolith is reached through "ANY /{proxy+}" and "ANY /", so those two
-# keys are its routes and default_integration is null; the addresses match 1.x exactly.
 run "portfolio_shape" {
   command = plan
 
@@ -86,9 +77,6 @@ run "portfolio_shape" {
   }
 }
 
-# And the first strangler step on top of the Portfolio shape: the monolith becomes the
-# default_integration so it keeps catching everything, and one prefix moves. The two 1.x route keys
-# are retired in the same change, which is a route replacement and is called out in the README.
 run "portfolio_first_strangler_step" {
   command = plan
 

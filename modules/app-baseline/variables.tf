@@ -24,10 +24,6 @@ variable "notification_emails" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# Resource group
-# ---------------------------------------------------------------------------
-
 variable "resource_group_enabled" {
   description = "Create the tag based resource group. false makes that part of the module a no-op, for an account that already groups its resources some other way."
   type        = bool
@@ -67,10 +63,6 @@ variable "resource_group_resource_type_filters" {
     error_message = "resource_group_resource_type_filters must hold at least one entry. AWS::AllSupported is the catch all."
   }
 }
-
-# ---------------------------------------------------------------------------
-# Cost anomaly detection
-# ---------------------------------------------------------------------------
 
 variable "anomaly_detection_enabled" {
   description = "Create the Cost Explorer anomaly monitor and its subscription. Cost anomaly detection is free, so the only reason to turn it off is an account that is monitored from the payer instead."
@@ -116,10 +108,6 @@ variable "anomaly_sns_topic_arns" {
   type        = list(string)
   default     = []
 }
-
-# ---------------------------------------------------------------------------
-# Budgets
-# ---------------------------------------------------------------------------
 
 variable "budgets" {
   description = <<-EOT

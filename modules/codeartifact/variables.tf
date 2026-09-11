@@ -2,9 +2,6 @@ variable "domain" {
   description = "Name of the CodeArtifact domain. Storage is billed once per domain, deduplicated across every repository in it, so an estate wants exactly one. The name only has to be unique within the owning account, which is why every cross-account call also carries the domain owner."
   type        = string
 
-  # CreateDomain's own pattern is [a-z][a-z0-9\-]{0,48}[a-z0-9]: it must start with a letter and
-  # end alphanumeric, so a trailing hyphen is rejected by the API. Matching it here rather than
-  # allowing one and failing on apply.
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{0,48}[a-z0-9]$", var.domain))
     error_message = "domain must be 2 to 50 characters, start with a lowercase letter, end with a lowercase letter or digit, and hold only lowercase letters, digits and hyphens."
@@ -52,8 +49,6 @@ variable "repositories" {
     tags                 = optional(map(string), {})
   }))
 
-  # CreateRepository's pattern is [A-Za-z0-9][A-Za-z0-9._\-]{1,99}, so the effective minimum is two
-  # characters, not one.
   validation {
     condition = alltrue([
       for k, _ in var.repositories : can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$", k))
@@ -61,9 +56,6 @@ variable "repositories" {
     error_message = "Every repository name must be 2 to 100 characters, start with a letter or digit and hold only letters, digits and the characters . _ - which are what CodeArtifact accepts."
   }
 
-  # CodeArtifact allows at most one external connection per repository. The provider models
-  # external_connections as a block with max_items 1, so a longer list is a plan-time error with a
-  # message about block counts; catching it here says what the actual rule is.
   validation {
     condition = alltrue([
       for k, r in var.repositories : length(r.external_connections) <= 1
@@ -71,8 +63,6 @@ variable "repositories" {
     error_message = "A repository may have at most one external connection. Give each package format its own store repository, for example pypi-store with public:pypi and npm-store with public:npmjs."
   }
 
-  # The rule that shapes the whole layout: an external connection and upstreams are mutually
-  # exclusive on one repository, which is why the store repositories exist at all.
   validation {
     condition = alltrue([
       for k, r in var.repositories : length(r.external_connections) == 0 || length(r.upstreams) == 0
@@ -88,8 +78,6 @@ variable "repositories" {
     error_message = "An external connection looks like public:<registry>, for example public:pypi, public:npmjs, public:maven-central or public:nuget-org."
   }
 
-  # An upstream naming a repository outside the map would be created against a repository the module
-  # does not manage, and the dependency ordering below would not cover it.
   validation {
     condition = alltrue([
       for k, r in var.repositories :
@@ -112,9 +100,6 @@ variable "repositories" {
     error_message = "A repository's upstreams list contains a duplicate entry."
   }
 
-  # Upstream depth is capped at three levels below, because Terraform has no loop and the ordering
-  # is expressed as explicit tiers. Two hops, store -> internal -> fan-in, is the deepest layout the
-  # house style uses.
   validation {
     condition = alltrue([
       for k, r in var.repositories :

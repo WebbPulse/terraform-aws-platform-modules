@@ -9,8 +9,6 @@ resource "aws_dynamodb_table" "this" {
   read_capacity  = var.read_capacity
   write_capacity = var.write_capacity
 
-  # Every key attribute the table or one of its indexes uses. The provider stores this as a set,
-  # so the order the consumer writes them in does not reach the plan.
   dynamic "attribute" {
     for_each = each.value.attributes
 
@@ -56,14 +54,6 @@ resource "aws_dynamodb_table" "this" {
     }
   }
 
-  # Resolved in locals.tf: a table's own stream_view_type wins, otherwise the module-wide pair.
-  #
-  # Two DynamoDB behaviours are worth knowing before changing either of these on a live table.
-  # Turning a stream on is an in-place UpdateTable and never replaces the table. But the view type
-  # cannot be edited once a stream exists: changing it disables and re-creates the stream, which
-  # mints a new stream ARN and silently detaches every event source mapping and pipe reading the
-  # old one. Pick the view type for what the eventual consumer needs, not for what the first one
-  # does. See the "Streams" section of the module README.
   stream_enabled   = local.stream_enabled[each.key]
   stream_view_type = local.stream_view_type[each.key]
 

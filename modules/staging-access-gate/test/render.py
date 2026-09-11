@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render cloudfront_functions/gate.js.tftpl the way Terraform would, with a sample appHandler, for the local test harness."""
+"""Render gate.js.tftpl the way Terraform would, with a sample appHandler, for the local tests."""
 import pathlib
 root = pathlib.Path(__file__).resolve().parent.parent
 t = (root / 'cloudfront_functions' / 'gate.js.tftpl').read_text()

@@ -1,11 +1,3 @@
-# Per-table streams: a table's own stream_view_type turns that table's stream on by itself, the
-# module-wide pair still drives every table that sets no value of its own, and a consumer that sets
-# neither gets the streamless table it has today.
-#
-# The last of those is the backward compatibility guarantee and is what makes this a no plan change
-# release for every existing call. The mixed case is the one the module-wide pair could not express
-# at all before this change: streams on some of the tables in one call and not on the rest.
-
 variables {
   name_prefix = "example-staging"
 
@@ -39,9 +31,6 @@ provider "aws" {
   skip_region_validation      = true
 }
 
-# Streams on two of the three tables, each carrying its own view type, and the third left exactly as
-# it is. This is the whole point of the field: the module-wide pair is one value for every table the
-# call creates, so it cannot leave `sessions` alone while streaming the other two.
 run "per_table_value_streams_only_that_table" {
   command = plan
 
@@ -64,14 +53,8 @@ run "per_table_value_streams_only_that_table" {
     condition     = !aws_dynamodb_table.this["sessions"].stream_enabled
     error_message = "A table that sets no stream_view_type must not be streamed by another table's value."
   }
-
-  # stream_view_type is not asserted on the streamless table: the provider marks it computed when
-  # the stream is off, so it is unknown at plan time. stream_enabled is the flag that decides
-  # whether a stream exists at all, and it is known, so it is the one worth pinning.
 }
 
-# The backward compatibility guarantee. Neither the module-wide pair nor any per-table value is set,
-# which is every existing consumer, and no table may gain a stream.
 run "no_stream_anywhere_by_default" {
   command = plan
 
@@ -96,7 +79,6 @@ run "no_stream_anywhere_by_default" {
   }
 }
 
-# The module-wide pair still works and still reaches every table that sets no value of its own.
 run "module_wide_pair_still_applies_to_all" {
   command = plan
 
@@ -131,8 +113,6 @@ run "module_wide_pair_still_applies_to_all" {
   }
 }
 
-# Precedence, in both directions. A per-table value overrides the module-wide view type, and it also
-# turns a stream on for its own table while the module-wide switch is off.
 run "per_table_value_overrides_module_wide" {
   command = plan
 
@@ -164,8 +144,6 @@ run "per_table_value_overrides_module_wide" {
   }
 }
 
-# A rejected view type is caught at plan time rather than by DynamoDB at apply time, which is the
-# same guarantee the module's other validations give.
 run "invalid_per_table_view_type_is_rejected" {
   command = plan
 

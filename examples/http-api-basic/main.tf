@@ -1,13 +1,3 @@
-# A Lambda function served at https://api.example.com through an HTTP API. The function, its
-# certificate and the hosted zone belong to the consumer; the module owns the API, its stage,
-# access log, routes, invoke permission, custom domain, mapping and the alias record.
-#
-# This is the single-integration shape, the 2.0 equivalent of what 1.x did with lambda_invoke_arn:
-# one backend named "legacy" and default_integration pointing at it, so $default carries everything.
-#
-# Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/http-api"
-# with version = "~> 2.0"; the relative path here keeps the example runnable from the repository.
-
 terraform {
   required_version = ">= 1.10"
 
@@ -36,8 +26,6 @@ locals {
 data "aws_route53_zone" "this" {
   name = local.domain_name
 }
-
-# --- The function -----------------------------------------------------------------------------
 
 data "archive_file" "handler" {
   type        = "zip"
@@ -78,11 +66,6 @@ resource "aws_lambda_function" "api" {
   timeout          = 29
 }
 
-# --- The certificate, validated in the same zone ---------------------------------------------
-# The module takes an issued certificate ARN rather than creating the certificate itself, because
-# the validation records are written by whichever provider can reach the zone. Here that is the
-# default provider; a consumer whose zone lives in another account uses a provider alias.
-
 resource "aws_acm_certificate" "api" {
   domain_name       = local.api_host
   validation_method = "DNS"
@@ -114,16 +97,12 @@ resource "aws_acm_certificate_validation" "api" {
   validation_record_fqdns = [for r in aws_route53_record.api_cert_validation : r.fqdn]
 }
 
-# --- The API ----------------------------------------------------------------------------------
-
 module "api" {
   source = "../../modules/http-api"
 
   name        = "${local.name}-api"
   description = "Example ${local.name} API (Lambda proxy)"
 
-  # One backend. Naming it "legacy" is what lets the module's own moved blocks take over a 1.x
-  # integration and permission without destroying either.
   integrations = {
     legacy = {
       lambda_function_name = aws_lambda_function.api.function_name
@@ -134,13 +113,10 @@ module "api" {
 
   default_integration = "legacy"
 
-  # Layer 1 of the rate limiting: the stage's default route settings cover every route.
   throttling_burst_limit    = 50
   throttling_rate_limit     = 25
   access_log_retention_days = 14
 
-  # Pass the validation's certificate_arn, not the certificate's arn, so the custom domain is
-  # created only after the certificate is issued.
   domain_name     = local.api_host
   certificate_arn = aws_acm_certificate_validation.api.certificate_arn
   zone_id         = data.aws_route53_zone.this.zone_id

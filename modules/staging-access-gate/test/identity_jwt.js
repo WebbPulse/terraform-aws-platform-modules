@@ -1,9 +1,7 @@
-// Unit tests for the identity access token half of the gate authorizer.
-//
-// Everything is local: a throwaway RSA key pair is generated in-process, tokens are signed with it,
-// and the JWKS fetch is stubbed on globalThis.fetch. No network, no AWS, no credentials.
-//
-// Run through test/run.js, which runs the gate and login suites first.
+/**
+ * Unit tests for the identity access token half of the gate authorizer.
+ * Fully local: keys are generated in process and the JWKS fetch is stubbed.
+ */
 
 const assert = require('node:assert');
 const crypto = require('node:crypto');
@@ -15,15 +13,10 @@ const AUDIENCE = 'example-staging-api';
 const PROTECTED = 'GET /api/auth/me';
 const OPEN = 'POST /api/auth/login';
 
-// Two routes that sit under an enforced prefix and must stay anonymous. They are the reason the
-// route key list is matched exactly and never by prefix: "GET /api/reports/count" answers
-// unauthenticated callers while "GET /api/reports/{id}" requires a token, and both begin
-// "GET /api/reports/".
 const GUARD_ONE = 'GET /api/reports/count';
 const GUARD_TWO = 'GET /api/health';
 const PREFIX_SIBLING = 'GET /api/reports/{id}';
 
-// The signing key the "identity function" uses, and a second one nothing trusts.
 const signer = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const foreign = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 
@@ -31,10 +24,12 @@ const KID = 'key-one';
 const ROTATED_KID = 'key-two';
 const rotated = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 
+/** Exports a public key as a JWKS entry with the given kid. */
 function jwk(publicKey, kid) {
   return { ...publicKey.export({ format: 'jwk' }), kid, alg: 'RS256', use: 'sig' };
 }
 
+/** Signs claims into a compact JWT, allowing a forged alg or key for the negative cases. */
 function sign(claims, { key = signer.privateKey, kid = KID, alg = 'RS256' } = {}) {
   const header = Buffer.from(JSON.stringify({ alg, kid, typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
@@ -46,6 +41,7 @@ function sign(claims, { key = signer.privateKey, kid = KID, alg = 'RS256' } = {}
 
 const now = () => Math.floor(Date.now() / 1000);
 
+/** Builds a valid claim set for this issuer and audience. */
 function claims(overrides = {}) {
   return {
     sub: 'user-123',
@@ -59,10 +55,8 @@ function claims(overrides = {}) {
   };
 }
 
+/** Runs the identity access token assertions against the packaged authorizer. */
 module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
-  // The environment the Terraform module renders. The route key list and the signing public key are
-  // no longer in it: they are rendered into identity_jwt_config.json inside the deployment package,
-  // because the whole environment is capped at 4096 bytes and the list is what overran it.
   process.env.HEADER_NAME = 'x-origin-verify';
   process.env.ORIGIN_VERIFY_PARAM = '/o';
   process.env.KEY_PAIR_ID = 'KPUB1';
@@ -76,10 +70,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   const ENFORCED = [PROTECTED, 'ANY /api/v1/{proxy+}', PREFIX_SIBLING];
   const auth = loadAuthorizer({ routeKeys: ENFORCED, signingPublicKeyPem: publicPem });
 
-  // --- the list comes from the package, not the environment ------------------------------------
-
-  // What the handler is enforcing is exactly what the module rendered into the package, and it got
-  // there with no environment variable carrying it.
   assert.deepStrictEqual(
     auth.enforcedRouteKeys(),
     [...ENFORCED].sort(),
@@ -96,15 +86,9 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     'no environment variable carries the signing public key',
   );
 
-  // The stubbed JWKS endpoint. `served` is what it returns and `fetches` counts calls, which is how
-  // the caching and the unknown-kid refresh are asserted rather than assumed.
   let served = [jwk(signer.publicKey, KID)];
   let fetches = 0;
   let failNext = false;
-  // Every fetch is recorded with the headers it carried, so the origin verification header can be
-  // asserted rather than assumed. `gated` makes the stub behave like the real gated endpoint:
-  // 403 unless the request presents the header, which is exactly the topology that produced the
-  // fail-closed defect.
   let lastFetchHeaders = null;
   let gated = false;
   globalThis.fetch = async (url, init = {}) => {
@@ -121,7 +105,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     return { ok: true, status: 200, json: async () => ({ keys: served }) };
   };
 
-  // A request that already passes the gate, so every assertion below is about the token alone.
   const live = () => signPolicy(now() + 3600);
   const req = (routeKey, token, opts = {}) => ({
     version: '2.0',
@@ -136,15 +119,11 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     fetches = 0;
   };
 
-  // --- the happy path -------------------------------------------------------------------------
-
   fresh();
   let r = await auth.handler(req(PROTECTED, sign(claims())));
   assert.strictEqual(r.isAuthorized, true, 'a valid token on a protected route is allowed');
   assert(r.context, 'an allowed protected request carries a context');
 
-  // The context mirrors the native JWT authorizer as closely as a Lambda authorizer can: one key
-  // named jwt.claims holding every claim as a string, so exp is a string in both environments.
   const emitted = JSON.parse(r.context['jwt.claims']);
   assert.strictEqual(emitted.sub, 'user-123', 'sub is carried through');
   assert.strictEqual(emitted.email, 'me@example.com', 'a string claim stays a bare string');
@@ -154,23 +133,15 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   assert.strictEqual(r.context['jwt.claims.sub'], 'user-123', 'the lifted sub matches');
   assert.strictEqual(r.context['jwt.claims.iss'], ISSUER, 'the lifted iss matches');
 
-  // Every context value has to be a scalar: API Gateway rejects a nested object outright.
   for (const [k, v] of Object.entries(r.context)) {
     assert.strictEqual(typeof v, 'string', `context value ${k} must be a string`);
   }
-
-  // --- an open route is untouched -------------------------------------------------------------
 
   fresh();
   r = await auth.handler(req(OPEN, null));
   assert.deepStrictEqual(r, { isAuthorized: true }, 'a route not in the list needs no token');
   assert.strictEqual(fetches, 0, 'an open route does not fetch the JWKS at all');
 
-  // --- exact match, never prefix match -----------------------------------------------------------
-
-  // The two anonymous guard routes stay anonymous even though one of them shares its whole path
-  // prefix with an enforced route. Anything looser than an exact match breaks this, which is the
-  // reason the list cannot be shortened by prefixes to fit in an environment variable.
   for (const guard of [GUARD_ONE, GUARD_TWO]) {
     fresh();
     r = await auth.handler(req(guard, null));
@@ -178,31 +149,24 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     assert.strictEqual(fetches, 0, `${guard} does not fetch the JWKS`);
   }
 
-  // Its prefix sibling, which is in the list, is enforced.
   fresh();
   r = await auth.handler(req(PREFIX_SIBLING, null));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'the enforced sibling under the same prefix still requires a token');
 
-  // Method is part of the key: the same path under a different method is a different route and is
-  // not enforced unless it is listed in its own right.
   fresh();
   r = await auth.handler(req('POST /api/auth/me', null));
   assert.deepStrictEqual(r, { isAuthorized: true }, 'a different method on an enforced path is a different route key');
 
-  // And a key that is a strict prefix or a strict extension of an enforced one does not match.
   for (const near of ['GET /api/auth', 'GET /api/auth/me/extra', 'GET /api/auth/mex']) {
     fresh();
     r = await auth.handler(req(near, null));
     assert.deepStrictEqual(r, { isAuthorized: true }, `${near} is not the enforced key and is not enforced`);
   }
 
-  // --- missing header when required -----------------------------------------------------------
-
   fresh();
   r = await auth.handler(req(PROTECTED, null));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a protected route with no bearer token is denied');
 
-  // A present but malformed Authorization header is the same answer.
   fresh();
   r = await auth.handler({ ...req(PROTECTED, null), headers: { authorization: 'Basic abc' } });
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a non-bearer Authorization header is denied');
@@ -210,8 +174,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   fresh();
   r = await auth.handler({ ...req(PROTECTED, null), headers: { authorization: 'Bearer not.a.jwt' } });
   assert.deepStrictEqual(r, { isAuthorized: false }, 'an undecodable token is denied');
-
-  // --- expired, and not yet valid -------------------------------------------------------------
 
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims({ exp: now() - 3600 }))));
@@ -221,13 +183,9 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await auth.handler(req(PROTECTED, sign(claims({ nbf: now() + 3600 }))));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a not-yet-valid token is denied');
 
-  // A token that expired two seconds ago is still accepted, because the skew allowance is 60s.
-  // That allowance is deliberate and this asserts it rather than leaving it to be discovered.
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims({ exp: now() - 2 }))));
   assert.strictEqual(r.isAuthorized, true, 'a token just inside the clock skew allowance is accepted');
-
-  // --- wrong issuer, wrong audience -----------------------------------------------------------
 
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims({ iss: 'https://evil.example.com/api/auth' }))));
@@ -237,19 +195,14 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await auth.handler(req(PROTECTED, sign(claims({ aud: 'example-production-api' }))));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a production token is denied in staging');
 
-  // aud as an array is valid per RFC 7519 and must be accepted when it contains ours.
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims({ aud: ['something-else', AUDIENCE] }))));
   assert.strictEqual(r.isAuthorized, true, 'an aud array containing the audience is accepted');
-
-  // --- a forged signature ---------------------------------------------------------------------
 
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims(), { key: foreign.privateKey })));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a token signed by a key not in the JWKS is denied');
 
-  // The alg is read to refuse, never to select. "none" and an HMAC both have to be refused even
-  // though the claims are otherwise perfect.
   fresh();
   const unsignedHeader = Buffer.from(JSON.stringify({ alg: 'none', kid: KID, typ: 'JWT' })).toString('base64url');
   const unsignedPayload = Buffer.from(JSON.stringify(claims())).toString('base64url');
@@ -262,8 +215,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await auth.handler(req(PROTECTED, `${hsHeader}.${unsignedPayload}.${hsSig}`));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'an HMAC token is denied, whatever it is keyed with');
 
-  // --- the JWKS cache, and the unknown kid refresh ---------------------------------------------
-
   fresh();
   await auth.handler(req(PROTECTED, sign(claims())));
   assert.strictEqual(fetches, 1, 'the first verification fetches the JWKS');
@@ -271,21 +222,16 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   await auth.handler(req(PROTECTED, sign(claims())));
   assert.strictEqual(fetches, 1, 'the key set is cached across invocations within the TTL');
 
-  // A key rotation: the identity module adds a second signing key and starts signing with it. The
-  // cached set does not have that kid, so the authorizer refetches once and accepts the token.
   served = [jwk(signer.publicKey, KID), jwk(rotated.publicKey, ROTATED_KID)];
   r = await auth.handler(req(PROTECTED, sign(claims(), { key: rotated.privateKey, kid: ROTATED_KID })));
   assert.strictEqual(r.isAuthorized, true, 'a token signed by a newly rotated key is accepted after a refresh');
   assert.strictEqual(fetches, 2, 'an unknown kid triggers exactly one refetch, not a fetch per request');
 
-  // And a kid that is genuinely not there refetches once and then gives up, rather than refetching
-  // on every subsequent request.
   const before = fetches;
   r = await auth.handler(req(PROTECTED, sign(claims(), { key: foreign.privateKey, kid: 'no-such-key' })));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'an unknown kid that is still unknown after a refresh is denied');
   assert.strictEqual(fetches, before + 1, 'a genuinely unknown kid costs one refetch');
 
-  // A failed refresh falls back to the cached set rather than taking the API down.
   fresh();
   await auth.handler(req(PROTECTED, sign(claims())));
   assert.strictEqual(fetches, 1, 'cache primed');
@@ -295,16 +241,11 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await auth.handler(req(PROTECTED, sign(claims())));
   assert.strictEqual(r.isAuthorized, true, 'a known key still verifies against the cached set after a failed refresh');
 
-  // --- the gate still comes first ---------------------------------------------------------------
-
-  // A perfect token with no gate credentials is refused. The token is an additional requirement and
-  // never a way around the gate.
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims()), { noGate: true }));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a valid token without the gate cookies is denied');
   assert.strictEqual(fetches, 0, 'a request refused by the gate never reaches the token check');
 
-  // A gate cookie set that has expired is refused on a protected route too.
   fresh();
   r = await auth.handler({
     ...req(PROTECTED, sign(claims())),
@@ -312,27 +253,15 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   });
   assert.deepStrictEqual(r, { isAuthorized: false }, 'an expired gate cookie is denied even with a valid token');
 
-  // A preflight is exempt: it carries no credentials of any kind by definition.
   fresh();
   r = await auth.handler({ ...req(PROTECTED, null, { method: 'OPTIONS', noGate: true }) });
   assert.deepStrictEqual(r, { isAuthorized: true }, 'a CORS preflight is allowed on a protected route');
 
-  // --- enforcement off ---------------------------------------------------------------------------
-
-  // An empty route key list in the package means the gate behaves exactly as it did before this
-  // feature, which is the default every existing consumer gets.
   const plain = loadAuthorizer({ routeKeys: [], signingPublicKeyPem: publicPem });
   fetches = 0;
   r = await plain.handler(req(PROTECTED, null));
   assert.deepStrictEqual(r, { isAuthorized: true }, 'with no route keys configured, no route requires a token');
   assert.strictEqual(fetches, 0, 'and the JWKS is never fetched');
-
-  // --- the JWKS fetch carries the origin verification header ------------------------------------
-  //
-  // THE FAIL-CLOSED DEFECT. The issuer is the same API this authorizer guards, so the JWKS fetch
-  // goes back through this gate. Before this fix it carried no credential, the gate answered 403,
-  // and every identity token was denied "JWKS unavailable": no authenticated request could ever
-  // succeed. `gated` below makes the stub refuse an unheadered fetch the way the real endpoint did.
 
   fresh();
   gated = true;
@@ -348,13 +277,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     'the JWKS fetch presents the origin verification header the authorizer already holds',
   );
 
-  // The regression assertion, stated from the other side. If the value the authorizer presents is
-  // not the one the gated endpoint accepts, the fetch is refused and the token is denied: the
-  // failure is closed, not open. A fresh package is loaded because `expected()` memoises the SSM
-  // read per module instance, so the stub has to be in place before the first call.
-  //
-  // This is the defect exactly: before the fix the header was absent rather than wrong, and this
-  // was the answer to every authenticated request in CarModPicker staging.
   ssmMod.SSMClient.prototype.send = async () => ({ Parameter: { Value: 'NOT-THE-GATE-SECRET' } });
   const mismatched = loadAuthorizer({ routeKeys: ENFORCED, signingPublicKeyPem: publicPem });
   mismatched.resetJwksCache();
@@ -372,12 +294,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   );
   gated = false;
   ssmMod.SSMClient.prototype.send = async () => ({ Parameter: { Value: 'S3CRET' } });
-
-  // --- the well-known documents answer anonymously ---------------------------------------------
-  //
-  // The discovery document and the JWKS are public key material. They have to be reachable without
-  // a gate cookie and without a token, both for this authorizer's own fetch and for any other
-  // verifier of these tokens. Standing them behind the gate is what created the loop above.
 
   const anon = loadAuthorizer({
     routeKeys: ENFORCED,
@@ -411,8 +327,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     );
   }
 
-  // The exemption is a prefix on the `.well-known` subtree and nothing wider. An application path
-  // that merely begins with the same directory name, or the identity prefix itself, is still gated.
   for (const path of [
     '/api/auth/login',
     '/api/auth/.well-knownish/secrets',
@@ -428,7 +342,6 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     );
   }
 
-  // A package that renders no exemption keeps the old behaviour: nothing is anonymous.
   r = await auth.handler(wellKnown('/api/auth/.well-known/jwks.json'));
   assert.deepStrictEqual(
     r,

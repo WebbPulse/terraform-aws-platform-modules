@@ -1,8 +1,3 @@
-# ---------------------------------------------------------------------------
-# Budget alerts. The first two budgets in an account are free, so the usual shape is a warn
-# budget at the expected monthly spend and a critical budget at the point where something is
-# plainly wrong.
-# ---------------------------------------------------------------------------
 resource "aws_budgets_budget" "this" {
   for_each = local.budgets
 

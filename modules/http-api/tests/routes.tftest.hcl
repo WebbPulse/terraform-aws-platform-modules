@@ -1,9 +1,3 @@
-# Plan-only tests. They never talk to AWS: every run block is `command = plan` and the inputs are
-# literal ARNs, so `terraform test` here needs credentials for nothing.
-#
-# What they prove is the thing the Portfolio inventory flagged: on this module it is not possible to
-# end up with a route that has no authorization while the access gate is on, $default included.
-
 variables {
   name = "example-test-api"
 
@@ -142,9 +136,6 @@ run "a_route_can_opt_out_of_the_gate_deliberately" {
     error_message = "An explicit authorization_type override should win over the module-wide choice."
   }
 
-  # A NONE route must carry no authorizer id at all. API Gateway accepts the create with one
-  # attached and then stores nothing, so a route that keeps the gate's id in configuration reads
-  # back as "" from the API and shows a perpetual in-place update on every later plan.
   assert {
     condition     = aws_apigatewayv2_route.this["GET /health"].authorizer_id == null
     error_message = "A route opting out with authorization_type NONE must get no authorizer_id, otherwise every later plan shows a perpetual authorizer_id \"\" -> id update on it."
@@ -161,9 +152,6 @@ run "a_route_can_opt_out_of_the_gate_deliberately" {
   }
 }
 
-# The shape Portfolio staging needs: the access gate is on, but the two .well-known documents have
-# to be public because the API Gateway JWT authorizer fetches them anonymously. Opting those routes
-# out must leave them with no authorizer id, and must not disturb the gated routes beside them.
 run "public_well_known_routes_carry_no_authorizer_id" {
   command = plan
 
@@ -197,7 +185,6 @@ run "public_well_known_routes_carry_no_authorizer_id" {
   }
 }
 
-# AWS_IAM takes no authorizer either, and the module-wide authorizer_id must not leak onto it.
 run "an_aws_iam_route_carries_no_authorizer_id" {
   command = plan
 
@@ -224,8 +211,6 @@ run "an_aws_iam_route_carries_no_authorizer_id" {
   }
 }
 
-# The per-route authorizer_id override is for pointing one route at a different authorizer, and it
-# must keep working for the two types that actually take one.
 run "a_per_route_authorizer_id_override_still_wins_for_custom_and_jwt" {
   command = plan
 
@@ -263,8 +248,6 @@ run "a_per_route_authorizer_id_override_still_wins_for_custom_and_jwt" {
   }
 }
 
-# With no gate at all every route is NONE, so nothing on the API may carry an authorizer id. This is
-# the case where a stray per-route authorizer_id would otherwise be attached to a NONE route.
 run "without_an_authorizer_no_route_carries_an_authorizer_id" {
   command = plan
 
@@ -314,8 +297,6 @@ run "no_default_route_when_default_integration_is_null" {
   }
 }
 
-# A routes entry naming an integration that does not exist fails with a message that names the
-# route and the bad key, instead of a raw "Invalid index" on the target expression.
 run "an_unknown_integration_fails_by_name" {
   command = plan
 
@@ -337,8 +318,6 @@ run "an_unknown_integration_fails_by_name" {
   expect_failures = [aws_apigatewayv2_route.this]
 }
 
-# default_integration still defaults to "legacy". A consumer that names its backend something else
-# and forgets the input gets the named precondition, not an Invalid index inside an output.
 run "a_default_integration_that_names_nothing_fails_by_name" {
   command = plan
 

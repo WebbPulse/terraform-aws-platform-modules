@@ -1,14 +1,3 @@
-# Alarms over a Lambda-backed HTTP API and the DynamoDB tables behind it, all reporting to one
-# SNS topic with email subscribers. The function, the API and the tables belong to the consumer;
-# the module owns the topic, the subscriptions and the alarms.
-#
-# Consumers use source = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-# with version = "~> 1.7", and the http-api module in front of it with version = "~> 2.0" for the
-# integrations map; the relative paths here keep the example runnable from the repository.
-#
-# Applying this sends a confirmation email to every address in notification_emails. Until an
-# address clicks the link its subscription stays pending and it receives no alarm notifications.
-
 terraform {
   required_version = ">= 1.10"
 
@@ -33,8 +22,6 @@ locals {
 
   table_keys = ["users", "posts"]
 }
-
-# --- The function -----------------------------------------------------------------------------
 
 data "archive_file" "handler" {
   type        = "zip"
@@ -75,15 +62,11 @@ resource "aws_lambda_function" "api" {
   timeout          = 29
 }
 
-# --- The API ----------------------------------------------------------------------------------
-
 module "api" {
   source = "../../modules/http-api"
 
   name = "${local.name}-api"
 
-  # One backend behind the API. The key "legacy" is the module's default_integration, so this one
-  # entry serves every request through the $default route.
   integrations = {
     legacy = {
       lambda_function_name = aws_lambda_function.api.function_name
@@ -91,8 +74,6 @@ module "api" {
     }
   }
 }
-
-# --- The tables -------------------------------------------------------------------------------
 
 resource "aws_dynamodb_table" "tables" {
   for_each = toset(local.table_keys)
@@ -107,8 +88,6 @@ resource "aws_dynamodb_table" "tables" {
   }
 }
 
-# --- The alarms -------------------------------------------------------------------------------
-
 module "alarms" {
   source = "../../modules/api-alarms"
 
@@ -118,14 +97,9 @@ module "alarms" {
   lambda_function_name = aws_lambda_function.api.function_name
   http_api_id          = module.api.api_id
 
-  # One "<name_prefix>-dynamodb-throttles" alarm covering throttled requests across every table in
-  # the account, rather than one alarm per table. It needs no table list, so dynamodb_tables stays
-  # empty; the per table shape is still available by populating it instead.
   dynamodb_aggregate_alarm = true
   dynamodb_tables          = {}
 
-  # Every threshold, period and evaluation count already defaults to the value shown here; they
-  # are spelled out so the example doubles as the list of knobs.
   lambda_errors_threshold      = 0
   lambda_throttles_threshold   = 0
   api_5xx_threshold            = 0
