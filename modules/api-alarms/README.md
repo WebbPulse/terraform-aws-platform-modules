@@ -30,6 +30,10 @@ aws_cloudwatch_log_metric_filter.errors["<key>"]       one per error_log_groups 
 aws_cloudwatch_metric_alarm.errors[0]                  only with a non-empty error_log_groups
 aws_cloudwatch_metric_alarm.standalone_lambda_errors[0]     only with lambda_errors_alarm_function_name
                                                             and no lambda_function_name
+aws_cloudwatch_log_metric_filter.telemetry_errors["<key>"]  one per error_log_groups entry,
+                                                            only with telemetry_alarm_enabled
+aws_cloudwatch_metric_alarm.telemetry_errors[0]        only with telemetry_alarm_enabled and a
+                                                            non-empty error_excluded_loggers
 aws_cloudwatch_log_metric_filter.rate_limit_failed_open["<key>"]  one per watched log group,
                                                             only with rate_limit_fail_open_alarm
 aws_cloudwatch_metric_alarm.rate_limit_failed_open[0]  only with rate_limit_fail_open_alarm
@@ -50,6 +54,7 @@ Alarm names:
 | `dynamodb_throttles["<key>"]` | `<table name>-throttles` |
 | `dynamodb_aggregate_throttles[0]` | `<name_prefix>-dynamodb-throttles` |
 | `errors[0]` | `<name_prefix>-application-errors` |
+| `telemetry_errors[0]` | `<name_prefix>-telemetry-export-errors` |
 | `standalone_lambda_errors[0]` | `<name_prefix>-lambda-errors` |
 | `rate_limit_failed_open[0]` | `<name_prefix>-rate-limit-failed-open` |
 
@@ -388,14 +393,22 @@ trade the aggregate DynamoDB alarm makes, and it is the shape that scales to a f
 
 ### The JSON log format the pattern expects
 
-The default `error_filter_pattern` is:
+`error_filter_pattern` defaults to `null`, which means the module builds the pattern from
+`error_excluded_loggers`. With the default exclusion list that is:
 
 ```
-{ $.level = "ERROR" }
+{ $.level = "ERROR" && ($.logger NOT EXISTS || ($.logger != "opentelemetry.exporter.otlp.proto.http.trace_exporter" && $.logger != "opentelemetry.sdk.trace.export" && $.logger != "webbpulse.otel")) }
 ```
 
 It matches a log event that parses as JSON and whose top level `level` field is exactly the string
-`ERROR`. The shared observability package emits records of this shape, and it is also what Lambda's
+`ERROR`, except when the record's `logger` is one of the telemetry exporters. The `NOT EXISTS` arm
+is what keeps the exclusion from narrowing coverage: a `!=` comparison against a field the record
+does not carry is false, so without that arm an ERROR record with no `logger` at all would match
+neither this filter nor the telemetry one and would stop alarming entirely. See
+[Telemetry export errors are not application errors](#telemetry-export-errors-are-not-application-errors).
+
+Passing a literal string takes the match over completely; `error_excluded_loggers` then no longer
+affects the error filters, and only the telemetry filters still read it. The shared observability package emits records of this shape, and it is also what Lambda's
 own `log_format = "JSON"` and AWS Lambda Powertools write:
 
 ```json
@@ -420,6 +433,9 @@ overrides it:
 ```hcl
 error_filter_pattern = "{ $.level = \"ERROR\" || $.level = \"CRITICAL\" }"
 ```
+
+Note that a literal pattern replaces the built one outright, so an override that still wants the
+telemetry loggers excluded has to spell the exclusions out itself.
 
 Case matters. Filter patterns are case sensitive, so `"Error"` does not match `"ERROR"`.
 
@@ -469,6 +485,57 @@ nothing when it is set.** Setting both is therefore safe, which is what lets an 
 from one to the other across two applies without a destroy and create in between. It reuses
 `lambda_errors_threshold`, `lambda_errors_period` and `lambda_errors_evaluation_periods`, so an
 application that has tuned those keeps them.
+
+## Telemetry export errors are not application errors
+
+The application errors alarm fires on a single record at a zero threshold, which is right for an
+application fault and wrong for the span exporter. The OTLP exporter logs at ERROR when a trace
+batch does not reach the X-Ray endpoint, and on a Lambda sandbox teardown that happens routinely:
+the container is frozen mid-export, the request times out or the signature has aged into a 403, and
+the exporter says so. In Portfolio staging that was **every** ERROR record in the log group over a
+week, 97 of them, and the alarm flapped continuously while no request had failed.
+
+A dropped trace is a gap in observability. It is not a failed request, and the two must not page
+through the same alarm.
+
+`error_excluded_loggers` names the loggers whose ERROR records are pipeline failures:
+
+```hcl
+error_excluded_loggers = [
+  "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+  "opentelemetry.sdk.trace.export",
+  "webbpulse.otel",
+]
+```
+
+That list does two things at once, which is what keeps the records from going missing:
+
+- It is excluded from `error_filter_pattern`, so `<name_prefix>-application-errors` stops counting
+  them and goes back to meaning "a request failed".
+- It is exactly what the telemetry filters match, so `<name_prefix>-telemetry-export-errors` counts
+  them instead. The two patterns are complements over the same list: move a name out of the list and
+  its records move back onto the application alarm rather than disappearing.
+
+`webbpulse.otel` is on the list because the shared package wraps the exporter and re-logs the same
+failure under its own logger name. Its only ERROR call site is that wrapper, so the name does not
+carry application records with it.
+
+### Why the telemetry alarm has a rate threshold
+
+The application alarm asks "did anything fail", so its threshold is zero. The telemetry alarm asks
+"has trace delivery stopped", which is a different question: a few dropped batches an hour is the
+normal cost of running an exporter in a freeze-thaw sandbox, and paging on one of those is what this
+change exists to stop. So the default is **Sum > 20 over one 1 hour period**, with missing data
+treated as not breaching. A quiet hour means the exporter is healthy.
+
+It carries the same SNS actions as every other alarm in the module, so the signal stays visible; it
+just arrives as "tracing is degraded" rather than "the application is erroring".
+
+### One alarm, never one per function
+
+The telemetry filters cover the same log groups as the error filters and all publish one
+dimensionless metric, so however many functions the environment runs there is one extra custom
+metric and one extra alarm. `telemetry_alarm_enabled = false` removes both.
 
 ## The rate limiter failing open
 
@@ -622,7 +689,13 @@ review. Both existing consumers were checked that way before the change was rele
 | `dynamodb_aggregate_period` | Period in seconds of the query; 60 or a multiple of it | `60` |
 | `dynamodb_aggregate_evaluation_periods` | Periods evaluated | `1` |
 | `error_log_groups` | Log groups to watch for JSON error records, map of short name to log group name; empty creates nothing | `{}` |
-| `error_filter_pattern` | Filter pattern the metric filters match | `{ $.level = "ERROR" }` |
+| `error_filter_pattern` | Filter pattern the error metric filters match; null builds it from `error_excluded_loggers` | `null` |
+| `error_excluded_loggers` | Loggers whose ERROR records are telemetry failures, excluded from the error pattern and counted by the telemetry alarm instead | the two OTLP exporter loggers and `webbpulse.otel` |
+| `telemetry_alarm_enabled` | Create one `<name_prefix>-telemetry-export-errors` alarm over the excluded loggers' records | `true` |
+| `telemetry_alarm_threshold` | Telemetry export error records in one period that must be exceeded | `20` |
+| `telemetry_alarm_period` | Period in seconds of the telemetry alarm | `3600` |
+| `telemetry_alarm_evaluation_periods` | Periods evaluated by the telemetry alarm | `1` |
+| `telemetry_metric_name` | Metric every telemetry filter publishes to, null for `<name_prefix>-telemetry-export-errors` | `null` |
 | `error_metric_namespace` | Custom namespace for the error metric; must not start with `AWS/` | `"WebbPulse/Application"` |
 | `error_metric_name` | Metric every filter publishes to, null for `<name_prefix>-application-errors` | `null` |
 | `error_alarm_threshold` | Error records across every log group per period to exceed | `0` |
@@ -668,6 +741,10 @@ is why its adoption passes none of them.
 | `dynamodb_aggregate_alarm_name` | Name of the aggregate alarm, `null` when it is off |
 | `error_alarm_name` | Name of the application errors alarm, `null` when `error_log_groups` is empty |
 | `error_metric_filter_names` | Metric filter names keyed by their `error_log_groups` key |
+| `error_filter_pattern` | The pattern the error filters were created with, built or supplied |
+| `telemetry_alarm_name` | Name of the telemetry export errors alarm, `null` when it is off |
+| `telemetry_metric_filter_names` | Telemetry filter names keyed by their `error_log_groups` key |
+| `telemetry_metric` | Namespace and name of the metric the telemetry filters publish to |
 | `error_metric` | `{ namespace, name }` of the metric the filters publish to, for a dashboard |
 | `rate_limit_fail_open_alarm_name` | Name of the rate limit fail open alarm, `null` when it is off |
 | `rate_limit_fail_open_metric_filter_names` | Fail open metric filter names keyed by their log group key |

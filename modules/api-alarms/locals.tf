@@ -30,6 +30,34 @@ locals {
 
   error_alarm_count = length(var.error_log_groups) > 0 ? 1 : 0
 
+  excluded_logger_clauses = [
+    for l in var.error_excluded_loggers : "$.logger != \"${l}\""
+  ]
+
+  included_logger_clauses = [
+    for l in var.error_excluded_loggers : "$.logger = \"${l}\""
+  ]
+
+  built_error_filter_pattern = (
+    length(var.error_excluded_loggers) == 0
+    ? "{ $.level = \"ERROR\" }"
+    : "{ $.level = \"ERROR\" && ($.logger NOT EXISTS || (${join(" && ", local.excluded_logger_clauses)})) }"
+  )
+
+  error_filter_pattern = coalesce(var.error_filter_pattern, local.built_error_filter_pattern)
+
+  telemetry_filter_pattern = "{ $.level = \"ERROR\" && (${join(" || ", local.included_logger_clauses)}) }"
+
+  telemetry_log_groups = (
+    var.telemetry_alarm_enabled && length(var.error_excluded_loggers) > 0
+    ? var.error_log_groups
+    : {}
+  )
+
+  telemetry_metric_name = coalesce(var.telemetry_metric_name, "${var.name_prefix}-telemetry-export-errors")
+
+  telemetry_alarm_count = length(local.telemetry_log_groups) > 0 ? 1 : 0
+
   standalone_lambda_errors_count = var.lambda_errors_alarm_function_name != null && var.lambda_function_name == null ? 1 : 0
 
   rate_limit_fail_open_log_groups = (

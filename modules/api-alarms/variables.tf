@@ -335,13 +335,85 @@ variable "error_log_groups" {
 }
 
 variable "error_filter_pattern" {
-  description = "CloudWatch Logs filter pattern the metric filters match. The default { $.level = \"ERROR\" } matches a structured JSON record whose level field is exactly ERROR, which is what the shared observability package emits and what Lambda's own JSON log format writes. Override it to widen or narrow the match, for example { $.level = \"ERROR\" || $.level = \"CRITICAL\" }. A JSON pattern only matches log events that are valid JSON: see the README on log_format."
+  description = "CloudWatch Logs filter pattern the error metric filters match. null, the default, builds the pattern from error_excluded_loggers: a record whose level is exactly ERROR, whose logger is none of the excluded ones, and, so that coverage never narrows, any ERROR record carrying no logger field at all. Set it to a literal pattern to take the match over completely, in which case error_excluded_loggers no longer affects it and only the telemetry filter still reads the list. A JSON pattern only matches log events that are valid JSON: see the README on log_format."
   type        = string
-  default     = "{ $.level = \"ERROR\" }"
+  default     = null
+  nullable    = true
 
   validation {
-    condition     = length(trimspace(var.error_filter_pattern)) > 0
-    error_message = "error_filter_pattern must not be empty: an empty pattern matches every log event, which would alarm on all logging rather than on errors."
+    condition     = var.error_filter_pattern == null || length(trimspace(coalesce(var.error_filter_pattern, ""))) > 0
+    error_message = "error_filter_pattern must not be empty: an empty pattern matches every log event, which would alarm on all logging rather than on errors. Pass null to use the pattern the module builds."
+  }
+}
+
+variable "error_excluded_loggers" {
+  description = "Logger names whose ERROR records are telemetry pipeline failures rather than application faults, so they must not reach the application errors alarm. The span exporter 403s and times out against the X-Ray OTLP endpoint on a Lambda sandbox teardown, which is a dropped trace and not a failed request, and at a zero threshold one of those puts the alarm into ALARM. These names are excluded from error_filter_pattern and are exactly the set the telemetry export errors alarm counts instead, so a name moved out of this list moves the records back onto the application alarm rather than losing them. An empty list excludes nothing and leaves the error pattern matching every ERROR record."
+  type        = list(string)
+  default = [
+    "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+    "opentelemetry.sdk.trace.export",
+    "webbpulse.otel",
+  ]
+
+  validation {
+    condition     = alltrue([for l in var.error_excluded_loggers : can(regex("^[A-Za-z0-9_.-]{1,256}$", l))])
+    error_message = "Every entry in error_excluded_loggers must be 1 to 256 characters of letters, digits, dots, hyphens or underscores: it is interpolated into a CloudWatch Logs filter pattern as a quoted string."
+  }
+
+  validation {
+    condition     = length(var.error_excluded_loggers) == length(distinct(var.error_excluded_loggers))
+    error_message = "error_excluded_loggers must not repeat a logger name."
+  }
+}
+
+variable "telemetry_alarm_enabled" {
+  description = "Create one <name_prefix>-telemetry-export-errors alarm over the metric filters that count the excluded loggers' ERROR records. true, the default, keeps the telemetry failures visible after they stop paging as application errors: a handful an hour is the normal teardown drop, so the threshold is a rate rather than a single record. false creates no telemetry filters and no alarm, which silences the pipeline entirely. It needs a non-empty error_excluded_loggers to have anything to match."
+  type        = bool
+  default     = true
+}
+
+variable "telemetry_alarm_threshold" {
+  description = "Number of telemetry export error records in one period that must be exceeded before the telemetry alarm fires. The default 20 over an hour sits above the steady trickle of teardown drops and below a pipeline that has genuinely stopped delivering."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.telemetry_alarm_threshold >= 0
+    error_message = "telemetry_alarm_threshold must not be negative."
+  }
+}
+
+variable "telemetry_alarm_period" {
+  description = "Period in seconds of the telemetry export errors alarm. CloudWatch accepts 10, 30, or any multiple of 60. The default 3600 makes the threshold an hourly rate."
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = contains([10, 30], var.telemetry_alarm_period) || (var.telemetry_alarm_period >= 60 && var.telemetry_alarm_period % 60 == 0)
+    error_message = "telemetry_alarm_period must be 10, 30, or a multiple of 60."
+  }
+}
+
+variable "telemetry_alarm_evaluation_periods" {
+  description = "Number of periods evaluated by the telemetry export errors alarm."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.telemetry_alarm_evaluation_periods >= 1 && floor(var.telemetry_alarm_evaluation_periods) == var.telemetry_alarm_evaluation_periods
+    error_message = "telemetry_alarm_evaluation_periods must be a whole number of at least 1."
+  }
+}
+
+variable "telemetry_metric_name" {
+  description = "Name of the metric every telemetry filter publishes to, null for <name_prefix>-telemetry-export-errors. It is a separate series from the application errors metric, which is the whole point: the two are counted apart so one can page and the other only inform."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.telemetry_metric_name == null || can(regex("^[^:*$]{1,255}$", coalesce(var.telemetry_metric_name, "x")))
+    error_message = "telemetry_metric_name must be 1 to 255 characters and must not contain :, * or $."
   }
 }
 

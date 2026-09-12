@@ -145,6 +145,29 @@ output "error_metric" {
   }
 }
 
+output "error_filter_pattern" {
+  description = "The filter pattern the error metric filters were created with, whether it was built from error_excluded_loggers or supplied literally. Read it to confirm what the alarm actually matches without opening the CloudWatch console."
+  value       = local.error_filter_pattern
+}
+
+output "telemetry_alarm_name" {
+  description = "Name of the telemetry export errors alarm, null when telemetry_alarm_enabled is false, error_excluded_loggers is empty, or there are no log groups to watch."
+  value       = one(aws_cloudwatch_metric_alarm.telemetry_errors[*].alarm_name)
+}
+
+output "telemetry_metric_filter_names" {
+  description = "Telemetry metric filter names keyed by the error_log_groups key that produced them. Empty when the telemetry alarm is off."
+  value       = { for k, f in aws_cloudwatch_log_metric_filter.telemetry_errors : k => f.name }
+}
+
+output "telemetry_metric" {
+  description = "Namespace and name of the metric every telemetry filter publishes to, so a dashboard can graph the dropped traces alongside the application errors. Both fields are null when the alarm is off."
+  value = {
+    namespace = local.telemetry_alarm_count > 0 ? var.error_metric_namespace : null
+    name      = local.telemetry_alarm_count > 0 ? local.telemetry_metric_name : null
+  }
+}
+
 output "rate_limit_fail_open_alarm_name" {
   description = "Name of the rate limit fail open alarm, null when rate_limit_fail_open_alarm is false or there are no log groups to watch."
   value       = one(aws_cloudwatch_metric_alarm.rate_limit_failed_open[*].alarm_name)
