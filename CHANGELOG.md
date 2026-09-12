@@ -10,6 +10,59 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+### `api-alarms`: telemetry export failures stop paging as application errors
+
+`<prefix>-application-errors` fires on a single ERROR record at a zero threshold. That is right for
+an application fault and wrong for the OTLP span exporter, which logs at ERROR whenever a trace
+batch does not reach the X-Ray endpoint. On a Lambda sandbox teardown that is routine: the container
+freezes mid-export, the POST times out or its signature has aged into a 403, and the exporter says
+so at ERROR.
+
+In Portfolio staging it was not merely noisy, it was the entire signal. Every ERROR record in
+`/aws/lambda/webbpulse-staging-identity` over seven days was an export failure, 97 of them across
+two loggers, and the alarm flapped continuously while no request had failed. An alarm that is always
+in ALARM reports nothing.
+
+A dropped trace is a gap in observability, not a failed request. The two now have separate alarms:
+
+- **`error_excluded_loggers`** names the loggers whose ERROR records are pipeline failures. It
+  defaults to the two OpenTelemetry exporter loggers plus `webbpulse.otel`, and it is excluded from
+  the error filter pattern, which `error_filter_pattern` now builds when left at its new `null`
+  default. An explicitly supplied pattern still wins outright.
+- **`<prefix>-telemetry-export-errors`** is a new aggregate alarm over metric filters matching
+  exactly those loggers, at `Sum > 20` over one 1 hour period with missing data not breaching. The
+  threshold is a rate rather than zero because a few dropped batches an hour is the normal cost of
+  an exporter in a freeze-thaw sandbox. It carries the same SNS actions, so the failure stays
+  visible as "tracing is degraded" rather than "the application is erroring".
+  `telemetry_alarm_enabled = false` removes it.
+
+The two patterns are complements over one list, so a name moved out of `error_excluded_loggers`
+moves its records back onto the application alarm rather than losing them.
+
+`webbpulse.otel` is excluded alongside the library loggers because the shared package wraps the
+exporter and re-logs the same failure under its own name. Its only ERROR call site is that wrapper.
+
+One correction worth recording, because the naive form of this change silently breaks the alarm: a
+JSON filter pattern's `!=` against a field the record does not carry evaluates false, so a bare
+chain of `$.logger != ...` clauses stops matching any ERROR record that has no `logger` field at
+all. Those records match neither the error pattern nor the telemetry one and stop alarming
+entirely. The built pattern therefore carries a `$.logger NOT EXISTS` arm, and both patterns were
+proved with `aws logs test-metric-filter` against real log lines before release.
+
+Cost is one extra custom metric and one extra alarm per environment, not per function.
+
+- New variables `error_excluded_loggers`, `telemetry_alarm_enabled`, `telemetry_alarm_threshold`,
+  `telemetry_alarm_period`, `telemetry_alarm_evaluation_periods` and `telemetry_metric_name`.
+- `error_filter_pattern` now defaults to `null` and builds from the exclusion list. A consumer that
+  passes a literal pattern is unaffected.
+- New outputs `error_filter_pattern`, `telemetry_alarm_name`, `telemetry_metric_filter_names` and
+  `telemetry_metric`.
+- New test suite `modules/api-alarms/tests/telemetry_error_split.tftest.hcl`.
+
+**Plan change for any consumer passing `error_log_groups`:** every error metric filter's pattern
+updates in place, and the telemetry filters and alarm are created.
+
+
 ## 2.12.0
 
 ### `staging-access-gate`: the authorizer no longer depends on the API it guards

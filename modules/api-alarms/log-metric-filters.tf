@@ -3,7 +3,7 @@ resource "aws_cloudwatch_log_metric_filter" "errors" {
 
   name           = "${var.name_prefix}-${each.key}-errors"
   log_group_name = each.value
-  pattern        = var.error_filter_pattern
+  pattern        = local.error_filter_pattern
 
   metric_transformation {
     name          = local.error_metric_name
@@ -44,6 +44,40 @@ resource "aws_cloudwatch_metric_alarm" "standalone_lambda_errors" {
   period              = var.lambda_errors_period
   evaluation_periods  = var.lambda_errors_evaluation_periods
   threshold           = var.lambda_errors_threshold
+  comparison_operator = var.comparison_operator
+  treat_missing_data  = var.treat_missing_data
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.ok_actions
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "telemetry_errors" {
+  for_each = local.telemetry_log_groups
+
+  name           = "${var.name_prefix}-${each.key}-telemetry-export-errors"
+  log_group_name = each.value
+  pattern        = local.telemetry_filter_pattern
+
+  metric_transformation {
+    name          = local.telemetry_metric_name
+    namespace     = var.error_metric_namespace
+    value         = "1"
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "telemetry_errors" {
+  count = local.telemetry_alarm_count
+
+  alarm_name          = "${var.name_prefix}-telemetry-export-errors"
+  alarm_description   = "Trace export to the OTLP endpoint is failing in ${length(local.telemetry_log_groups)} log group${length(local.telemetry_log_groups) == 1 ? "" : "s"}. Traces are being dropped; requests are unaffected."
+  namespace           = var.error_metric_namespace
+  metric_name         = local.telemetry_metric_name
+  statistic           = "Sum"
+  period              = var.telemetry_alarm_period
+  evaluation_periods  = var.telemetry_alarm_evaluation_periods
+  threshold           = var.telemetry_alarm_threshold
   comparison_operator = var.comparison_operator
   treat_missing_data  = var.treat_missing_data
   alarm_actions       = local.alarm_actions
