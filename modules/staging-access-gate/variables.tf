@@ -134,9 +134,17 @@ variable "mfa_configuration" {
 }
 
 variable "log_retention_days" {
-  description = "CloudWatch Logs retention for the two Lambda functions."
+  description = "CloudWatch Logs retention for the two Lambda functions in days. 0 means never expire."
   type        = number
-  default     = 14
+  default     = 7
+
+  validation {
+    condition = contains([
+      0, 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096,
+      1827, 2192, 2557, 2922, 3288, 3653,
+    ], var.log_retention_days)
+    error_message = "log_retention_days must be one of the values CloudWatch Logs accepts: 0, 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653."
+  }
 }
 
 variable "identity_jwt" {
@@ -180,7 +188,7 @@ variable "identity_jwt" {
   }
 
   validation {
-    condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.audience, null), "")) > 0
+    condition     = var.identity_jwt == null || try(var.identity_jwt.audience, "") != ""
     error_message = "identity_jwt.audience must not be empty: it is what the token's aud claim is matched against."
   }
 

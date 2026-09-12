@@ -240,7 +240,7 @@ frontend build at `https://www.staging.<domain>` instead of the API subdomain.
 | `origin_verify_header_name` | Header CloudFront adds and the authorizer checks | `x-origin-verify` |
 | `invite_login_url` | URL in the invitation email | `https://<site_host>/` |
 | `mfa_configuration` | `OFF`, `OPTIONAL` or `ON` (software token) | `OFF` |
-| `log_retention_days` | Lambda log retention | `14` |
+| `log_retention_days` | Lambda log retention in days; 0 never expires | `7` |
 | `identity_jwt` | `{ issuer, audience, jwks_url?, jwks_ttl_seconds?, clock_skew_seconds? }`; turns on access token verification in the authorizer | `null` |
 | `identity_jwt_route_keys` | Route keys that must present a valid token, usually `module.api.identity_jwt_route_keys`. Empty means the feature is off | `[]` |
 | `identity_anonymous_path_prefixes` | Paths admitted with no gate credential and no token, matched as prefixes. Null renders the issuer's `.well-known` subtree when enforcement is on; `[]` renders no exemption | `null` |

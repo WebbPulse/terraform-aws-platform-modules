@@ -66,10 +66,22 @@ jobs:
           done
 
           tests=()
-          for d in modules/*/tests; do
-            [ -d "$d" ] || continue
-            tests+=("$(dirname "$d")")
+          untested=()
+          for d in modules/*/; do
+            d="${d%/}"
+            if [ -d "$d/tests" ]; then
+              tests+=("$d")
+            else
+              untested+=("$d")
+            fi
           done
+
+          if [ ${#untested[@]} -gt 0 ]; then
+            for u in "${untested[@]}"; do
+              echo "::error::$u has no tests directory; every module must ship a .tftest.hcl suite"
+            done
+            exit 1
+          fi
 
           {
             printf 'validate=%s\n' "$(printf '%s\n' "${validate[@]}" | jq -R . | jq -sc .)"
