@@ -15,6 +15,14 @@ provider "aws" {
 run "with_no_aliases_the_distribution_uses_the_cloudfront_certificate" {
   command = plan
 
+  override_resource {
+    target          = aws_cloudfront_distribution.this
+    override_during = plan
+    values = {
+      domain_name = "d111111abcdef8.cloudfront.net"
+    }
+  }
+
   assert {
     condition     = length(coalesce(aws_cloudfront_distribution.this.aliases, [])) == 0
     error_message = "aliases defaults to empty, which is the shape a consumer gets before a certificate has been validated: the site must still plan and serve on the CloudFront hostname."
@@ -31,8 +39,8 @@ run "with_no_aliases_the_distribution_uses_the_cloudfront_certificate" {
   }
 
   assert {
-    condition     = startswith(output.frontend_url, "https://")
-    error_message = "frontend_url must always be an https URL, since it is what consumers paste into CORS allow lists and Cognito callback URLs."
+    condition     = output.frontend_url == "https://d111111abcdef8.cloudfront.net"
+    error_message = "Without aliases frontend_url must be https:// plus the distribution's own hostname, since that is the only name the default certificate covers and it is what consumers paste into CORS allow lists and Cognito callback URLs."
   }
 }
 
