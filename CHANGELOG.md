@@ -10,6 +10,8 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.14.0
+
 ### `api-alarms`: telemetry export failures stop paging as application errors
 
 `<prefix>-application-errors` fires on a single ERROR record at a zero threshold. That is right for
