@@ -10,6 +10,82 @@ Consumers pin `~> MAJOR.MINOR` and pick up later minors on their next plan, so a
 
 ## Unreleased
 
+## 2.15.0
+
+### `staging-access-gate`: log retention drops to the 7 days the estate standardised on
+
+Seven day retention is the locked decision for this estate, and every consumer already passes 7
+wherever a retention input exists: `access_log_retention_days` on both APIs, `log_retention_days` on
+every domain and stream consumer Lambda, and the Transaction Search group in both repositories. The
+gate was the one place the number was never passed, so its two Lambda log groups sat at the module's
+own default of 14 and were the only groups in staging keeping logs twice as long as the standard.
+
+Neither consumer sets `log_retention_days` on this module, so the default was the whole story. It is
+now 7, and the input also gains the validation block its siblings in `lambda-function` and
+`http-api` already carry, which rejects a number CloudWatch Logs does not accept at plan time rather
+than at apply.
+
+**Plan change for a consumer that does not set `log_retention_days`:** an in place update of
+`retention_in_days` on the gate's login and authorizer log groups, from 14 to 7. Both consumers pin
+`~> 2.12`, so they pick this up on their next run with no pin bump. A consumer that wants 14 can say
+so explicitly.
+
+### `staging-access-gate`: the empty audience check now reports its own error
+
+Writing the tests turned up a validation that could never fail. The `identity_jwt.audience` check
+read `length(coalesce(try(var.identity_jwt.audience, null), "")) > 0`, and `coalesce` raises when
+every argument is null or an empty string. An empty audience therefore surfaced as `Call to function
+"coalesce" failed: no non-null, non-empty-string arguments` rather than the message the block
+carries, and no input could make the condition evaluate to `false`. It is now
+`try(var.identity_jwt.audience, "") != ""`, which reports the intended error, and a test pins it.
+
+**No plan change.** A configuration that plans today planned before.
+
+### Every module now ships a `terraform test` suite
+
+Five modules had tests and ten did not. All fifteen do now, so the layout section's claim that each
+module directory carries "its own tests" is true rather than aspirational.
+
+The new suites follow the existing ones: `command = plan` against a mocked provider, `override_data`
+for the account and partition lookups, one long snake case `run` name per invariant, and an
+`error_message` on every assertion that says why the invariant matters rather than restating the
+condition. They cover the main variable branches on and off, the `validation` blocks by way of
+`expect_failures`, and the outputs the two consumers actually read.
+
+Two things worth recording, because both are easy to write and neither tests anything:
+
+- **An output compared to the resource attribute it is defined as.** `output.role_arn ==
+  aws_iam_role.this.arn` is unknown at plan time so it cannot evaluate at all, and where `outputs.tf`
+  defines the output as exactly that attribute it restates the definition and would never fail. The
+  suites assert plan knowable configuration instead.
+- **An ordering asserted over a set.** `notification` and `subscriber` on the budget and anomaly
+  resources, `subscriber_email_addresses`, and `name_servers` on `aws_route53_zone` are all sets, so
+  none has an addressable index or an order to preserve. Those invariants are written as membership
+  and cardinality over the set instead.
+
+Where a value genuinely is computed, the suites supply it with `override_resource` and
+`override_during = plan` and then assert the shape a consumer wires up, rather than dropping the
+assertion: `invoke_arn` must be the API Gateway path form rather than the function ARN, and
+`role_id` must be the plain name `aws_iam_role_policy` takes.
+
+Two provider behaviours the suites now pin, both of which read the opposite way to the intuition:
+the AWS provider folds `domain_name` into `subject_alternative_names`, so an apex plus one wildcard
+reads back as two elements rather than one; and `aws_route53_zone.name_servers` is a set.
+
+CI needed no new wiring: the discover job already builds its matrix from `modules/*/tests`. It now
+also fails if any module directory has no `tests` directory, so a module cannot be added without a
+suite and the coverage cannot quietly regress.
+
+`VALIDATE_SKIP` keeps both of its entries. `acm-certificate` and `staging-dns` declare
+`configuration_aliases`, and a module that does can never `terraform validate` as a root module:
+validate has no test file to read, so the alias is unwired and it fails on "Provider configuration
+not present". `terraform test` covers them instead, because the `.tftest.hcl` file supplies the
+aliased provider itself. No `providers` mapping is needed in the `run` blocks; a top level aliased
+provider block in the test file is wired up automatically.
+
+**No plan change.** No module input, output or resource changed for the test work; the only
+behavioural change in this release is the retention default above.
+
 ## 2.14.0
 
 ### `api-alarms`: telemetry export failures stop paging as application errors
