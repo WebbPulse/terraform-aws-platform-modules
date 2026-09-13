@@ -9,6 +9,27 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+## 2.15.1
+
+### `http-api`: the default access log explains an authorizer denial
+
+The default `access_log_format` carried request, response and integration fields, none of which say
+anything when an authorizer refuses a request before any integration runs. A 401 logged
+`integrationStatus` and `integrationLatency` as `-` and nothing else, so the reason lived only in the
+authorizer's own logs, and for a JWT authorizer it did not live anywhere at all.
+
+Three fields join the default, and every existing field stays: `authorizerError`
+(`$context.authorizer.error`), `errorMessage` (`$context.error.message`) and `errorType`
+(`$context.error.responseType`). `authorizerError` is the first field to read for a 401 with no
+integration call.
+
+Callers that pass their own `access_log_format` are unaffected; the input still replaces the default
+outright rather than merging with it.
+
+**Plan change for a consumer that does not set `access_log_format`:** one in place update of the
+stage's `access_log_settings.format`. Both consumers pin `~> 2.9`, so they pick this up on their next
+run with no pin bump.
+
 ## 2.15.0
 
 ### `staging-access-gate`: log retention drops to the 7 days the estate standardised on

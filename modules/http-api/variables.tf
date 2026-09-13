@@ -295,6 +295,9 @@ variable "access_log_format" {
     integrationLatency      = "$context.integrationLatency"
     integrationStatus       = "$context.integrationStatus"
     integrationErrorMessage = "$context.integrationErrorMessage"
+    authorizerError         = "$context.authorizer.error"
+    errorMessage            = "$context.error.message"
+    errorType               = "$context.error.responseType"
   }
 
   validation {
