@@ -97,6 +97,56 @@ run "all_three_secrets_are_encrypted_parameters_rather_than_plain_strings" {
   }
 }
 
+run "the_cookie_signing_material_is_published_without_publishing_the_key" {
+  command = plan
+
+  override_resource {
+    target          = aws_cloudfront_public_key.signing
+    override_during = plan
+    values = {
+      id = "K1EXAMPLEPUBKEY"
+    }
+  }
+
+  override_resource {
+    target          = aws_ssm_parameter.signing_key
+    override_during = plan
+    values = {
+      arn = "arn:aws:ssm:us-west-2:123456789012:parameter/example-staging/access-gate/signing-private-key"
+    }
+  }
+
+  assert {
+    condition     = output.signing_key_ssm_parameter_name == "/example-staging/access-gate/signing-private-key"
+    error_message = "The e2e suite reads the signing key from this parameter to mint its own session cookies, so the name must be an output rather than a path the caller rebuilds from the naming convention and silently gets wrong."
+  }
+
+  assert {
+    condition     = output.signing_key_ssm_parameter_name == aws_ssm_parameter.signing_key.name
+    error_message = "The output must be the parameter's own name attribute, so renaming the parameter can never leave a consumer granting ssm:GetParameter on a path that no longer exists."
+  }
+
+  assert {
+    condition     = output.signing_key_ssm_parameter_arn == "arn:aws:ssm:us-west-2:123456789012:parameter/example-staging/access-gate/signing-private-key"
+    error_message = "The ARN is what a consumer writes into the e2e role's ssm:GetParameter statement, so it must be the parameter's own ARN. Neither it nor the name is sensitive and neither is marked so; marking them would force a consumer to launder them through a sensitive value to build an IAM policy."
+  }
+
+  assert {
+    condition     = output.signing_key_pair_id == "K1EXAMPLEPUBKEY"
+    error_message = "The key pair id goes in the CloudFront-Key-Pair-Id cookie, and CloudFront rejects a cookie set naming any other key, so it must come from the public key resource this module created rather than be looked up by hand."
+  }
+
+  assert {
+    condition     = output.cookie_domain == "staging.example.com"
+    error_message = "The signed policy covers https://*<cookie_domain>/* and the cookies are scoped to the same domain, so the module echoes it back and anything minting cookies uses one value rather than two that can drift apart."
+  }
+
+  assert {
+    condition     = output.cookie_domain == var.cookie_domain
+    error_message = "The echo must be the input unmodified: a normalised or decorated value here would produce a policy resource the signature does not match and every minted cookie would fail CloudFront's check."
+  }
+}
+
 run "the_user_pool_is_invite_only_and_cannot_be_signed_up_to" {
   command = plan
 
