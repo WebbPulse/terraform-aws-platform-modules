@@ -84,6 +84,14 @@ contract rather than this module's preference:
 | `authorizer_depends_on` | What must already exist and answer before the authorizer is created. | `[]` |
 | `wait_for_discovery_document` | Poll the discovery URL and refuse to create the authorizer until it answers. | `true` |
 | `discovery_document_attempts` | One second attempts before the poll fails the apply. | `60` |
+| `users_table_stream_arn` | Users table stream the purge mapping reads. `null` creates no mapping and no grant. | `null` |
+| `identity_function_name` | Identity Lambda the mapping targets. Required when the stream ARN is set. | `null` |
+| `users_key_attribute` | Users table hash key attribute the deleted id is read from. Reaches the app as `IDENTITY_USERS_KEY_ATTRIBUTE`. | `"id"` |
+| `users_stream_batch_size` | Stream records per invocation. | `10` |
+| `users_stream_batching_window_seconds` | How long the mapping waits to fill a batch. | `5` |
+| `users_stream_maximum_retry_attempts` | Retries before a failing record is dropped. `-1` retries until it expires. | `10` |
+| `users_stream_starting_position` | `LATEST` or `TRIM_HORIZON`. | `"LATEST"` |
+| `users_stream_events_path` | Path the adapter posts to and the app mounts the purge route on. | `"/events"` |
 
 Object shapes for the two map inputs:
 
@@ -139,6 +147,66 @@ additional_table_grants = map(object({
 | `identity_environment` | The `IDENTITY_*` variables that follow from this module's own resources. |
 | `issuer` | The issuer, echoed back. |
 | `audience` | The audience, echoed back. |
+| `users_stream_event_source_mapping_uuid` | UUID of the users table stream mapping, null when no stream ARN was given. |
+| `users_stream_policy_json` | The stream read grant as a policy document, null when no stream ARN was given. |
+
+## Purging identity rows when a user is deleted
+
+Identity owns rows keyed by a user id in ten tables, but it does not own the user record: that row
+lives in the product's own users table. A product hard deleting a user therefore leaves credentials,
+passkeys, TOTP factors and refresh tokens behind with nothing pointing at them.
+
+Setting `users_table_stream_arn` closes that gap. The module creates an event source mapping from
+the users table's DynamoDB Stream to the identity function, filtered to `REMOVE` events, and grants
+the function's role the four stream read actions. The identity package mounts a route that reads the
+deleted user id out of `dynamodb.Keys` and deletes that user's identity rows.
+
+This lives in `identity` rather than in `lambda-function` because `identity` already owns the
+identity function's grants and its environment: `identity_role_name`, `attach_role_policies` and
+`identity_environment` are all here, and the purge is one more grant and three more variables on the
+same role and the same map. `lambda-function` is generic and knows nothing about identity, so
+putting an identity-shaped event source mapping in it would give every function in the fleet an
+input only one of them can use. The function itself is still not created here, which is why the
+mapping takes `identity_function_name` as a string.
+
+```hcl
+module "tables" {
+  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/dynamodb-tables"
+  version = "~> 2.17"
+
+  name_prefix = local.prefix
+
+  tables = {
+    users = {
+      attributes       = [{ name = "id", type = "S" }]
+      hash_key         = "id"
+      stream_view_type = "KEYS_ONLY"
+    }
+  }
+}
+
+module "identity" {
+  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/identity"
+  version = "~> 2.17"
+
+  name_prefix        = local.prefix
+  issuer             = "https://${local.api_host}/api/auth"
+  audience           = "${local.prefix}-api"
+  registrable_domain = local.registrable_domain
+
+  identity_role_name   = module.lambda_domain["identity"].role_id
+  identity_role_arn    = module.lambda_domain["identity"].role_arn
+  attach_role_policies = true
+
+  users_table_stream_arn = module.tables.stream_arns["users"]
+  identity_function_name = module.lambda_domain["identity"].function_name
+  users_key_attribute    = "id"
+}
+```
+
+`identity_environment` then carries `AWS_LWA_PASS_THROUGH_PATH`, `IDENTITY_EVENTS_PATH` and
+`IDENTITY_USERS_KEY_ATTRIBUTE` on top of what it already carried, so the function picks the route up
+from the same merge it already does.
 
 ## Gotchas
 
@@ -192,3 +260,19 @@ additional_table_grants = map(object({
   at plan time.
 - One authorizer per module instance. A product needing several on the same API creates the extra
   ones itself from `issuer` and `audience`.
+- The users table stream must exist before the mapping. `CreateEventSourceMapping` resolves the
+  stream ARN during the create call, so land the table's `stream_view_type` in a prior apply and pass
+  `module.tables.stream_arns["users"]`, which is null until it is enabled.
+- The identity package must be at least `0.28.0`. Earlier versions mount no route at
+  `IDENTITY_EVENTS_PATH`, so the adapter's pass through POST 404s, every record fails, and the
+  mapping retries the shard until the records expire.
+- Setting `users_table_stream_arn` turns pass through on for the whole function. Leave it null until
+  the deployed package is `0.28.0` or later; the three environment variables and the mapping land
+  together on purpose, so there is no state where one is configured without the other.
+- Changing the users table's `stream_view_type` mints a new stream ARN and detaches this mapping. The
+  ARN is an input here, so Terraform replaces the mapping on the next apply rather than silently
+  reading a stream nobody writes to.
+- `KEYS_ONLY` is enough. The handler reads only `dynamodb.Keys`, and a wider view type pays for
+  images on every write to the users table to serve the deletes alone.
+- A users table keyed by something other than `id` must set `users_key_attribute`. The handler looks
+  the key up by name, so a mismatch is a record that fails rather than a row deleted by accident.

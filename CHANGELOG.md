@@ -7,7 +7,40 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.17.0
+
+### `identity`: a deleted user's identity rows are purged from the users table stream
+
+Identity owns rows keyed by a user id across ten tables but owns no user record, so a product hard
+deleting a row from its own users table left credentials, passkeys, TOTP factors and refresh tokens
+behind with nothing pointing at them. Nothing failed and nothing logged; the rows simply stayed.
+
+The `identity` module gains an optional `users_table_stream_arn`. When it is set, alongside
+`identity_function_name`, the module creates an `aws_lambda_event_source_mapping` from that stream to
+the identity function and grants the function's role `dynamodb:DescribeStream`, `GetRecords`,
+`GetShardIterator` and `ListStreams` on the stream. The mapping filters to `REMOVE` events, reports
+`ReportBatchItemFailures` so one bad record does not replay a whole batch, bisects on error and
+bounds retries at ten so a poison record cannot block its shard for the full 24 hours.
+
+`identity_environment` gains `AWS_LWA_PASS_THROUGH_PATH`, `IDENTITY_EVENTS_PATH` and
+`IDENTITY_USERS_KEY_ATTRIBUTE`, but only when the stream ARN is set. One input feeds both paths, so
+the path the Lambda Web Adapter posts a non-HTTP invocation to and the path the application mounts
+the purge route on cannot drift apart.
+
+This landed in `identity` rather than `lambda-function` because `identity` already owns the identity
+function's role policies and its environment map, while `lambda-function` is generic and would have
+gained an input only one function in the fleet could use.
+
+**Requires the identity package at `0.28.0` or later.** Earlier versions mount no route at
+`IDENTITY_EVENTS_PATH`, so the pass through POST 404s and the mapping retries until the records
+expire. The mapping and the three variables land together, so there is no half-configured state.
+
+**Plan change for an existing consumer:** none. `users_table_stream_arn` defaults to null, which
+creates no mapping, no grant and no new environment variables.
+
+**Plan change for a consumer opting in:** one new event source mapping, one new inline role policy,
+and one in place update of the identity function's environment. The users table's stream must already
+be enabled, because `CreateEventSourceMapping` resolves the ARN during the create call.
 
 ### `identity`: the refresh-tokens table carries a user index again
 
@@ -35,6 +68,11 @@ finish before deploying the package version that reads it.
 
 **Plan change for a consumer that overrides `tables`:** none until it adds the index to its own
 `refresh-tokens` entry. Until it does, sign out everywhere stays a no op for that product.
+
+### `dynamodb-tables`: **no plan change**
+
+A Gotchas line only, noting that a users table feeding the identity purge mapping has to set
+`stream_view_type` here first and that `KEYS_ONLY` is enough.
 
 ## 2.15.1
 
