@@ -19,6 +19,8 @@ resource "aws_lambda_event_source_mapping" "users_purge" {
       })
     }
   }
+
+  depends_on = [aws_iam_role_policy.users_stream]
 }
 
 resource "aws_iam_role_policy" "users_stream" {

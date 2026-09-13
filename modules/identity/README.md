@@ -84,7 +84,7 @@ contract rather than this module's preference:
 | `authorizer_depends_on` | What must already exist and answer before the authorizer is created. | `[]` |
 | `wait_for_discovery_document` | Poll the discovery URL and refuse to create the authorizer until it answers. | `true` |
 | `discovery_document_attempts` | One second attempts before the poll fails the apply. | `60` |
-| `users_table_stream_arn` | Users table stream the purge mapping reads. `null` creates no mapping and no grant. | `null` |
+| `users_table_stream_arn` | Users table stream the purge mapping reads. `null` creates no mapping and no grant. Requires `attach_role_policies`. | `null` |
 | `identity_function_name` | Identity Lambda the mapping targets. Required when the stream ARN is set. | `null` |
 | `users_key_attribute` | Users table hash key attribute the deleted id is read from. Reaches the app as `IDENTITY_USERS_KEY_ATTRIBUTE`. | `"id"` |
 | `users_stream_batch_size` | Stream records per invocation. | `10` |
@@ -276,3 +276,13 @@ from the same merge it already does.
   images on every write to the users table to serve the deletes alone.
 - A users table keyed by something other than `id` must set `users_key_attribute`. The handler looks
   the key up by name, so a mismatch is a record that fails rather than a row deleted by accident.
+- The mapping `depends_on` the stream grant. Lambda checks the function role can read the stream
+  during `CreateEventSourceMapping`, so without the edge a fresh apply races the policy and fails the
+  create with a permissions error that looks like a misconfigured role.
+- `attach_role_policies = false` and `users_table_stream_arn` cannot be combined, and the plan refuses
+  it. The mapping is created here, so it can only be ordered behind a grant created here; a grant the
+  consumer attaches outside the module is invisible to that edge and the create would race it. A
+  consumer that owns its own policies leaves the stream ARN null and builds the mapping itself from
+  the `users_stream_policy_json` output, where it can order both.
+- The one apply that creates the identity role still needs `attach_role_policies = false`, so wire
+  the stream on a later apply rather than the same one.

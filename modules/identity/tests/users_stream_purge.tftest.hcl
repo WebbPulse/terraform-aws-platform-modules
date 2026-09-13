@@ -71,6 +71,8 @@ run "a_stream_arn_creates_the_mapping_and_the_environment" {
   variables {
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name = "example-staging-identity"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = true
   }
 
   assert {
@@ -140,6 +142,8 @@ run "the_mapping_only_sees_removes" {
   variables {
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name = "example-staging-identity"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = true
   }
 
   assert {
@@ -156,6 +160,8 @@ run "the_adapter_path_and_the_route_path_cannot_drift" {
   variables {
     users_table_stream_arn   = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name   = "example-staging-identity"
+    identity_role_name       = "example-staging-identity"
+    attach_role_policies     = true
     users_stream_events_path = "/internal/events"
     users_key_attribute      = "user_id"
   }
@@ -213,6 +219,8 @@ run "a_stream_arn_without_a_function_is_rejected" {
 
   variables {
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = true
   }
 
   expect_failures = [var.identity_function_name]
@@ -224,7 +232,22 @@ run "a_table_arn_in_place_of_a_stream_arn_is_rejected" {
   variables {
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users"
     identity_function_name = "example-staging-identity"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = true
   }
 
   expect_failures = [var.users_table_stream_arn]
+}
+
+run "a_stream_without_the_module_owning_the_grant_is_rejected" {
+  command = plan
+
+  variables {
+    users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
+    identity_function_name = "example-staging-identity"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = false
+  }
+
+  expect_failures = [var.attach_role_policies]
 }

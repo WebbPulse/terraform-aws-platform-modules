@@ -86,9 +86,14 @@ variable "identity_role_name" {
 }
 
 variable "attach_role_policies" {
-  description = "Set false to create no role policies even when identity_role_name is given. The three aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back."
+  description = "Set false to create no role policies even when identity_role_name is given. The aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back. It cannot be false while users_table_stream_arn is set: the event source mapping is created here and Lambda checks the stream grant during the create call, so the mapping can only be ordered behind a grant created here too."
   type        = bool
   default     = true
+
+  validation {
+    condition     = var.attach_role_policies || var.users_table_stream_arn == null
+    error_message = "attach_role_policies is false but users_table_stream_arn is set. CreateEventSourceMapping checks the function role can read the stream during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires the stream, or leave users_table_stream_arn null and build the mapping yourself from the users_stream_policy_json output."
+  }
 }
 
 variable "identity_role_arn" {

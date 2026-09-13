@@ -31,6 +31,12 @@ This landed in `identity` rather than `lambda-function` because `identity` alrea
 function's role policies and its environment map, while `lambda-function` is generic and would have
 gained an input only one function in the fleet could use.
 
+The mapping `depends_on` the grant: Lambda checks the role can read the stream during
+`CreateEventSourceMapping`, so without that edge a fresh apply races the policy. For the same reason
+`attach_role_policies = false` and a stream ARN are refused at plan time, because a grant attached
+outside the module cannot be ordered before a mapping created inside it. A consumer that owns its own
+policies leaves the stream ARN null and builds the mapping from `users_stream_policy_json`.
+
 **Requires the identity package at `0.28.0` or later.** Earlier versions mount no route at
 `IDENTITY_EVENTS_PATH`, so the pass through POST 404s and the mapping retries until the records
 expire. The mapping and the three variables land together, so there is no half-configured state.
