@@ -9,6 +9,33 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+### `identity`: the refresh-tokens table carries a user index again
+
+`refresh-tokens` was keyed by `token_hash` with a single index on `family_id`, so nothing could
+enumerate the families belonging to one user. A password change or a password reset therefore could
+not sign the user's other devices out: `DynamoRefreshTokenStore.revoke_all_for_user` raised, and the
+session service logged `session.revoke_all_unsupported` and reported nothing revoked. Every other
+device stayed signed in with the old password.
+
+The default `refresh-tokens` table gains a second index, `user_id-family_id-index`, hashed on
+`user_id` and ranged on `family_id`, projecting `KEYS_ONLY`. `token_hash` comes from the table key
+and the other two from the index key, which is everything the revoking write needs, so the hot
+rotation path pays for nothing it does not use.
+
+The index name reaches the application as `IDENTITY_REFRESH_USER_INDEX`, which `identity_environment`
+now carries and the new `refresh_user_index_name` output exposes on its own. Both resolve from the
+configured table rather than from a constant, so a consumer that overrides `tables` without the index
+gets a null output and no environment variable rather than a name pointing at nothing.
+
+**Plan change for a consumer on the default `tables`:** one in place update of the `refresh-tokens`
+table adding a global secondary index, and one in place update of the identity function's
+environment. The table is not replaced and stays available throughout. DynamoDB backfills the index
+asynchronously and it does not answer queries until its status is `ACTIVE`, so let the backfill
+finish before deploying the package version that reads it.
+
+**Plan change for a consumer that overrides `tables`:** none until it adds the index to its own
+`refresh-tokens` entry. Until it does, sign out everywhere stays a no op for that product.
+
 ## 2.15.1
 
 ### `http-api`: the default access log explains an authorizer denial

@@ -34,7 +34,7 @@ contract rather than this module's preference:
 | Logical key | Hash key | Range key | Index | TTL |
 | --- | --- | --- | --- | --- |
 | `credentials` | `user_id` | `credential_type` | | |
-| `refresh-tokens` | `token_hash` | | `family_id-generation-index` | `expires_at` |
+| `refresh-tokens` | `token_hash` | | `family_id-generation-index`, `user_id-family_id-index` | `expires_at` |
 | `identity-tokens` | `token_hash` | | | `expires_at` |
 | `login-attempts` | `identity_key` | `attempted_at` | | `expires_at` |
 | `totp-factors` | `user_id` | | | |
@@ -135,6 +135,7 @@ additional_table_grants = map(object({
 | `additional_table_grant_policy_json` | Grant name to the policy document attached to that grant's role. |
 | `authorizer_id` | Id of the JWT authorizer, null when `http_api_id` was not given. Attach it to protected routes. |
 | `authorizer_name` | Name of the authorizer, null when not created. |
+| `refresh_user_index_name` | Name of the `refresh-tokens` index keyed by `user_id`, which is `IDENTITY_REFRESH_USER_INDEX`. Null when the configured table carries no such index. |
 | `identity_environment` | The `IDENTITY_*` variables that follow from this module's own resources. |
 | `issuer` | The issuer, echoed back. |
 | `audience` | The audience, echoed back. |
@@ -173,6 +174,17 @@ additional_table_grants = map(object({
   enrolment refuses to construct rather than storing a seed in the clear.
 - `registrable_domain` is close to irreversible: the WebAuthn RP ID is hashed into every credential,
   so changing it invalidates every passkey already registered.
+- `refresh-tokens` carries `user_id-family_id-index` so a password change or reset can sign every
+  other device out. The package reads its name from `IDENTITY_REFRESH_USER_INDEX`, which
+  `identity_environment` already carries; a consumer that overrides `tables` and drops the index
+  gets no variable, and those other sessions stay signed in with no error anybody sees.
+- The index projects `KEYS_ONLY` on purpose. `token_hash`, `user_id` and `family_id` are all the
+  revoking write needs, and a wider projection would cost a write on every rotation of the hot path
+  to serve the cold one.
+- Adding the index to a table that already exists is an in place update with no downtime, but
+  DynamoDB backfills it asynchronously and allows only one index build at a time. Until the backfill
+  reports `ACTIVE`, a query against it returns partial results, so land the index and let it finish
+  before deploying the package version that reads it.
 - `identity_environment` carries no product strings (`IDENTITY_ENVIRONMENT`, `IDENTITY_RP_NAME`,
   `IDENTITY_PRODUCT_NAME`, `IDENTITY_SUPPORT_EMAIL`, `IDENTITY_FRONTEND_BASE_URL`); merge it first
   so a product override wins.

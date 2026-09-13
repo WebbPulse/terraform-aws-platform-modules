@@ -332,6 +332,7 @@ variable "tables" {
         { name = "token_hash", type = "S" },
         { name = "family_id", type = "S" },
         { name = "generation", type = "N" },
+        { name = "user_id", type = "S" },
       ]
       hash_key = "token_hash"
       global_secondary_indexes = [
@@ -339,6 +340,12 @@ variable "tables" {
           name      = "family_id-generation-index"
           hash_key  = "family_id"
           range_key = "generation"
+        },
+        {
+          name            = "user_id-family_id-index"
+          hash_key        = "user_id"
+          range_key       = "family_id"
+          projection_type = "KEYS_ONLY"
         },
       ]
       ttl_attribute = "expires_at"
