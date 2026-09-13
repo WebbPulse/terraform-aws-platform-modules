@@ -133,11 +133,11 @@ output "refresh_user_index_name" {
 }
 
 output "users_stream_event_source_mapping_uuid" {
-  description = "UUID of the event source mapping reading the users table stream, null when users_table_stream_arn was not set. It is what the Lambda console and the UpdateEventSourceMapping call identify the mapping by, and it is the handle for pausing the purge without destroying it."
+  description = "UUID of the event source mapping reading the users table stream, null when users_stream_enabled is false. It is what the Lambda console and the UpdateEventSourceMapping call identify the mapping by, and it is the handle for pausing the purge without destroying it."
   value       = one(aws_lambda_event_source_mapping.users_purge[*].uuid)
 }
 
 output "users_stream_policy_json" {
-  description = "IAM policy document granting the four dynamodb stream read actions on the users table stream, null when users_table_stream_arn was not set. Already attached to identity_role_name when attach_role_policies is true; this output is for a consumer composing one inline policy out of several statements or attaching it to a role the module was not told about."
+  description = "IAM policy document granting the four dynamodb stream read actions on the users table stream, null when users_stream_enabled is false. Already attached to identity_role_name when attach_role_policies is true; this output is for a consumer composing one inline policy out of several statements or attaching it to a role the module was not told about."
   value       = local.users_stream_policy_json
 }

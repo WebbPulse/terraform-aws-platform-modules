@@ -145,9 +145,7 @@ locals {
     IDENTITY_REFRESH_USER_INDEX = local.refresh_user_index_name
   }
 
-  users_stream_enabled = var.users_table_stream_arn != null
-
-  users_stream_environment = local.users_stream_enabled ? {
+  users_stream_environment = var.users_stream_enabled ? {
     AWS_LWA_PASS_THROUGH_PATH    = var.users_stream_events_path
     IDENTITY_EVENTS_PATH         = var.users_stream_events_path
     IDENTITY_USERS_KEY_ATTRIBUTE = var.users_key_attribute
@@ -160,7 +158,7 @@ locals {
     "dynamodb:ListStreams",
   ]
 
-  users_stream_policy_json = local.users_stream_enabled ? jsonencode({
+  users_stream_policy_json = var.users_stream_enabled ? jsonencode({
     Version = "2012-10-17"
     Statement = [
       {

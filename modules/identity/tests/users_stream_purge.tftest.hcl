@@ -69,6 +69,7 @@ run "a_stream_arn_creates_the_mapping_and_the_environment" {
   command = plan
 
   variables {
+    users_stream_enabled   = true
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name = "example-staging-identity"
     identity_role_name     = "example-staging-identity"
@@ -140,6 +141,7 @@ run "the_mapping_only_sees_removes" {
   command = plan
 
   variables {
+    users_stream_enabled   = true
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name = "example-staging-identity"
     identity_role_name     = "example-staging-identity"
@@ -158,6 +160,7 @@ run "the_adapter_path_and_the_route_path_cannot_drift" {
   command = plan
 
   variables {
+    users_stream_enabled     = true
     users_table_stream_arn   = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name   = "example-staging-identity"
     identity_role_name       = "example-staging-identity"
@@ -189,6 +192,7 @@ run "the_stream_grant_attaches_when_the_module_owns_the_policies" {
   command = plan
 
   variables {
+    users_stream_enabled   = true
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name = "example-staging-identity"
     identity_role_name     = "example-staging-identity"
@@ -214,22 +218,24 @@ run "the_stream_grant_attaches_when_the_module_owns_the_policies" {
   }
 }
 
-run "a_stream_arn_without_a_function_is_rejected" {
+run "enabling_the_stream_without_a_function_is_rejected" {
   command = plan
 
   variables {
+    users_stream_enabled   = true
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_role_name     = "example-staging-identity"
     attach_role_policies   = true
   }
 
-  expect_failures = [var.identity_function_name]
+  expect_failures = [aws_lambda_event_source_mapping.users_purge]
 }
 
 run "a_table_arn_in_place_of_a_stream_arn_is_rejected" {
   command = plan
 
   variables {
+    users_stream_enabled   = true
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users"
     identity_function_name = "example-staging-identity"
     identity_role_name     = "example-staging-identity"
@@ -243,6 +249,7 @@ run "a_stream_without_the_module_owning_the_grant_is_rejected" {
   command = plan
 
   variables {
+    users_stream_enabled   = true
     users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
     identity_function_name = "example-staging-identity"
     identity_role_name     = "example-staging-identity"
@@ -250,4 +257,48 @@ run "a_stream_without_the_module_owning_the_grant_is_rejected" {
   }
 
   expect_failures = [var.attach_role_policies]
+}
+
+run "an_arn_without_the_boolean_wires_nothing" {
+  command = plan
+
+  variables {
+    users_table_stream_arn = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-users/stream/2026-09-13T00:00:00.000"
+    identity_function_name = "example-staging-identity"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = true
+  }
+
+  assert {
+    condition     = length(aws_lambda_event_source_mapping.users_purge) == 0
+    error_message = "users_stream_enabled is the switch. An ARN on its own must wire nothing, which is why an upgrading consumer has to add the boolean."
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.users_stream) == 0
+    error_message = "With the switch off there is no mapping to grant for, so the inline policy must not be created."
+  }
+
+  assert {
+    condition     = !contains(keys(local.identity_environment), "AWS_LWA_PASS_THROUGH_PATH")
+    error_message = "Pass through must follow the switch, not the ARN, so a consumer that has not opted in does not get a route it cannot serve."
+  }
+
+  assert {
+    condition     = output.users_stream_policy_json == null
+    error_message = "The stream policy output must follow the switch too."
+  }
+}
+
+run "enabling_the_stream_without_an_arn_is_rejected" {
+  command = plan
+
+  variables {
+    users_stream_enabled   = true
+    identity_function_name = "example-staging-identity"
+    identity_role_name     = "example-staging-identity"
+    attach_role_policies   = true
+  }
+
+  expect_failures = [aws_lambda_event_source_mapping.users_purge]
 }
