@@ -7,6 +7,31 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.18.0
+
+### `dynamodb-tables` and `identity`: global secondary index keys move to `key_schema` **no plan change**
+
+aws provider 6.29.0 added a nested `key_schema` block to `global_secondary_index` and deprecated the
+`hash_key` and `range_key` arguments inside it. Both modules wrote the deprecated form, so every plan
+that touched an indexed table logged `hash_key is deprecated. Use key_schema instead.` once per index.
+The four WebbPulse workspaces raised sixteen of these between them. The top level table `hash_key` and
+`range_key` are not deprecated and are untouched.
+
+Both modules now emit one `key_schema` block for the hash key and, where the index defines one, a
+second for the range key. The two forms are mutually exclusive within a single index block, so the
+deprecated arguments are gone rather than set alongside.
+
+No input changes. `global_secondary_indexes` still takes `hash_key` and `range_key` and the module
+translates them, so no consumer edits a root module for this.
+
+The provider reads an index's keys back into `hash_key` and `range_key` whichever form created it, and
+suppresses the resulting diff when `key_schema` is set. Its own acceptance test for the transition
+asserts a no-op plan, so an existing index is neither replaced nor updated in place. The
+`required_providers` floor for both modules moves from `>= 5.100` to `>= 6.32.1`, the release that
+fixed a perpetual diff when an index defined a range key through `key_schema`. The `< 7.0` ceiling is
+unchanged. Every WebbPulse workspace already resolves 6.64.0, so no consumer moves provider version to
+take this.
+
 ## 2.17.1
 
 ### `identity`: the users stream purge wiring is gated on a plan time known boolean

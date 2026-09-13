@@ -162,7 +162,7 @@ run "passkeys_lists_consistently_on_the_base_table_and_logs_in_through_the_index
   }
 
   assert {
-    condition     = one(aws_dynamodb_table.this["passkeys"].global_secondary_index).hash_key == "credential_id"
+    condition     = [for k in one(aws_dynamodb_table.this["passkeys"].global_secondary_index).key_schema : "${k.key_type}:${k.attribute_name}"] == ["HASH:credential_id"]
     error_message = "The login lookup goes from the credential id the authenticator returned to its owner, so credential_id is the index hash key."
   }
 
@@ -254,7 +254,7 @@ run "oauth_links_is_keyed_on_the_provider_identity_and_lists_through_the_index" 
   }
 
   assert {
-    condition     = one(aws_dynamodb_table.this["oauth-links"].global_secondary_index).hash_key == "user_id"
+    condition     = [for k in one(aws_dynamodb_table.this["oauth-links"].global_secondary_index).key_schema : "${k.key_type}:${k.attribute_name}"] == ["HASH:user_id"]
     error_message = "Listing a user's links and counting their remaining sign-in methods both query by user_id."
   }
 

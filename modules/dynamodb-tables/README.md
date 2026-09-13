@@ -110,6 +110,11 @@ Each entry in `tables`:
   replacement of the table or index; adding or removing a whole GSI is an online update instead.
 - `non_key_attributes` must be set exactly when `projection_type` is `INCLUDE`, and every table and
   index key must appear in `attributes`; both are caught at plan time by validation.
+- Index keys are written to the provider as a nested `key_schema` block, not the deprecated
+  `hash_key` and `range_key` arguments. The `global_secondary_indexes` input is unchanged and still
+  takes `hash_key` and `range_key`; the module translates them. The provider treats the swap as a
+  no-op, so an existing index is neither replaced nor updated. This needs aws provider 6.32.1 or
+  later, which the module's `required_providers` now enforces.
 - `PROVISIONED` wires the capacity inputs through but creates no autoscaling target or policy.
 - A users table feeding the identity module's purge mapping needs `stream_view_type` set here first:
   `stream_arns["users"]` is null until it is, and the mapping resolves the ARN at create time.

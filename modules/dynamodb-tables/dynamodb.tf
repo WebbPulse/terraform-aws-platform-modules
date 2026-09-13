@@ -23,12 +23,24 @@ resource "aws_dynamodb_table" "this" {
 
     content {
       name               = global_secondary_index.value.name
-      hash_key           = global_secondary_index.value.hash_key
-      range_key          = global_secondary_index.value.range_key
       projection_type    = global_secondary_index.value.projection_type
       non_key_attributes = global_secondary_index.value.non_key_attributes
       read_capacity      = global_secondary_index.value.read_capacity
       write_capacity     = global_secondary_index.value.write_capacity
+
+      key_schema {
+        attribute_name = global_secondary_index.value.hash_key
+        key_type       = "HASH"
+      }
+
+      dynamic "key_schema" {
+        for_each = global_secondary_index.value.range_key == null ? [] : [global_secondary_index.value.range_key]
+
+        content {
+          attribute_name = key_schema.value
+          key_type       = "RANGE"
+        }
+      }
     }
   }
 
