@@ -93,3 +93,23 @@ output "identity_jwt_route_keys" {
   description = "The route keys the authorizer requires an identity access token on, sorted, echoed back so a consumer can assert the set in a plan. Empty when nothing is enforced."
   value       = local.identity_jwt_enabled ? local.identity_jwt_route_keys : []
 }
+
+output "signing_key_ssm_parameter_name" {
+  description = "SSM parameter holding the RSA private key the gate signs CloudFront cookies with. The e2e suite reads it in staging to mint its own session cookies. The parameter is a SecureString; this output is the name only, never the key."
+  value       = aws_ssm_parameter.signing_key.name
+}
+
+output "signing_key_ssm_parameter_arn" {
+  description = "ARN of the SSM parameter holding the signing private key, for the ssm:GetParameter grant the e2e role needs in staging. The ARN is not secret; the key it names is and stays in the parameter."
+  value       = aws_ssm_parameter.signing_key.arn
+}
+
+output "signing_key_pair_id" {
+  description = "CloudFront public key id that goes in the CloudFront-Key-Pair-Id cookie. Anything minting a session cookie with the signing key must send this alongside the policy and signature."
+  value       = aws_cloudfront_public_key.signing.id
+}
+
+output "cookie_domain" {
+  description = "Domain the signed session cookies are scoped to, echoed back so a consumer passes the same value to anything minting cookies rather than restating the staging apex."
+  value       = var.cookie_domain
+}

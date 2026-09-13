@@ -7,6 +7,30 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.19.0
+
+### `staging-access-gate`: the cookie signing material is published as outputs **no plan change**
+
+The shared e2e suite drives the staging sites through a real browser, and both staging sites sit
+behind this gate, so the suite has to present the same CloudFront signed cookies a browser gets from
+the login Lambda. Everything it needs to mint them already exists in the module, but none of it was
+an output: the test role had to rebuild the SSM parameter path from the naming convention and read
+the CloudFront public key id out of the console.
+
+Four outputs are added. `signing_key_ssm_parameter_name` and `signing_key_ssm_parameter_arn` name
+the SecureString holding the RSA private key, the ARN being what a consumer writes into the
+`ssm:GetParameter` statement. `signing_key_pair_id` is the CloudFront public key id that goes in the
+`CloudFront-Key-Pair-Id` cookie. `cookie_domain` echoes the input back so the signed policy resource
+and the cookie scope come from one value rather than two that can drift.
+
+Neither the parameter name nor the ARN is marked sensitive, because neither is: the key itself stays
+in the SecureString and is never an output. Marking them would force a consumer to launder them
+through a sensitive value to build an IAM policy, and would print the resulting policy document as
+redacted in every plan.
+
+Grant the read in staging only. Nothing else changes: no inputs, no resources, no existing output, so
+an existing consumer takes this with an empty plan.
+
 ## 2.18.0
 
 ### `dynamodb-tables` and `identity`: global secondary index keys move to `key_schema` **no plan change**
