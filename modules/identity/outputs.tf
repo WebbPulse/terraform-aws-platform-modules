@@ -100,7 +100,8 @@ output "identity_environment" {
     merge into the identity function's environment:
 
       IDENTITY_ISSUER, IDENTITY_AUDIENCE, IDENTITY_SIGNING_KEY_ARNS (a JSON array, active signer
-      first), IDENTITY_COOKIE_DOMAIN, IDENTITY_RP_ID and, when an MFA envelope key exists,
+      first), IDENTITY_COOKIE_DOMAIN, IDENTITY_RP_ID, IDENTITY_REFRESH_USER_INDEX when the
+      refresh-tokens table carries a user_id index, and, when an MFA envelope key exists,
       IDENTITY_DATA_KEY_ARN.
 
     Product strings this module owns no resource for (IDENTITY_ENVIRONMENT, IDENTITY_RP_NAME,
@@ -124,4 +125,9 @@ output "audience" {
 output "additional_table_grant_policy_json" {
   description = "Grant name to the IAM policy document attached to that grant's role, covering the named tables and their indexes. Already attached; this output is for a consumer composing one inline policy out of several statements, and for a reviewer reading what an apply granted without decoding state."
   value       = local.additional_grant_policy_json
+}
+
+output "refresh_user_index_name" {
+  description = "Name of the refresh-tokens index keyed by user_id, or null when the configured refresh-tokens table carries no such index. This is the string webbpulse.identity reads as IDENTITY_REFRESH_USER_INDEX, and it is already merged into identity_environment. Revoking every other session on a password change queries it, so a consumer that overrides tables and drops the index leaves those sessions signed in."
+  value       = local.refresh_user_index_name
 }

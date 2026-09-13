@@ -133,6 +133,18 @@ locals {
     IDENTITY_DATA_KEY_ARN = local.mfa_key_arn
   } : {}
 
+  refresh_user_index_name = try(
+    one([
+      for index in var.tables["refresh-tokens"].global_secondary_indexes :
+      index.name if index.hash_key == "user_id"
+    ]),
+    null,
+  )
+
+  refresh_user_index_environment = local.refresh_user_index_name == null ? {} : {
+    IDENTITY_REFRESH_USER_INDEX = local.refresh_user_index_name
+  }
+
   identity_environment = merge(
     {
       IDENTITY_ISSUER           = var.issuer
@@ -141,6 +153,7 @@ locals {
       IDENTITY_COOKIE_DOMAIN    = var.registrable_domain
       IDENTITY_RP_ID            = var.registrable_domain
     },
+    local.refresh_user_index_environment,
     local.mfa_environment,
   )
 }

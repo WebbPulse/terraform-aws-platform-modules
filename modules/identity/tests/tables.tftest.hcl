@@ -307,23 +307,107 @@ run "refresh_tokens_verifies_on_the_primary_key_and_revokes_through_the_index" {
   }
 
   assert {
-    condition     = one(aws_dynamodb_table.this["refresh-tokens"].global_secondary_index).name == "family_id-generation-index"
-    error_message = "The GSI name must be exactly family_id-generation-index: REFRESH_FAMILY_INDEX in storage.py names it as a literal and a rename breaks family revocation."
+    condition     = length(var.tables["refresh-tokens"].global_secondary_indexes) == 2
+    error_message = "refresh-tokens carries two indexes: family_id-generation-index for family revocation and user_id-family_id-index for signing a user out everywhere."
   }
 
   assert {
-    condition     = one(aws_dynamodb_table.this["refresh-tokens"].global_secondary_index).hash_key == "family_id"
-    error_message = "Revoking a family queries by family_id."
+    condition = one([
+      for index in var.tables["refresh-tokens"].global_secondary_indexes :
+      index if index.name == "family_id-generation-index"
+    ]).hash_key == "family_id"
+    error_message = "The GSI name must be exactly family_id-generation-index and hash on family_id: REFRESH_FAMILY_INDEX in storage.py names it as a literal and a rename breaks family revocation."
   }
 
   assert {
-    condition     = one(aws_dynamodb_table.this["refresh-tokens"].global_secondary_index).range_key == "generation"
+    condition = one([
+      for index in var.tables["refresh-tokens"].global_secondary_indexes :
+      index if index.name == "family_id-generation-index"
+    ]).range_key == "generation"
     error_message = "generation orders a family, which is how reuse of an old generation is detected."
   }
 
   assert {
     condition     = var.tables["refresh-tokens"].ttl_attribute == "expires_at"
     error_message = "Refresh tokens must expire on expires_at, which is the attribute the store writes."
+  }
+}
+
+run "refresh_tokens_signs_a_user_out_everywhere_through_the_user_index" {
+  command = plan
+
+  assert {
+    condition = one([
+      for index in var.tables["refresh-tokens"].global_secondary_indexes :
+      index if index.name == "user_id-family_id-index"
+    ]).hash_key == "user_id"
+    error_message = "The GSI name must be exactly user_id-family_id-index and hash on user_id: it is the default of IDENTITY_REFRESH_USER_INDEX, and without it a password change cannot enumerate a user's families and leaves every other device signed in."
+  }
+
+  assert {
+    condition = one([
+      for index in var.tables["refresh-tokens"].global_secondary_indexes :
+      index if index.name == "user_id-family_id-index"
+    ]).range_key == "family_id"
+    error_message = "family_id is the index range key so a revoke that spares the caller's own family filters on the key rather than on a projected attribute."
+  }
+
+  assert {
+    condition = one([
+      for index in var.tables["refresh-tokens"].global_secondary_indexes :
+      index if index.name == "user_id-family_id-index"
+    ]).projection_type == "KEYS_ONLY"
+    error_message = "KEYS_ONLY is enough: the index projects token_hash from the table key plus user_id and family_id from its own, which is everything the revoking write needs. Projecting more would cost a write on every rotation of the hot path to serve the cold one."
+  }
+
+  assert {
+    condition     = contains([for a in var.tables["refresh-tokens"].attributes : a.name], "user_id")
+    error_message = "user_id must be declared as a table attribute or the index key has no type."
+  }
+
+  assert {
+    condition     = local.refresh_user_index_name == "user_id-family_id-index"
+    error_message = "The module must resolve the user index name from the configured table so identity_environment carries it."
+  }
+
+  assert {
+    condition     = local.identity_environment["IDENTITY_REFRESH_USER_INDEX"] == "user_id-family_id-index"
+    error_message = "IDENTITY_REFRESH_USER_INDEX must reach the identity function's environment, because that is how the package learns the index name."
+  }
+}
+
+run "a_refresh_tokens_table_with_no_user_index_omits_the_environment_variable" {
+  command = plan
+
+  variables {
+    tables = {
+      "refresh-tokens" = {
+        attributes = [
+          { name = "token_hash", type = "S" },
+          { name = "family_id", type = "S" },
+          { name = "generation", type = "N" },
+        ]
+        hash_key = "token_hash"
+        global_secondary_indexes = [
+          {
+            name      = "family_id-generation-index"
+            hash_key  = "family_id"
+            range_key = "generation"
+          },
+        ]
+        ttl_attribute = "expires_at"
+      }
+    }
+  }
+
+  assert {
+    condition     = local.refresh_user_index_name == null
+    error_message = "A consumer that overrides tables without the user index must resolve to null rather than to a name no table carries."
+  }
+
+  assert {
+    condition     = !contains(keys(local.identity_environment), "IDENTITY_REFRESH_USER_INDEX")
+    error_message = "With no user index the variable must be absent, so the package falls back to the family id list rather than querying an index that does not exist."
   }
 }
 
@@ -395,7 +479,7 @@ run "the_table_grant_reaches_the_index_on_every_indexed_table" {
 
   assert {
     condition     = length([for k, t in var.tables : k if length(t.global_secondary_indexes) > 0]) == 3
-    error_message = "Exactly three default tables carry an index: refresh-tokens for family revocation, passkeys for the login lookup and oauth-links for listing a user's links."
+    error_message = "Exactly three default tables carry an index: refresh-tokens for family revocation and for signing out everywhere, passkeys for the login lookup and oauth-links for listing a user's links."
   }
 
   assert {
