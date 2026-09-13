@@ -145,6 +145,33 @@ locals {
     IDENTITY_REFRESH_USER_INDEX = local.refresh_user_index_name
   }
 
+  users_stream_enabled = var.users_table_stream_arn != null
+
+  users_stream_environment = local.users_stream_enabled ? {
+    AWS_LWA_PASS_THROUGH_PATH    = var.users_stream_events_path
+    IDENTITY_EVENTS_PATH         = var.users_stream_events_path
+    IDENTITY_USERS_KEY_ATTRIBUTE = var.users_key_attribute
+  } : {}
+
+  users_stream_policy_actions = [
+    "dynamodb:DescribeStream",
+    "dynamodb:GetRecords",
+    "dynamodb:GetShardIterator",
+    "dynamodb:ListStreams",
+  ]
+
+  users_stream_policy_json = local.users_stream_enabled ? jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ReadTheUsersTableStream"
+        Effect   = "Allow"
+        Action   = local.users_stream_policy_actions
+        Resource = [var.users_table_stream_arn]
+      },
+    ]
+  }) : null
+
   identity_environment = merge(
     {
       IDENTITY_ISSUER           = var.issuer
@@ -155,5 +182,6 @@ locals {
     },
     local.refresh_user_index_environment,
     local.mfa_environment,
+    local.users_stream_environment,
   )
 }

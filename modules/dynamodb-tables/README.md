@@ -111,4 +111,7 @@ Each entry in `tables`:
 - `non_key_attributes` must be set exactly when `projection_type` is `INCLUDE`, and every table and
   index key must appear in `attributes`; both are caught at plan time by validation.
 - `PROVISIONED` wires the capacity inputs through but creates no autoscaling target or policy.
+- A users table feeding the identity module's purge mapping needs `stream_view_type` set here first:
+  `stream_arns["users"]` is null until it is, and the mapping resolves the ARN at create time.
+  `KEYS_ONLY` is enough, because that handler reads only the key of a `REMOVE` record.
 - One region. Global tables, replicas, `import_table` and `restore_source_name` are not modelled.

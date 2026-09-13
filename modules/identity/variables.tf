@@ -86,9 +86,14 @@ variable "identity_role_name" {
 }
 
 variable "attach_role_policies" {
-  description = "Set false to create no role policies even when identity_role_name is given. The three aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back."
+  description = "Set false to create no role policies even when identity_role_name is given. The aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back. It cannot be false while users_table_stream_arn is set: the event source mapping is created here and Lambda checks the stream grant during the create call, so the mapping can only be ordered behind a grant created here too."
   type        = bool
   default     = true
+
+  validation {
+    condition     = var.attach_role_policies || var.users_table_stream_arn == null
+    error_message = "attach_role_policies is false but users_table_stream_arn is set. CreateEventSourceMapping checks the function role can read the stream during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires the stream, or leave users_table_stream_arn null and build the mapping yourself from the users_stream_policy_json output."
+  }
 }
 
 variable "identity_role_arn" {
@@ -680,5 +685,109 @@ variable "discovery_document_attempts" {
   validation {
     condition     = var.discovery_document_attempts >= 1 && var.discovery_document_attempts <= 600 && floor(var.discovery_document_attempts) == var.discovery_document_attempts
     error_message = "discovery_document_attempts must be a whole number from 1 to 600."
+  }
+}
+
+variable "users_table_stream_arn" {
+  description = <<-EOT
+    ARN of the product's users table DynamoDB Stream, which the identity function reads so that a
+    hard delete of a user row purges that user's identity rows asynchronously. Null, the default,
+    creates no event source mapping and no stream grant, which is why an existing consumer that
+    never sets it sees no plan change.
+
+    The users table is the product's, not this module's: identity owns the credentials, passkeys and
+    refresh tokens keyed by a user id but never the user record itself. So the stream ARN arrives as
+    a string rather than being derived here, usually module.tables.stream_arns["users"] from the
+    dynamodb-tables module with stream_view_type set on that table. KEYS_ONLY is enough, because the
+    handler reads only the key of a REMOVE record.
+
+    The stream must exist before the mapping. CreateEventSourceMapping resolves the ARN during the
+    create call, so pointing this at a table whose stream is not enabled fails the apply rather than
+    waiting.
+  EOT
+
+  type    = string
+  default = null
+
+  validation {
+    condition     = var.users_table_stream_arn == null || can(regex("^arn:aws[a-z-]*:dynamodb:[a-z0-9-]+:[0-9]{12}:table/[^/]+/stream/.+$", coalesce(var.users_table_stream_arn, "")))
+    error_message = "users_table_stream_arn must be a DynamoDB stream ARN, which carries a /stream/<label> suffix after the table name. A table ARN has no stream segment and CreateEventSourceMapping rejects it, so pass the table's stream_arn rather than its arn."
+  }
+}
+
+variable "identity_function_name" {
+  description = "Name or ARN of the identity Lambda the users table stream is mapped to, usually module.lambda_domain[\"identity\"].function_name. Required when users_table_stream_arn is set and ignored otherwise. This module owns the identity function's grants and environment but not the function itself, so the target arrives as a name rather than being created here."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.users_table_stream_arn == null || var.identity_function_name != null
+    error_message = "users_table_stream_arn is set but identity_function_name is null. Pass the identity Lambda's function name so the event source mapping has a target."
+  }
+}
+
+variable "users_key_attribute" {
+  description = "Name of the users table's hash key attribute, which is where the purge handler reads the deleted user's id from dynamodb.Keys on a REMOVE record. Reaches the application as IDENTITY_USERS_KEY_ATTRIBUTE. The package defaults to id when the variable is absent, and this module only emits it alongside the mapping."
+  type        = string
+  default     = "id"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]{1,255}$", var.users_key_attribute))
+    error_message = "users_key_attribute must be a DynamoDB attribute name: 1 to 255 characters of letters, digits, underscore, dot or hyphen."
+  }
+}
+
+variable "users_stream_batch_size" {
+  description = "How many stream records one invocation receives at most. Ten keeps a poison record's blast radius small while still amortising the invocation, and partial failures are reported per record anyway."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.users_stream_batch_size >= 1 && var.users_stream_batch_size <= 1000 && floor(var.users_stream_batch_size) == var.users_stream_batch_size
+    error_message = "users_stream_batch_size must be a whole number from 1 to 1000."
+  }
+}
+
+variable "users_stream_maximum_retry_attempts" {
+  description = "How many times a failing record is retried before the mapping drops it. Left unbounded a poison record blocks its shard until the record expires at 24 hours, which stalls every later delete on that shard. Ten attempts with bisection is enough for a transient throttle and short of a stall."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.users_stream_maximum_retry_attempts >= -1 && var.users_stream_maximum_retry_attempts <= 10000 && floor(var.users_stream_maximum_retry_attempts) == var.users_stream_maximum_retry_attempts
+    error_message = "users_stream_maximum_retry_attempts must be a whole number from -1 to 10000, where -1 means retry until the record expires."
+  }
+}
+
+variable "users_stream_starting_position" {
+  description = "Where the mapping starts reading, LATEST or TRIM_HORIZON. LATEST is the default because replaying up to 24 hours of pre-existing deletes on a first apply purges rows for users already handled by whatever ran before."
+  type        = string
+  default     = "LATEST"
+
+  validation {
+    condition     = contains(["LATEST", "TRIM_HORIZON"], var.users_stream_starting_position)
+    error_message = "users_stream_starting_position must be LATEST or TRIM_HORIZON."
+  }
+}
+
+variable "users_stream_events_path" {
+  description = "Path the Lambda Web Adapter posts a non-HTTP invocation to, which the identity package mounts the purge route on. Reaches the function as both AWS_LWA_PASS_THROUGH_PATH, read by the adapter, and IDENTITY_EVENTS_PATH, read by the application, so the two cannot drift apart."
+  type        = string
+  default     = "/events"
+
+  validation {
+    condition     = startswith(var.users_stream_events_path, "/")
+    error_message = "users_stream_events_path must start with a slash: the adapter posts to it as an absolute path."
+  }
+}
+
+variable "users_stream_batching_window_seconds" {
+  description = "How long the mapping waits to fill a batch before invoking. A purge is not latency sensitive and a small window collapses a bulk delete into far fewer invocations, so five seconds trades a delay nobody observes for a cost nobody pays."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.users_stream_batching_window_seconds >= 0 && var.users_stream_batching_window_seconds <= 300 && floor(var.users_stream_batching_window_seconds) == var.users_stream_batching_window_seconds
+    error_message = "users_stream_batching_window_seconds must be a whole number from 0 to 300."
   }
 }
