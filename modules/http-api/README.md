@@ -5,6 +5,9 @@ layered throttling and a JSON access log, one proxy integration and one invoke p
 backend, the routes, and optionally a custom domain, API mapping, Route 53 alias and a JWT
 authorizer.
 
+The default access log line carries request, response and integration fields, plus `authorizerError`,
+`errorMessage` and `errorType` so an authorizer or gateway rejection explains itself.
+
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/http-api`.
 
 ## Usage
@@ -47,7 +50,7 @@ module "api" {
 | `detailed_metrics_enabled` | Per-route CloudWatch metrics for the whole stage | `false` |
 | `access_log_group_name` | Access log group name, null for `/aws/apigateway/<name>` | `null` |
 | `access_log_retention_days` | Access log retention in days, 0 keeps logs forever | `14` |
-| `access_log_format` | Field name to `$context` variable, stored as `jsonencode()` with sorted keys | 14 fields, see `variables.tf` |
+| `access_log_format` | Field name to `$context` variable, stored as `jsonencode()` with sorted keys | 17 fields, see `variables.tf` |
 | `lambda_permission_statement_id` | Base `statement_id` of the invoke permissions | `"AllowHttpApiInvoke"` |
 | `disable_execute_api_endpoint` | Turn off the execute-api hostname; requires `domain_name` | `false` |
 | `authorizer_id` | Authorizer applied to every route as `CUSTOM`, null makes every route `NONE` | `null` |
@@ -142,6 +145,9 @@ identity_jwt = object({
   while the plan is green. Extensions must fetch from the service worker with `host_permissions`
   instead.
 - JWT claims arrive at `authorizer.jwt.claims` as a string map, so `exp` is a string, not a number.
+- An authorizer denial logs `integrationStatus` and `integrationLatency` as `-` because no
+  integration ran, and `authorizerError` names the reason, so it is the first field to read for a
+  401 with no integration call.
 - The Lambda Web Adapter passes the request context header as plain JSON, not base64.
 - Discovery and JWKS are fetched at CreateAuthorizer time, so the issuer must be live before apply.
 - Gate direct invocation of the function with an `x-origin-verify` header; the authorizer only
