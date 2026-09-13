@@ -1,295 +1,12 @@
 # terraform-aws-identity
 
-A product's whole identity layer as one module block: the KMS signing keys the access tokens are
-signed with, the symmetric KMS key TOTP seeds are sealed under, the ten DynamoDB tables the
-identity flows read and write, the three IAM grants that let the identity function reach all of them,
-and
-optionally the API Gateway JWT authorizer that verifies the resulting tokens at the edge.
+A product's identity layer as one module block: the KMS RSA signing keys access tokens are signed
+with, the symmetric KMS key TOTP seeds are sealed under, the ten identity DynamoDB tables, the IAM
+grants that reach them, an optional API Gateway JWT authorizer, and the `IDENTITY_*` environment
+map. It exists so a consumer wires `webbpulse.identity` with one module call instead of rebuilding
+key names, table schemas and grants by hand.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/identity`.
-
-The module implements the shared identity standard, and its defaults are the standard's decisions
-rather than this module's preferences. The table key schemas in particular are
-`webbpulse.identity`'s contract: `storage.py` and `lockout.py` write these exact attribute names,
-and a table whose hash key does not match what the store writes applies cleanly and then fails on
-the login path at request time. Changing a key in the default `tables` map is changing the
-package's storage layer.
-
-Portfolio adopted the module in
-[WebbPulse-Portfolio#164](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/164). Everything the
-module owns already existed there, the hand-written M1 KMS resources and the four tables alike, so
-the whole adoption was `moved` blocks: 11 moves, 2 adds, 6 in-place changes and no destroys. The
-authorizer and the M4, M5 and M6 tables are the only genuine creates. See [Adoption](#adoption).
-
-## How it works
-
-```
-signing_key_count + active_signing_key
-   │
-   ▼
-aws_kms_key.identity_signing[0..n]          RSA_2048, SIGN_VERIFY, rotation off
-   ├─ aws_kms_alias.identity_signing[0]  ──▶ alias/<name_prefix>-identity-signing
-   │                                         targets the active signer
-   └─ ordered by active_signing_key
-      ▼
-   signing_key_arns = [active, then the rest in index order]
-      │                 head signs; every element is published in the JWKS
-      ▼
-   identity_environment.IDENTITY_SIGNING_KEY_ARNS  (a JSON array)
-
-var.tables = { <key> = { attributes, hash_key, range_key?, global_secondary_indexes?,
-                         ttl_attribute?, point_in_time_recovery?, deletion_protection? } }
-   │  name = "${var.name_prefix}-${key}"
-   ▼
-aws_dynamodb_table.this[<key>]      credentials, refresh-tokens, identity-tokens, login-attempts,
-   │                                  totp-factors, recovery-codes, passkeys, webauthn-challenges,
-   ▼                                  oauth-states, oauth-links
-outputs: table_names, table_arns, table_arns_list, tables
-
-enable_mfa_encryption_key (default true)
-   │
-   ▼
-aws_kms_key.identity_mfa            SYMMETRIC_DEFAULT, ENCRYPT_DECRYPT, rotation ON
-   ├─ aws_kms_alias.identity_mfa ──▶ alias/<name_prefix>-identity-mfa
-   ▼
-   identity_environment.IDENTITY_DATA_KEY_ARN
-
-identity_role_name
-   ├─ aws_iam_role_policy.identity_signing   kms:Sign + kms:GetPublicKey on every signing key
-   ├─ aws_iam_role_policy.identity_tables    item level access to every table and index
-   └─ aws_iam_role_policy.identity_mfa       kms:GenerateDataKey + kms:Decrypt on the envelope key,
-                                             conditioned on the encryption context purpose
-
-http_api_id (optional)
-   └─ terraform_data.discovery_document_ready ──▶ aws_apigatewayv2_authorizer.identity_jwt
-                                                   issuer + audience, RS256
-                                                   ▼
-                                                 authorizer_id, for the caller to attach to routes
-```
-
-- **The signing key list is ordered, and the order is the design.** `signing_key_arns` puts the
-  active key first and never sorts. The package signs with `signing_key_arns[0]` and publishes the
-  public half of every entry in the JWKS, so the list is behaviour rather than presentation. A
-  rotation is two applies: raise `signing_key_count` and deploy, so the JWKS serves both keys while
-  the old one still signs, then move `active_signing_key` to the new index and deploy. Promoting in
-  the same apply that creates the key signs with a key no verifier has fetched yet.
-- **Automatic KMS rotation is off deliberately.** The `kid` a verifier matches on is the base64url
-  SHA-256 of the DER SubjectPublicKeyInfo, which makes it a function of the key material. Rotating
-  material behind one key id changes what `GetPublicKey` returns, the derived `kid` follows it, and
-  every already-issued token then references a `kid` the JWKS no longer serves. Rotation here is by
-  adding a key, never by mutating one.
-- **The envelope key rotates automatically and the signing keys do not, for the same reason.** The
-  reason is the `kid`. A signing key's identifier is derived from its material, so rotating it
-  orphans every already-issued token. An envelope key has no such identifier: KMS keeps every
-  previous backing key and picks the right one out of the wrapped blob, so a data key wrapped last
-  year still opens after a rotation with nothing to re-encrypt and no user to re-enrol. Rotation
-  there is free, which is why it is on.
-- **A TOTP seed is the one identity secret that cannot be hashed**, which is why it gets a key of
-  its own. The server has to reproduce the code to check it, so unlike a password there is no
-  one-way form and unlike a passkey there is no public half: a read of `totp-factors` is a complete
-  compromise of the second factor for every user in it. DynamoDB's own encryption at rest is under
-  an AWS owned key and is transparent to any principal that can call `Query`. Sealing the seed under
-  a separate key means a usable seed needs `dynamodb:GetItem` **and** `kms:Decrypt` with the right
-  encryption context, and every decrypt is a CloudTrail event. It is a different key from the
-  signing key deliberately: one key that could both sign tokens and open seeds would make the blast
-  radius of either compromise the whole of both.
-- **The grant is `GenerateDataKey` and `Decrypt`, never `Encrypt`.** The package uses envelope
-  encryption, so KMS mints a fresh 256-bit data key per seed, AES-256-GCM happens locally, and only
-  the wrapped key is ever sent to KMS. A plaintext seed never reaches KMS, so `kms:Encrypt` would
-  widen the grant for a call nothing makes. A fresh data key per secret is also what makes GCM
-  nonce reuse impossible by construction rather than by a counter somebody has to maintain.
-- **Only the `purpose` half of the encryption context can be pinned in IAM.** The package sends
-  `{"user_id": "<id>", "purpose": "totp"}` on both calls, and KMS binds it into the wrapped key as
-  authenticated additional data, which is what makes a ciphertext copied into another user's row
-  fail to decrypt. In a policy condition only `purpose` has a fixed value: `user_id` differs per
-  user and no static condition can name it. Pinning `purpose` still buys the real property, that
-  this key is usable for TOTP seeds and nothing else, so a later feature wanting an envelope gets
-  its own key rather than quietly widening this one.
-- **Per-entity tables, not single table.** TTL is a table-level setting. Refresh tokens and
-  verification tokens want one and credentials must never have one, so mixing them would leave the
-  permanent items carrying a TTL attribute that must never be set, where one bug deletes accounts.
-  Separate tables make that failure impossible rather than merely unlikely. Per-table IAM is the
-  other half.
-- **A WebAuthn challenge is a row, not a token, and the table grant has to reach three indexes.** A
-  challenge exists to make an assertion unreplayable, which is a claim about state that a signed
-  token cannot make: a JWT verifies exactly as well the second time as the first. So
-  `webauthn-challenges` holds one row per outstanding ceremony, written when options are generated
-  and deleted when it is consumed, with `expires_at` reclaiming what is abandoned. `passkeys` is
-  keyed `user_id` + `credential_id` because the management page reads its own writes and needs a
-  consistent `Query` on the base table, and `credential_id-index` serves the login lookup in the
-  other direction, where eventual consistency is fine.
-- **An OAuth state is a row for the same reason, and `oauth-links` is keyed on the provider
-  identity.** `oauth-states` holds one row per outstanding authorization request, spent by a
-  conditional `DeleteItem` so it is single use even under a concurrent replay, with `expires_at`
-  reclaiming what is abandoned; the ten minute deadline is re-checked on every read, so an
-  unreclaimed row is refused rather than accepted. `oauth-links` hashes on `provider_subject`
-  (`<provider>#<subject>`) so the uniqueness constraint **is** the primary key: attaching a provider
-  is one conditional put on `attribute_not_exists(provider_subject)`, which resolves a race to one
-  winner with no read-then-write and no synthetic reservation rows. `user_id-index` answers "every
-  link for this user" for listing and for the last-method count in unlink. A GSI rather than a
-  second table because two tables would need both rows written and deleted in step with no
-  cross-table transaction available, and a half-failed pair is an orphaned link that unlink cannot
-  find; an index cannot disagree with its base table.
-- **Three indexes now sit on a request path, which is what the grant's `/index/*` entries are for.**
-  The refresh token family revocation reads `family_id-generation-index`, the passkey login lookup
-  reads `credential_id-index` and the OAuth link listing reads `user_id-index`. DynamoDB authorises
-  an index read against `table/<name>/index/<index>`, so a policy naming only `table/<name>` denies
-  all three with an `AccessDenied` that names the table.
-- **`oauth-links` and `passkeys` never carry a TTL, and the rule is sharper than it looks.** Both
-  hold sign-in methods, and either may be the only one an account has. The package refuses an unlink
-  that would remove the last way in, but a TTL deletes with nobody to refuse it.
-- **The three identity strings are close to irreversible.** The `issuer` is byte identical in three
-  places (the `iss` claim, the discovery document's `issuer` member, the authorizer's configured
-  issuer) and a mismatch denies every request while logging no reason. The `audience` carries the
-  environment so a staging token is not accepted by production. The `registrable_domain` is hashed
-  into every passkey by the authenticator and is immutable for that credential's life.
-- **The alias closes a dependency loop with a string.** The key policy names the identity
-  function's role, so the key depends on the Lambda. Naming the key from inside that module's
-  environment would make the module depend on the key and Terraform would refuse the graph. The
-  alias name is a pure function of `name_prefix`, and KMS accepts an alias anywhere it accepts a
-  key id for `Sign` and `GetPublicKey`.
-- **Validation catches at plan time what DynamoDB and KMS reject at apply time.** Every hash and
-  index key must name a declared attribute, `signing_key_count` is one to four, `active_signing_key`
-  must index a key that exists, the key spec must be RSA, and the issuer must be `https` with no
-  trailing slash.
-
-## Ordering, and why the authorizer is usually a second apply
-
-`CreateAuthorizer` on an HTTP API validates the issuer **synchronously**. API Gateway fetches
-`<issuer>/.well-known/openid-configuration` during the create call and rejects it with
-
-```
-BadRequestException: ... Issuer must have a valid discovery endpoint ended with
-'/.well-known/openid-configuration'
-```
-
-when it does not get a discovery document back. This is not documented; it was learned from a
-failed apply on Portfolio's M0 spike. Two things must therefore already be true when the authorizer
-is created, and neither is implied by anything it references:
-
-1. The identity function is serving the discovery document and the JWKS.
-2. The two `.well-known` routes exist on the API and answer **anonymously**. They cannot sit behind
-   an authorizer of any kind, because API Gateway's own validator fetches them from outside with no
-   credentials of ours. On an API fronted by the staging access gate that means
-   `authorization_type = "NONE"` on exactly those two routes.
-
-So on the first apply of a new environment, leave `http_api_id` null. Once the function is deployed
-and the routes answer, set it along with `authorizer_depends_on`.
-
-`depends_on` orders Terraform's API calls and not their effects, which is the gap
-`wait_for_discovery_document` closes. Three separate lags sit between "CreateRoute returned 201" and
-"a request from API Gateway's validator gets a document back": an `auto_deploy` stage deploys a new
-route asynchronously, `UpdateFunctionConfiguration` returns while `LastUpdateStatus` is still
-`InProgress`, and a container image function under the Lambda Web Adapter takes seconds to cold
-start. Any one of them makes `CreateAuthorizer` fetch a 404, and the failure is the same
-`BadRequestException` as having no route at all, with nothing to say which of the two it was. The
-module polls the real URL until it answers, so a spurious failure and a real misconfiguration stop
-being indistinguishable.
-
-**Protected routes are not created here, deliberately.** A route naming this authorizer must be
-created after it, while the discovery routes must be created before it. Putting both in one
-`for_each` collapses the two orderings into one and Terraform refuses the graph. The module hands
-back `authorizer_id` and the consumer attaches it, either through the `http-api` module's per-route
-`authorizer_id` or on a standalone `aws_apigatewayv2_route`.
-
-## The MFA routes, and the one that must stay in front of the authorizer
-
-`webbpulse` 0.12.0 mounts six MFA routes under the issuer's path. They mount only when TOTP is
-enabled and the product supplies the two M4 stores, which is what the `totp-factors` and
-`recovery-codes` tables above are for. The module does not create routes, so this is a table of what
-the consumer attaches `authorizer_id` to and what it must not.
-
-| Route | Behind the JWT authorizer |
-| --- | --- |
-| `POST <issuer>/login/totp` | **No.** See below. |
-| `POST <issuer>/totp/enrol` | Yes |
-| `POST <issuer>/totp/activate` | Yes |
-| `POST <issuer>/totp/disable` | Yes |
-| `POST <issuer>/recovery-codes` | Yes |
-| `POST <issuer>/step-up` | Yes |
-
-**`login/totp` must not be behind the authorizer, and the reason is the audience.** It is the second
-leg of an MFA login: the caller has proved a password and holds an MFA ticket, not an access token.
-The ticket is deliberately minted with an audience of `<issuer>/mfa` rather than the API's audience,
-which is exactly what stops it being spent anywhere else. The gateway's JWT authorizer is configured
-with the API's `audience`, so a ticket presented to any route behind it is rejected before it
-reaches any code of ours. Put `login/totp` behind the authorizer and every MFA login fails at its
-second step, with a gateway 401 that names no reason and never reaches a log of the function's.
-
-Give it `authorization_type = "NONE"`, the same treatment the two `.well-known` routes get, and for
-a related reason: in all three cases the caller cannot yet hold the credential the authorizer wants.
-
-The other five do sit behind it, and it is worth saying why that is safe rather than merely
-conventional. Each one acts on an already-authenticated user and reads its subject from the
-**verified claims** rather than from the request body. A user id in the body would let anybody enrol
-a factor on anybody else's account, so the authorizer is not decoration on these routes: it is where
-the subject comes from.
-
-## The passkey routes, and the two that must stay in front of the authorizer
-
-`webbpulse` 0.14.0 mounts seven passkey routes under the issuer's path. They mount only when
-`passkeys_enabled` is true and the product supplies the two M5 stores, which is what the `passkeys`
-and `webauthn-challenges` tables above are for. As with the MFA routes the module creates no routes,
-so this is a table of what the consumer attaches `authorizer_id` to and what it must not.
-
-| Route | Behind the JWT authorizer |
-| --- | --- |
-| `POST <issuer>/passkeys/register/options` | Yes |
-| `POST <issuer>/passkeys/register/verify` | Yes |
-| `POST <issuer>/login/passkey/options` | **No.** Anonymous by design. |
-| `POST <issuer>/login/passkey/verify` | **No.** It is the sign-in. |
-| `GET <issuer>/passkeys` | Yes |
-| `PATCH <issuer>/passkeys/{credential_id}` | Yes |
-| `DELETE <issuer>/passkeys/{credential_id}` | Yes |
-
-**The two login legs are the entry point, so nothing can be behind the authorizer yet.** Give them
-`authorization_type = "NONE"`, the same treatment `login/totp` and the two `.well-known` routes get,
-and for the same underlying reason: the caller cannot yet hold the credential the authorizer wants.
-`login/passkey/options` is deliberately answerable by anybody, including an address with no account,
-because answering differently would turn an anonymous route into an account oracle that needs no
-password.
-
-The other five sit behind it and read their subject from the **verified claims** rather than from
-the body, which is what stops one user registering, renaming or deleting a credential on another
-user's account.
-
-**One consequence worth knowing before the routes go up.** The package treats a user-verified
-passkey as two factors and sets `amr` to `["swk", "pin", "mfa"]`, so a user with TOTP enrolled is
-**not** challenged for a code after signing in with one. A passkey reporting no user verification is
-one factor and is challenged exactly as a password is. That is a policy decision the package makes
-rather than one this module configures, but it changes what a sign-in looks like on a product that
-already required MFA.
-
-## The OAuth routes, and the two that must stay in front of the authorizer
-
-`webbpulse` 0.15.0 mounts five OAuth routes under the issuer's path. They mount only when the
-product has configured a provider with a client id and supplied both M6 stores, which is what the
-`oauth-states` and `oauth-links` tables above are for.
-
-| Route | Behind the JWT authorizer |
-| --- | --- |
-| `GET <issuer>/oauth/{provider}/start` | **No.** It is the start of a sign-in. |
-| `GET <issuer>/oauth/callback` | **No.** The browser arrives from the provider. |
-| `POST <issuer>/oauth/{provider}/link` | Yes |
-| `GET <issuer>/oauth/links` | Yes |
-| `DELETE <issuer>/oauth/{provider}/link` | Yes |
-
-**The start and callback legs are the entry point**, so as with the passkey login legs the caller
-holds nothing the authorizer would accept. Give them `authorization_type = "NONE"`. The callback in
-particular is a **browser redirect from the provider**, not an XHR, so it arrives with no
-`Authorization` header at all and there is no way for it to carry one.
-
-The `link` routes do sit behind the authorizer, and that is where the account being linked to comes
-from. A user id in the body would be an account takeover primitive, and the state row records
-whether the flow was started as a login or as a link so a callback cannot be replayed into the other
-meaning.
-
-**Two things about linking that the module does not configure but that decide what a plan means.**
-Auto-linking happens only when the provider's email **and** the local account's email are both
-verified, because either half alone is a takeover route. And an unlink refuses to remove the last
-sign-in method, counting other links, a stored password and the product's own hook, which is why
-`oauth-links` must never grow a TTL: an expiring link is exactly the deletion that refusal exists to
-prevent, performed by DynamoDB with nobody to refuse it.
 
 ## Usage
 
@@ -307,112 +24,93 @@ module "identity" {
   identity_role_arn    = module.lambda_domain["identity"].role_arn
   attach_role_policies = true
 
-  point_in_time_recovery = true
-  deletion_protection    = var.environment == "production"
+  deletion_protection = var.environment == "production"
 }
 ```
 
-A fuller worked example, including the environment block and the authorizer wiring, is in
-[`examples/identity-basic`](../../examples/identity-basic).
+The ten default tables and their key schemas, which are the `webbpulse.identity` package's
+contract rather than this module's preference:
 
-### The role policies and the first apply
-
-The three `aws_iam_role_policy` resources, `identity-signing`, `identity-mfa` and
-`identity-tables`, count off `attach_role_policies` rather than off whether
-`identity_role_name` is null. That looks like a redundant input and it is not.
-
-A consumer passes `module.lambda_domain["identity"].role_id`, which is
-`aws_iam_role.this.id`. When that role already exists the id is known at plan time and either
-form of the count works. When the role is itself still to be created, in the apply that first
-introduces the identity domain, the id is unknown until apply. A `count` built from an unknown
-value is not a count Terraform defers: it refuses to produce a plan at all, and the error is
-`Invalid count argument`. A boolean the consumer sets is known by construction, so the count
-always is too.
-
-So the ordinary case is `attach_role_policies = true` and nothing to think about. Set it false
-only to hold the policies back deliberately, for instance to attach the `*_policy_json` outputs by
-hand, and leave `identity_role_name` null when you do. The two are validated together: true with a
-null role name is refused at plan time, which is the same behaviour the old null check gave.
-
-### Granting a second role on an identity table
-
-`identity_role_name` is the identity function, and it is the only role the three generated policies
-reach. Sometimes another function has to touch one identity table without becoming the identity
-function. The case this was built for is a users domain whose own routes still create an account and
-change a password: those writes belong in `credentials`, and the users role is not the identity role.
-
-A consumer cannot express that grant on its own side without naming ARNs this module owns. It would
-have to rebuild `"<name_prefix>-credentials"` from the prefix, or read `table_arns["credentials"]`
-and hand-write the statement including the index wildcard, and in either case nothing keeps the
-result in step with a later change to `tables` or to `table_policy_actions`.
-
-`additional_table_grants` keeps that inside the module. Each entry names a role, the logical tables
-it reaches, and optionally a narrower action list than the identity function has:
-
-```hcl
-additional_table_grants = {
-  users-credentials = {
-    role_name = module.lambda_domain["users"].role_id
-    tables    = ["credentials"]
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
-  }
-}
-```
-
-Leave `actions` out to take `table_policy_actions`, which is the identity function's own set and the
-ceiling for anything granted here. Naming a narrower list is the usual reason to use this input: a
-users function that writes a password hash needs three actions, not nine.
-
-Every name in `tables` is checked against the keys of `var.tables` at plan time, so a typo fails the
-plan rather than attaching a policy that grants nothing. The grant covers each named table and its
-indexes, the same shape the identity grant takes.
-
-The map key, not the role name, is what the resource's `for_each` reads, which is the same plan-time
-concern `attach_role_policies` exists for. The key is a literal a consumer writes, so the count is
-always known; the role name may be unknown, which is what lets a consumer pass
-`module.lambda_domain["users"].role_id` on the apply that also creates that role. The inline policy
-is named `identity-tables-<key>`, so two grants on one role do not collide.
+| Logical key | Hash key | Range key | Index | TTL |
+| --- | --- | --- | --- | --- |
+| `credentials` | `user_id` | `credential_type` | | |
+| `refresh-tokens` | `token_hash` | | `family_id-generation-index` | `expires_at` |
+| `identity-tokens` | `token_hash` | | | `expires_at` |
+| `login-attempts` | `identity_key` | `attempted_at` | | `expires_at` |
+| `totp-factors` | `user_id` | | | |
+| `recovery-codes` | `user_id` | `code_hash` | | |
+| `passkeys` | `user_id` | `credential_id` | `credential_id-index` | |
+| `webauthn-challenges` | `challenge_id` | | | `expires_at` |
+| `oauth-states` | `state` | | | `expires_at` |
+| `oauth-links` | `provider_subject` | | `user_id-index` | |
 
 ## Inputs
 
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `name_prefix` | `string` | required | Prefix for every name the module builds. `webbpulse-staging` gives `alias/webbpulse-staging-identity-signing` and `webbpulse-staging-credentials`. Must match the application's table prefix. |
-| `issuer` | `string` | required | The issuer, byte for byte, carrying the `/api/auth` path. `https`, no trailing slash. |
-| `audience` | `string` | required | The `aud` claim the function stamps and the authorizer requires. |
-| `registrable_domain` | `string` | required | Registrable domain for the refresh cookie and the WebAuthn RP ID. A bare domain, not a URL. |
-| `identity_role_name` | `string` | `null` | Role name to attach the signing and table policies to. Required when `attach_role_policies` is true. |
-| `attach_role_policies` | `bool` | `true` | Set false to create no role policies even when `identity_role_name` is given. The three policies count off this, not off the role name, so the count is known at plan time. |
-| `identity_role_arn` | `string` | `null` | Role ARN named as a principal in the KMS key policy. Separate from the name because a key policy takes an ARN. |
-| `signing_key_count` | `number` | `1` | How many signing keys exist, 1 to 4. |
-| `active_signing_key` | `number` | `0` | Zero-based index of the key that signs. Decides the order of `signing_key_arns`. |
-| `signing_key_spec` | `string` | `"RSA_2048"` | RSA only: the JWT authorizer verifies RSA signatures. |
-| `signing_key_deletion_window_in_days` | `number` | `30` | Waiting period before KMS deletes a removed key. |
-| `signing_key_policy_json` | `string` | `null` | Replaces the generated key policy outright. A replacement still needs an account root statement. |
-| `create_signing_key_alias` | `bool` | `true` | Create `alias/<name_prefix>-identity-signing` pointing at the active signer. |
-| `enable_mfa_encryption_key` | `bool` | `true` | Create the symmetric KMS key TOTP seeds are sealed under, and grant the identity role `GenerateDataKey` and `Decrypt` on it. |
-| `mfa_encryption_key_arn` | `string` | `null` | An existing symmetric key to use instead. Set with `enable_mfa_encryption_key = false`. Granted and exported exactly as a created key is. |
-| `mfa_encryption_key_deletion_window_in_days` | `number` | `30` | Waiting period before KMS deletes the envelope key. Deleting it makes every stored seed permanently unreadable. |
-| `mfa_encryption_key_rotation` | `bool` | `true` | Automatic annual rotation on the envelope key. On, unlike the signing keys: KMS keeps previous backing keys, so a data key wrapped before a rotation still opens. |
-| `create_mfa_encryption_key_alias` | `bool` | `true` | Create `alias/<name_prefix>-identity-mfa`. |
-| `mfa_encryption_key_policy_json` | `string` | `null` | Replaces the generated envelope key policy outright. A replacement still needs an account root statement. |
-| `mfa_encryption_context_purpose` | `string` | `"totp"` | Value pinned in both halves of the grant as `StringEquals` on `kms:EncryptionContext:purpose`. `null` omits the condition. |
-| `tables` | `map(object)` | the ten identity tables | Tables to create, keyed by the logical name the package uses. `{}` creates none. |
-| `point_in_time_recovery` | `bool` | `true` | Module-wide default for continuous backups. |
-| `deletion_protection` | `bool` | `false` | Module-wide default for the DynamoDB deletion protection flag. |
-| `billing_mode` | `string` | `"PAY_PER_REQUEST"` | `PAY_PER_REQUEST` or `PROVISIONED`. |
-| `server_side_encryption` | `object` | `null` | Encrypt tables with a customer managed key instead of the AWS owned one. |
-| `table_policy_actions` | `list(string)` | item level actions | DynamoDB actions the table grant allows. No `Scan` by default. |
-| `additional_table_grants` | `map(object)` | `{}` | Extra roles granted on named tables of this module, keyed by a name that becomes the inline policy's name. `tables` must be keys of `tables`; `actions` defaults to `table_policy_actions`. For a second function that writes an identity table without being the identity function. |
-| `name_tag` | `bool` | `false` | Add a `Name` tag equal to each table's full name. |
-| `tags` | `map(string)` | `{}` | Tags for every resource the module creates. |
-| `http_api_id` | `string` | `null` | HTTP API to create the JWT authorizer on. Leave null until the discovery document answers. |
-| `authorizer_name` | `string` | `null` | Defaults to `<name_prefix>-identity-jwt`. |
-| `authorizer_identity_sources` | `list(string)` | `["$request.header.Authorization"]` | Where the authorizer reads the token from. |
-| `authorizer_audiences` | `list(string)` | `null` | Replaces the single-audience default when more than one is needed. |
-| `authorizer_depends_on` | `any` | `[]` | What must already exist and answer before the authorizer is created. Usually `[module.api, module.lambda_domain]`. |
-| `wait_for_discovery_document` | `bool` | `true` | Poll the discovery URL and refuse to create the authorizer until it answers. Needs `curl` and network reach. |
-| `discovery_document_attempts` | `number` | `60` | One second attempts before the poll fails the apply. |
+| Name | Description | Default |
+| --- | --- | --- |
+| `name_prefix` | Prefix in front of every name the module builds, joined with a hyphen. | required |
+| `issuer` | The issuer byte for byte, carrying the `/api/auth` path. No trailing slash. | required |
+| `audience` | The `aud` claim the function stamps and the authorizer requires. | required |
+| `registrable_domain` | Registrable domain for the refresh cookie and the WebAuthn RP ID. A bare domain, not a URL. | required |
+| `identity_role_name` | Role name the signing, MFA and table policies attach to. | `null` |
+| `attach_role_policies` | Create the role policies. The counts read this, not the role name. | `true` |
+| `identity_role_arn` | Role ARN named as a principal in the generated KMS key policies. | `null` |
+| `signing_key_count` | How many signing keys exist, 1 to 4. | `1` |
+| `active_signing_key` | Zero based index of the key that signs. Sets the order of `signing_key_arns`. | `0` |
+| `signing_key_spec` | Key spec for the signing keys. RSA only. | `"RSA_2048"` |
+| `signing_key_deletion_window_in_days` | Waiting period before KMS deletes a removed signing key. | `30` |
+| `signing_key_policy_json` | Complete KMS key policy replacing the generated signing key policy. | `null` |
+| `create_signing_key_alias` | Create `alias/<name_prefix>-identity-signing` on the active signer. | `true` |
+| `enable_mfa_encryption_key` | Create the symmetric KMS key TOTP seeds are sealed under. | `true` |
+| `mfa_encryption_key_arn` | Existing symmetric key to use instead of a created one. | `null` |
+| `mfa_encryption_key_deletion_window_in_days` | Waiting period before KMS deletes the envelope key. | `30` |
+| `mfa_encryption_key_rotation` | Automatic annual rotation on the envelope key. | `true` |
+| `create_mfa_encryption_key_alias` | Create `alias/<name_prefix>-identity-mfa`. | `true` |
+| `mfa_encryption_key_policy_json` | Complete KMS key policy replacing the generated envelope key policy. | `null` |
+| `mfa_encryption_context_purpose` | Value pinned as `StringEquals` on `kms:EncryptionContext:purpose`. `null` omits the condition. | `"totp"` |
+| `tables` | Tables to create, keyed by the package's logical name. `{}` creates none. | the ten identity tables |
+| `point_in_time_recovery` | Module wide default for continuous backups on the tables. | `true` |
+| `deletion_protection` | Module wide default for the DynamoDB deletion protection flag. | `false` |
+| `billing_mode` | `PAY_PER_REQUEST` or `PROVISIONED`. | `"PAY_PER_REQUEST"` |
+| `server_side_encryption` | Object `{ enabled, kms_key_arn }` encrypting tables with a managed key. | `null` |
+| `table_policy_actions` | DynamoDB actions the generated table grant allows. No `Scan`. | the nine item level actions |
+| `additional_table_grants` | Extra roles granted on named tables, keyed by a name that becomes the inline policy name. | `{}` |
+| `name_tag` | Add a `Name` tag equal to each table's full name. | `false` |
+| `tags` | Tags for every resource the module creates. | `{}` |
+| `http_api_id` | HTTP API to create the JWT authorizer on. | `null` |
+| `authorizer_name` | Name of the JWT authorizer. Defaults to `<name_prefix>-identity-jwt`. | `null` |
+| `authorizer_identity_sources` | Where the authorizer reads the token from. | `["$request.header.Authorization"]` |
+| `authorizer_audiences` | Audiences the authorizer accepts. `null` means exactly `[audience]`. | `null` |
+| `authorizer_depends_on` | What must already exist and answer before the authorizer is created. | `[]` |
+| `wait_for_discovery_document` | Poll the discovery URL and refuse to create the authorizer until it answers. | `true` |
+| `discovery_document_attempts` | One second attempts before the poll fails the apply. | `60` |
+
+Object shapes for the two map inputs:
+
+```hcl
+tables = map(object({
+  attributes = list(object({ name = string, type = string }))
+  hash_key   = string
+  range_key  = optional(string)
+  global_secondary_indexes = optional(list(object({
+    name               = string
+    hash_key           = string
+    range_key          = optional(string)
+    projection_type    = optional(string, "ALL")
+    non_key_attributes = optional(list(string))
+  })), [])
+  ttl_attribute          = optional(string)
+  point_in_time_recovery = optional(bool)
+  deletion_protection    = optional(bool)
+  tags                   = optional(map(string), {})
+}))
+
+additional_table_grants = map(object({
+  role_name = string
+  tables    = list(string)
+  actions   = optional(list(string))
+}))
+```
 
 ## Outputs
 
@@ -421,17 +119,17 @@ is named `identity-tables-<key>`, so two grants on one role do not collide.
 | `signing_key_arns` | The signing keys, active signer first. This is `IDENTITY_SIGNING_KEY_ARNS`. |
 | `active_signing_key_arn` | The key that signs today, which is `signing_key_arns[0]`. |
 | `signing_key_ids` | Key id of each key, in creation index order rather than signing order. |
-| `signing_key_alias` | `alias/<name_prefix>-identity-signing`, or null when the alias is off. |
-| `signing_key_alias_arn` | ARN of the alias, null when not created. |
-| `signing_policy_json` | The signing grant as a policy document, for a consumer attaching it by hand. |
+| `signing_key_alias` | `alias/<name_prefix>-identity-signing`, null when the alias is off. |
+| `signing_key_alias_arn` | ARN of the signing key alias, null when not created. |
+| `signing_policy_json` | The signing grant as a policy document, for attaching by hand. |
 | `mfa_encryption_key_arn` | The key TOTP seeds are sealed under, which is `IDENTITY_DATA_KEY_ARN`. Null when there is none. |
 | `mfa_encryption_key_id` | Key id of the envelope key, null when the module did not create one. |
-| `mfa_encryption_key_alias` | `alias/<name_prefix>-identity-mfa`, or null when the key or the alias is off. |
+| `mfa_encryption_key_alias` | `alias/<name_prefix>-identity-mfa`, null when the key or the alias is off. |
 | `mfa_encryption_key_alias_arn` | ARN of the envelope key alias, null when not created. Not usable as an IAM policy resource. |
 | `mfa_policy_json` | The envelope grant as a policy document, null when there is no key. |
-| `table_names` | Logical key to full table name. The map an application passes to its Lambda. |
+| `table_names` | Logical key to full table name. |
 | `table_arns` | Logical key to table ARN. |
-| `table_arns_list` | Every table ARN as a list, sorted by key. |
+| `table_arns_list` | Every table ARN as a list, sorted by table key. |
 | `tables` | Logical key to `{ name, arn, id }`. |
 | `table_policy_json` | The table grant as a policy document, including the index wildcard. |
 | `additional_table_grant_policy_json` | Grant name to the policy document attached to that grant's role. |
@@ -441,258 +139,44 @@ is named `identity-tables-<key>`, so two grants on one role do not collide.
 | `issuer` | The issuer, echoed back. |
 | `audience` | The audience, echoed back. |
 
-## Adoption
+## Gotchas
 
-Portfolio adopted this module in
-[WebbPulse-Portfolio#164](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/164), and what
-follows is that change rather than a sketch of one. **Nothing the module owns was a create.** The
-M1 KMS resources, the key, the alias and the signing role policy, were already hand-written in
-`terraform/identity.tf`; the four tables were already applied inside `module.dynamodb`, created by
-[#160](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/160) (`credentials`,
-`refresh-tokens`, `login-attempts`) and [#162](https://github.com/WebbPulse/WebbPulse-Portfolio/pull/162)
-(`identity-tokens`). So the whole adoption is `moved` blocks: **11 moves, 2 adds, 6 in-place
-changes, 0 destroys.**
-
-A consumer whose tables genuinely do not exist yet gets creates for those four instead, and the
-rest of this section still applies unchanged.
-
-The module's resources use `count`, so each destination address carries `[0]`. The tables are keyed
-by `for_each` on their logical name, and both this module and `dynamodb-tables` build the physical
-name as `"<name_prefix>-<key>"` from the same prefix, which is what makes them moves rather than
-replaces: `aws_dynamodb_table` forces a new resource only on `name`, `hash_key`, `range_key` and
-the attribute set, and all four are identical on both sides.
-
-```hcl
-module "identity" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/identity"
-  version = "~> 2.7"
-
-  name_prefix        = local.prefix
-  issuer             = local.identity_issuer
-  audience           = local.identity_audience
-  registrable_domain = local.registrable_domain
-
-  identity_role_name = module.lambda_domain["identity"].role_id
-  identity_role_arn  = module.lambda_domain["identity"].role_arn
-
-  # Reproduces the tags the hand-written key carries, so the key itself is a pure move.
-  tags = {
-    Component = "identity"
-    Milestone = "M1"
-  }
-  name_tag = true
-
-  point_in_time_recovery = true
-  deletion_protection    = var.environment == "production"
-
-  # Matched to what the consumer's existing table grant allowed, not left at the default.
-  # See the gotcha below.
-  table_policy_actions = local.dynamodb_write_actions
-}
-```
-
-### The moved blocks
-
-The three M1 resources are **two-hop chains**, and the chaining is the part worth reading twice.
-The M0 spike declared the key, the alias and the signing policy under
-`count = local.identity_spike_count`; M1 made them unconditional and added three `moved` blocks to
-express that. Those blocks are still needed, because a workspace that has not applied since M1
-still has state at the indexed spike address. Terraform follows a chain of moves within one plan,
-so `[0]` to the bare address to the module address resolves in a single step, and **both hops are
-kept**. Dropping the first hop destroys the signing key and creates a new one under the same alias.
-
-```hcl
-# The M1 KMS resources: the existing spike hop, then the hop into the module.
-moved {
-  from = aws_kms_key.identity_signing[0]
-  to   = aws_kms_key.identity_signing
-}
-
-moved {
-  from = aws_kms_key.identity_signing
-  to   = module.identity.aws_kms_key.identity_signing[0]
-}
-
-moved {
-  from = aws_kms_alias.identity_signing[0]
-  to   = aws_kms_alias.identity_signing
-}
-
-moved {
-  from = aws_kms_alias.identity_signing
-  to   = module.identity.aws_kms_alias.identity_signing[0]
-}
-
-moved {
-  from = aws_iam_role_policy.identity_spike_signing[0]
-  to   = aws_iam_role_policy.identity_signing
-}
-
-moved {
-  from = aws_iam_role_policy.identity_signing
-  to   = module.identity.aws_iam_role_policy.identity_signing[0]
-}
-
-# The four tables, out of the tables module and into this one.
-moved {
-  from = module.dynamodb.aws_dynamodb_table.this["credentials"]
-  to   = module.identity.aws_dynamodb_table.this["credentials"]
-}
-
-moved {
-  from = module.dynamodb.aws_dynamodb_table.this["refresh-tokens"]
-  to   = module.identity.aws_dynamodb_table.this["refresh-tokens"]
-}
-
-moved {
-  from = module.dynamodb.aws_dynamodb_table.this["login-attempts"]
-  to   = module.identity.aws_dynamodb_table.this["login-attempts"]
-}
-
-moved {
-  from = module.dynamodb.aws_dynamodb_table.this["identity-tokens"]
-  to   = module.identity.aws_dynamodb_table.this["identity-tokens"]
-}
-```
-
-The hand-written `data.aws_iam_policy_document` for the key policy is deleted rather than moved.
-The module renders its own equivalent, and a data source holds no real resource, so that is a state
-drop and not a destroy.
-
-### The in-place changes, and why they are unavoidable
-
-Six changes, all in place, none of which replaces anything or touches key material or table data.
-
-| Address | What changes | Why |
-| --- | --- | --- |
-| `module.identity.aws_kms_key.identity_signing[0]` | `description` only | The module composes the description from `name_prefix`, `signing_key_spec` and `issuer`. **There is no input that overrides it**, so any hand-written wording differs. Metadata only. |
-| `module.identity.aws_dynamodb_table.this["credentials"]` | `tags` gains `Name`, `Component`, `Milestone` | See the tag note below. |
-| `module.identity.aws_dynamodb_table.this["refresh-tokens"]` | the same three tags | same |
-| `module.identity.aws_dynamodb_table.this["login-attempts"]` | the same three tags | same |
-| `module.identity.aws_dynamodb_table.this["identity-tokens"]` | the same three tags | same |
-| the consumer's own `aws_iam_role_policy.lambda_domain["identity"]` | the four identity tables leave its table statement | They are granted by the module's `identity-tables` policy on the same role instead. Effective permissions are unchanged. |
-
-**The tags are a genuine trade rather than an oversight.** `tags` and `name_tag` are module wide:
-they reach the signing key and every table alike, and there is no per-resource tag input. Portfolio's
-hand-written key carried `Name`, `Component` and `Milestone`; its four tables carried none, because
-`module.dynamodb` was called with neither input. **No setting of the two inputs keeps both.**
-Reproducing the key's tags is the option to take: it keeps the key, the one resource whose tags
-exist today, byte identical, and the cost is three tags added to four tables, which is an in-place
-update that replaces nothing and loses no data. The alternative, `tags = {}` with
-`name_tag = false`, strips three tags off the signing key instead, which is a change to the
-resource an adoption is most concerned with not disturbing.
-
-The two adds are `module.identity.aws_iam_role_policy.identity_tables[0]`, the table grant on the
-identity role, and the module's two data sources, which are not resources.
-
-### Read the plan for the destroy count
-
-Land it on `staging` first and read the speculative plan. **It must show `0 to destroy`.** That is
-the check, and it is worth stating on its own rather than folding it into a general "review the
-plan": a destroy on `module.identity.aws_kms_key.identity_signing[0]` means an address did not line
-up, and dropping a signing key that an already-issued token still references is the one mistake in
-this design with no recovery. Fix the `moved` block rather than applying. A destroy on a table is
-the same shape of mistake with data behind it.
-
-Whether each first hop of a chain is a real move or a no-op depends on when the workspace last
-applied, and that is not observable from the configuration. Both are safe, which is why the chains
-are kept.
-
-### `table_policy_actions`, which is the one part that is not a move
-
-The table grant is the exception: in Portfolio it was one statement inside a hand-written
-`identity-runtime` policy and becomes the module's own `identity-tables` policy on the same role.
-That is an add on one side and a narrowing on the other rather than a state move.
-
-**Pass `table_policy_actions` explicitly to keep the grant identical across that split.** The
-module's default is the item level set the identity flows use and **drops `dynamodb:Scan`,
-`dynamodb:DescribeTable` and `dynamodb:ConditionCheckItem`**, so a consumer whose existing grant
-included them silently loses three permissions on the same apply that is supposed to change
-nothing. Dropping a permission is a behaviour change rather than a refactor. Match the existing
-action list here, and make narrowing to the module's default a separate change with its own review.
-
-### Coming from 2.6.0
-
-2.7.0's two M4 tables, `totp-factors` and `recovery-codes`, are **genuine creates** for any
-consumer, including one whose other tables all move. Nothing existing has them at any address, so
-there is nothing to move them from. They arrive with the KMS envelope key, its alias and the MFA
-role policy; see the 2.7.0 changelog entry for how to turn the key off.
-
-### Coming from 2.7.0
-
-2.8.0's four new tables, `passkeys` and `webauthn-challenges` from M5 and `oauth-states` and
-`oauth-links` from M6, are creates on the same footing: four adds, no moves, and the table policy
-widens by four table ARNs and four index ARNs. A consumer that passes `tables` explicitly gets
-nothing new until it adds the entries itself, which is the point of the input; a consumer on the
-default map gets them by bumping the pin.
-
-The one thing to look for in the plan is a **replacement** rather than a create. A consumer that
-already runs passkeys or OAuth with a hand-rolled table of its own, keyed some other way, will see
-the module want to replace it, and a replaced `passkeys` or `oauth-links` table is every user's
-credentials or every user's linked accounts gone. CarModPicker's existing `oauth_accounts` is the
-concrete case: it stores synthetic uniqueness rows under a different key, so it is not this table
-under another name. Either `moved` it in and reconcile the schema first, or keep it out of `tables`
-and grant it separately.
-
-There is no new variable and no new output, so a consumer that wants none of the four can carry on
-passing its own `tables` map and see no diff at all.
-
-## Tests
-
-`tests/signing_keys.tftest.hcl` pins the rotation contract: that the active key leads the list, that
-the rest keep index order, that the list is never sorted, and that the validations refuse a fifth
-key, an out-of-range active index, an ECC spec and a malformed issuer.
-
-`tests/tables.tftest.hcl` pins the key schemas against the package's constants, including the
-hyphenated logical names, the `family_id-generation-index` GSI name that `storage.py` names as a
-literal, the `expires_at` TTL attributes, that the credentials table has no TTL at all, and that
-neither M4 table has a TTL or an index. The M5 runs pin the same way: that `passkeys` lists on the
-base table and logs in through `credential_id-index`, which `storage.py` names as a literal, that it
-projects `ALL` so a sign-in is one read, that it has no TTL for the reason `totp-factors` has none,
-and that `webauthn-challenges` is a single-use row keyed on `challenge_id` alone with `expires_at`
-reclaiming it. The M6 runs pin `oauth-states` as a single-use row keyed on `state` with
-`expires_at`, and `oauth-links` as keyed on `provider_subject` with `user_id-index`, projecting
-`ALL`, and never a TTL. One run overrides the table ARNs so the grant's index resources are knowable
-at plan and asserts they are the table ARN with `/index/*` appended, which is the resource form
-DynamoDB authorises a GSI read against, and another pins that exactly three default tables carry an
-index.
-
-`tests/mfa_encryption_key.tftest.hcl` covers the envelope key both ways: created by default with the
-right spec, usage and rotation, turned off entirely with no key, no alias, no grant and no
-environment variable, and supplied from outside, where the grant and the environment variable follow
-the supplied ARN. It also pins the encryption context condition, including that the operator is
-`StringEquals` rather than a set operator.
-
-`tests/authorizer_and_grants.tftest.hcl` covers the authorizer arguments, the three IAM grants and
-the environment map.
-
-Every run is `command = plan` against a mocked provider, so the suite reaches no AWS API and needs
-no credentials. The two data sources the KMS key policy depends on are supplied with `override_data`
-for the same reason.
-
-## Known limits
-
-- **The tests cannot reach the failure that actually bites.** They are plan only, so they check the
-  arguments Terraform will send to `CreateAuthorizer` and not whether the call succeeds. The
-  synchronous discovery fetch is only exercised by a real apply.
-- **The discovery poll needs `curl` and network reach** from wherever Terraform runs. It is present
-  on the HCP Terraform worker image. A consumer running elsewhere sets
-  `wait_for_discovery_document = false` and owns the ordering itself.
-- **`moved` blocks cannot cross a module boundary from inside**, so the consumer writes them. That
-  is why the adoption section above lives here rather than being expressed in the module.
-- **Lowering `signing_key_count` schedules a key for deletion.** The deletion window is the last
-  chance to notice that an already-issued token still references it. Never lower it in the same
-  change that raises it.
-- **No alarms.** Table and key monitoring belong to the estate's aggregate alarms rather than to
-  per-table alarms created here. That includes the envelope key: a `Decrypt` on it is worth
-  alarming on at the estate level rather than from this module.
-- **The encryption context condition pins `purpose` only.** `user_id` is the half that stops a
-  ciphertext being moved between rows, and KMS enforces it as authenticated additional data on
-  every call, but it is a different value per user so no static IAM condition can express it. The
-  policy therefore constrains what this key may be used *for*, not which user's seed a given call
-  may open.
-- **Deleting the envelope key is unrecoverable in a way the signing keys are not.** A lost signing
-  key costs every user one extra login. A lost envelope key makes every stored TOTP seed
-  permanently unreadable, and the only way back is every enrolled user re-enrolling.
-- **One authorizer per module instance.** A product needing several authorizers on the same API
-  creates the extra ones itself from `issuer` and `audience`.
+- JWT claims arrive at `authorizer.jwt.claims` as a string map, so `exp` is a string, not a number.
+- The Lambda Web Adapter passes the request context header as plain JSON, not base64.
+- Discovery and JWKS are fetched at CreateAuthorizer time, so the issuer must be live before apply.
+- Gate direct invocation of the function with an `x-origin-verify` header; the authorizer only
+  protects the API route.
+- Leave `http_api_id` null on the first apply of a new environment and set it on a later one, once
+  the identity function is deployed and both `.well-known` routes answer anonymously.
+- The two `.well-known` routes must carry `authorization_type = "NONE"`. API Gateway's validator
+  fetches them from outside with no credentials of ours.
+- `depends_on` orders API calls, not their effects. `wait_for_discovery_document` polls the real URL
+  because stage auto deploy, `LastUpdateStatus` and a container cold start all lag a 201.
+- The poll needs `curl` and network reach from wherever Terraform runs. Set it false and own the
+  ordering yourself if you have neither.
+- Protected routes are not created here. A route naming the authorizer must come after it while the
+  discovery routes must come before it, and one `for_each` cannot express both.
+- `POST <issuer>/login/totp` must not sit behind the authorizer: the MFA ticket carries an audience
+  of `<issuer>/mfa`, so the gateway rejects it with a 401 that reaches no log of ours.
+- The role policies count off `attach_role_policies`, not off `identity_role_name`, because a role
+  id that is unknown at plan time makes Terraform refuse to plan with `Invalid count argument`.
+- `signing_key_spec` must stay RSA. The HTTP API JWT authorizer verifies RSA signatures only, so an
+  ECC spec produces a key no authorizer can use.
+- Rotate by adding a key and promoting it on a later apply, never by mutating one: the `kid` is
+  derived from the key material, so rotating in place orphans every issued token.
+- Lowering `signing_key_count` schedules a key for deletion. The deletion window is the last chance
+  to notice an already-issued token still references it, so never lower it in the same change that
+  raises it.
+- Deleting the MFA envelope key makes every stored TOTP seed permanently unreadable, and the only
+  way back is every enrolled user re-enrolling.
+- With no envelope key and no `mfa_encryption_key_arn`, `IDENTITY_DATA_KEY_ARN` is absent and TOTP
+  enrolment refuses to construct rather than storing a seed in the clear.
+- `registrable_domain` is close to irreversible: the WebAuthn RP ID is hashed into every credential,
+  so changing it invalidates every passkey already registered.
+- `identity_environment` carries no product strings (`IDENTITY_ENVIRONMENT`, `IDENTITY_RP_NAME`,
+  `IDENTITY_PRODUCT_NAME`, `IDENTITY_SUPPORT_EMAIL`, `IDENTITY_FRONTEND_BASE_URL`); merge it first
+  so a product override wins.
+- Every key named in an `additional_table_grants` entry's `tables` must be a key of `tables`, checked
+  at plan time.
+- One authorizer per module instance. A product needing several on the same API creates the extra
+  ones itself from `issuer` and `audience`.

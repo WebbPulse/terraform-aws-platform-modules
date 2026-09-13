@@ -47,9 +47,9 @@ existing consumer's plan stays empty.
 | [`modules/ecr-repository`](modules/ecr-repository/) | An application's container registry as one map: one ECR repository per domain, immutable commit-SHA tags, scan on push, and a lifecycle policy that keeps storage flat. |
 | [`modules/identity`](modules/identity/) | A product's identity layer for the shared identity standard: KMS RSA signing keys with an ordered rotation list, the ten identity DynamoDB tables with the key schemas the `webbpulse.identity` package requires, the signing and table IAM grants, an optional API Gateway JWT authorizer, and a ready to merge `IDENTITY_*` environment map. |
 
-Each module README carries an "Adoption" section with the `moved` blocks and variable values that
-take over an application's existing resources with zero destroy or replace. Planned next: a root
-composite that calls all of them so a new project is one module block.
+Each module README carries its purpose, a minimal example, the full inputs and outputs tables, and
+a "Gotchas" section. Anything longer lived, such as the `moved` blocks that adopted an existing
+application's resources, is in the git history and in `CHANGELOG.md`.
 
 ## Layout
 
