@@ -7,6 +7,32 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.17.1
+
+### `identity`: the users stream purge wiring is gated on a plan time known boolean
+
+The purge resources counted off `var.users_table_stream_arn != null`. A consumer turning
+`stream_view_type` on its users table in the same apply that wires the purge has a stream ARN that is
+unknown at plan time, and Terraform refuses to plan an unknown count at all, with
+`Invalid count argument`. WebbPulse-Portfolio staging had to split the change across two applies with
+a temporary workspace variable to get past it.
+
+A new `users_stream_enabled` bool, default `false`, is now the switch. Every count, conditional local
+and validation keys off it instead of off the ARN, so the value gating the plan is one the consumer
+writes literally and Terraform always knows. `users_table_stream_arn` and `identity_function_name`
+are still required when it is true, now checked by preconditions on the event source mapping, which
+run at apply time and so never need the ARN's value during the plan. `attach_role_policies = false`
+with the stream enabled is still refused at plan time.
+
+Every input and output is kept, and a consumer that sets neither the boolean nor the ARN sees no plan
+change.
+
+**Set `users_stream_enabled = true` to keep the purge wiring.** The default is `false`, so a consumer
+that passed only `users_table_stream_arn` gets the mapping, the stream grant and the three pass
+through environment variables destroyed until it adds the boolean. CarModPicker staging and Portfolio
+staging are the only adopters and both are updated alongside this release; no production stack sets
+the ARN yet.
+
 ## 2.17.0
 
 ### `identity`: a deleted user's identity rows are purged from the users table stream

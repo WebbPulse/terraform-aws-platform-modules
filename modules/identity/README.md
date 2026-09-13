@@ -84,8 +84,9 @@ contract rather than this module's preference:
 | `authorizer_depends_on` | What must already exist and answer before the authorizer is created. | `[]` |
 | `wait_for_discovery_document` | Poll the discovery URL and refuse to create the authorizer until it answers. | `true` |
 | `discovery_document_attempts` | One second attempts before the poll fails the apply. | `60` |
-| `users_table_stream_arn` | Users table stream the purge mapping reads. `null` creates no mapping and no grant. Requires `attach_role_policies`. | `null` |
-| `identity_function_name` | Identity Lambda the mapping targets. Required when the stream ARN is set. | `null` |
+| `users_stream_enabled` | Plan time known switch for the purge wiring. `false` creates no mapping, no grant and no pass through variables. Requires `attach_role_policies`. | `false` |
+| `users_table_stream_arn` | Users table stream the purge mapping reads. Required when `users_stream_enabled` is true. | `null` |
+| `identity_function_name` | Identity Lambda the mapping targets. Required when `users_stream_enabled` is true. | `null` |
 | `users_key_attribute` | Users table hash key attribute the deleted id is read from. Reaches the app as `IDENTITY_USERS_KEY_ATTRIBUTE`. | `"id"` |
 | `users_stream_batch_size` | Stream records per invocation. | `10` |
 | `users_stream_batching_window_seconds` | How long the mapping waits to fill a batch. | `5` |
@@ -147,8 +148,8 @@ additional_table_grants = map(object({
 | `identity_environment` | The `IDENTITY_*` variables that follow from this module's own resources. |
 | `issuer` | The issuer, echoed back. |
 | `audience` | The audience, echoed back. |
-| `users_stream_event_source_mapping_uuid` | UUID of the users table stream mapping, null when no stream ARN was given. |
-| `users_stream_policy_json` | The stream read grant as a policy document, null when no stream ARN was given. |
+| `users_stream_event_source_mapping_uuid` | UUID of the users table stream mapping, null when `users_stream_enabled` is false. |
+| `users_stream_policy_json` | The stream read grant as a policy document, null when `users_stream_enabled` is false. |
 
 ## Purging identity rows when a user is deleted
 
@@ -156,7 +157,7 @@ Identity owns rows keyed by a user id in ten tables, but it does not own the use
 lives in the product's own users table. A product hard deleting a user therefore leaves credentials,
 passkeys, TOTP factors and refresh tokens behind with nothing pointing at them.
 
-Setting `users_table_stream_arn` closes that gap. The module creates an event source mapping from
+Setting `users_stream_enabled = true` closes that gap. The module creates an event source mapping from
 the users table's DynamoDB Stream to the identity function, filtered to `REMOVE` events, and grants
 the function's role the four stream read actions. The identity package mounts a route that reads the
 deleted user id out of `dynamodb.Keys` and deletes that user's identity rows.
@@ -198,6 +199,7 @@ module "identity" {
   identity_role_arn    = module.lambda_domain["identity"].role_arn
   attach_role_policies = true
 
+  users_stream_enabled   = true
   users_table_stream_arn = module.tables.stream_arns["users"]
   identity_function_name = module.lambda_domain["identity"].function_name
   users_key_attribute    = "id"
@@ -260,14 +262,21 @@ from the same merge it already does.
   at plan time.
 - One authorizer per module instance. A product needing several on the same API creates the extra
   ones itself from `issuer` and `audience`.
-- The users table stream must exist before the mapping. `CreateEventSourceMapping` resolves the
-  stream ARN during the create call, so land the table's `stream_view_type` in a prior apply and pass
-  `module.tables.stream_arns["users"]`, which is null until it is enabled.
+- `users_stream_enabled`, not the stream ARN, is what the counts key off. When the users table's
+  `stream_view_type` is turned on in the same apply, `module.tables.stream_arns["users"]` is unknown
+  at plan time, and a count that reads it fails the plan outright with `Invalid count argument`.
+  A boolean written literally in the consumer's config is always known, so enabling the stream and
+  wiring the purge fit in one apply. The ARN and `identity_function_name` are still required when the
+  boolean is true, checked by a precondition on the mapping at apply time, by which point the ARN is
+  known.
+- `CreateEventSourceMapping` still resolves the stream ARN during the create call, so the table's
+  stream has to be created before the mapping in the same apply, which the dependency on the ARN
+  already orders.
 - The identity package must be at least `0.28.0`. Earlier versions mount no route at
   `IDENTITY_EVENTS_PATH`, so the adapter's pass through POST 404s, every record fails, and the
   mapping retries the shard until the records expire.
-- Setting `users_table_stream_arn` turns pass through on for the whole function. Leave it null until
-  the deployed package is `0.28.0` or later; the three environment variables and the mapping land
+- Setting `users_stream_enabled = true` turns pass through on for the whole function. Leave it false
+  until the deployed package is `0.28.0` or later; the three environment variables and the mapping land
   together on purpose, so there is no state where one is configured without the other.
 - Changing the users table's `stream_view_type` mints a new stream ARN and detaches this mapping. The
   ARN is an input here, so Terraform replaces the mapping on the next apply rather than silently
@@ -279,10 +288,10 @@ from the same merge it already does.
 - The mapping `depends_on` the stream grant. Lambda checks the function role can read the stream
   during `CreateEventSourceMapping`, so without the edge a fresh apply races the policy and fails the
   create with a permissions error that looks like a misconfigured role.
-- `attach_role_policies = false` and `users_table_stream_arn` cannot be combined, and the plan refuses
-  it. The mapping is created here, so it can only be ordered behind a grant created here; a grant the
-  consumer attaches outside the module is invisible to that edge and the create would race it. A
-  consumer that owns its own policies leaves the stream ARN null and builds the mapping itself from
-  the `users_stream_policy_json` output, where it can order both.
+- `attach_role_policies = false` and `users_stream_enabled = true` cannot be combined, and the plan
+  refuses it. The mapping is created here, so it can only be ordered behind a grant created here; a
+  grant the consumer attaches outside the module is invisible to that edge and the create would race
+  it. A consumer that owns its own policies leaves `users_stream_enabled` false and builds the
+  mapping itself from the `users_stream_policy_json` output, where it can order both.
 - The one apply that creates the identity role still needs `attach_role_policies = false`, so wire
   the stream on a later apply rather than the same one.

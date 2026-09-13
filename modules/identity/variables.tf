@@ -86,13 +86,13 @@ variable "identity_role_name" {
 }
 
 variable "attach_role_policies" {
-  description = "Set false to create no role policies even when identity_role_name is given. The aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back. It cannot be false while users_table_stream_arn is set: the event source mapping is created here and Lambda checks the stream grant during the create call, so the mapping can only be ordered behind a grant created here too."
+  description = "Set false to create no role policies even when identity_role_name is given. The aws_iam_role_policy resources count off this boolean rather than off identity_role_name, because a consumer usually passes module.lambda_domain[\"identity\"].role_id and that value is unknown at plan time when the role itself is still to be created. An unknown count is not a wrong count: Terraform refuses to plan at all, with Invalid count argument. This input is known at plan time by construction, so the count always is too. Leave it true for the ordinary case and set it false for the one apply that creates the role, then set it back. It cannot be false while users_stream_enabled is true: the event source mapping is created here and Lambda checks the stream grant during the create call, so the mapping can only be ordered behind a grant created here too."
   type        = bool
   default     = true
 
   validation {
-    condition     = var.attach_role_policies || var.users_table_stream_arn == null
-    error_message = "attach_role_policies is false but users_table_stream_arn is set. CreateEventSourceMapping checks the function role can read the stream during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires the stream, or leave users_table_stream_arn null and build the mapping yourself from the users_stream_policy_json output."
+    condition     = var.attach_role_policies || !var.users_stream_enabled
+    error_message = "attach_role_policies is false but users_stream_enabled is true. CreateEventSourceMapping checks the function role can read the stream during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires the stream, or leave users_stream_enabled false and build the mapping yourself from the users_stream_policy_json output."
   }
 }
 
@@ -688,12 +688,31 @@ variable "discovery_document_attempts" {
   }
 }
 
+variable "users_stream_enabled" {
+  description = <<-EOT
+    Plan time known switch for the users stream purge wiring. True creates the event source mapping
+    from the users table stream to the identity function, attaches the stream read grant and adds the
+    three pass through environment variables. False, the default, creates none of them.
+
+    The counts key off this boolean rather than off users_table_stream_arn because the ARN is
+    unknown at plan time whenever the stream is turned on in the same apply that reads it, and
+    Terraform refuses to plan an unknown count at all, with Invalid count argument. A boolean the
+    consumer writes literally is always known, so a single apply can both enable the table's stream
+    and wire the purge.
+
+    users_table_stream_arn and identity_function_name are still required when this is true. They are
+    checked at apply time rather than at plan time, so an unknown ARN does not fail the plan.
+  EOT
+
+  type    = bool
+  default = false
+}
+
 variable "users_table_stream_arn" {
   description = <<-EOT
     ARN of the product's users table DynamoDB Stream, which the identity function reads so that a
-    hard delete of a user row purges that user's identity rows asynchronously. Null, the default,
-    creates no event source mapping and no stream grant, which is why an existing consumer that
-    never sets it sees no plan change.
+    hard delete of a user row purges that user's identity rows asynchronously. Read only when
+    users_stream_enabled is true, which is the switch the counts key off, and required then.
 
     The users table is the product's, not this module's: identity owns the credentials, passkeys and
     refresh tokens keyed by a user id but never the user record itself. So the stream ARN arrives as
@@ -716,14 +735,9 @@ variable "users_table_stream_arn" {
 }
 
 variable "identity_function_name" {
-  description = "Name or ARN of the identity Lambda the users table stream is mapped to, usually module.lambda_domain[\"identity\"].function_name. Required when users_table_stream_arn is set and ignored otherwise. This module owns the identity function's grants and environment but not the function itself, so the target arrives as a name rather than being created here."
+  description = "Name or ARN of the identity Lambda the users table stream is mapped to, usually module.lambda_domain[\"identity\"].function_name. Required when users_stream_enabled is true and ignored otherwise. This module owns the identity function's grants and environment but not the function itself, so the target arrives as a name rather than being created here."
   type        = string
   default     = null
-
-  validation {
-    condition     = var.users_table_stream_arn == null || var.identity_function_name != null
-    error_message = "users_table_stream_arn is set but identity_function_name is null. Pass the identity Lambda's function name so the event source mapping has a target."
-  }
 }
 
 variable "users_key_attribute" {
