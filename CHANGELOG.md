@@ -75,6 +75,41 @@ today, so neither rotates anything taking this.
 `>= 3.5` to `>= 3.7` for the ephemeral resource. Every WebbPulse workspace already resolves aws
 6.63.0 and random 3.8.1 or newer, so no consumer moves a provider version to take this.
 
+## 2.20.0
+
+### `api-alarms`: an `alarms` toggle object and account wide Lambda alarms
+
+The module created every alarm it knew how to, so a consumer paying for observability it did not
+read had no lever short of forking the module. The per domain estates made it worse: a function per
+domain fed the aggregate Lambda alarms through `lambda_function_names`, one metric per function per
+alarm, and each new domain added billed metrics that never paged anyone.
+
+`alarms` is an object of booleans naming each alarm the module can create. Every key defaults to a
+lean set: `api_5xx` plus two new account wide Lambda alarms, `lambda_account_errors` and
+`lambda_account_throttles`, which watch `AWS/Lambda` `Errors` and `Throttles` with no dimension. That
+is three billed metrics however many functions the account runs, and the alarms see a function the
+Terraform does not know about. One account per environment is what makes the scope correct; two
+environments sharing an account would alarm on each other. Everything else, `api_integration_latency`,
+`application_errors`, `rate_limit_failed_open`, `telemetry_export_errors` and `dynamodb_throttles`,
+is off until its toggle turns it on. A toggle only ever subtracts, so an alarm still needs its own
+input as well: `application_errors` without `error_log_groups` creates nothing. Turning an alarm off
+removes its log metric filters with it. The SNS topic and its subscriptions are never gated.
+
+The aggregate Lambda alarms are gone with everything that fed them: `lambda_function_names`,
+`lambda_aggregate_alarm`, the `lambda_aggregate_*` threshold, period and evaluation inputs, and the
+nine `lambda_aggregate_*` outputs. The account wide pair takes `lambda_account_errors_*` and
+`lambda_account_throttles_*` threshold, period and evaluation inputs, with the defaults the per
+function alarms had, and publishes `lambda_account_errors_alarm_arn` and
+`lambda_account_throttles_alarm_arn`, `null` when the toggle is off. `lambda_function_name` stays as
+an optional per function pair, but it names its alarms `<name_prefix>-lambda-errors` and
+`-lambda-throttles`, the same names the account wide pair uses, so setting it alongside the account
+wide toggles is rejected by a variable validation.
+
+Expect a plan with destroys on adoption. A consumer on the aggregate alarms loses every alarm and log
+metric filter the lean set does not include, and gains the two account wide alarms. Both WebbPulse
+production accounts took it as 39 and 9 filter deletions plus 10 and 7 alarm deletions, two creates,
+nothing else; staging runs with every toggle off and keeps only the topic.
+
 ## 2.19.0
 
 ### `staging-access-gate`: the cookie signing material is published as outputs **no plan change**
