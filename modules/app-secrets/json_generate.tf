@@ -33,10 +33,12 @@ resource "aws_secretsmanager_secret_version" "json_generate" {
       for jk, g in var.secrets[each.key].json_generate :
       jk => (
         local.json_generate_carry[each.key][jk] ?
-        jsondecode(ephemeral.aws_secretsmanager_secret_version.json_generate[each.key].secret_string)[jk] :
-        g.format == "bytes32-base64" ?
-        ephemeral.random_bytes.json_generate["${each.key}.${jk}"].base64 :
-        ephemeral.random_password.json_generate["${each.key}.${jk}"].result
+        lookup(
+          jsondecode(ephemeral.aws_secretsmanager_secret_version.json_generate[each.key].secret_string),
+          jk,
+          local.json_generate_fresh["${each.key}.${jk}"],
+        ) :
+        local.json_generate_fresh["${each.key}.${jk}"]
       )
     },
   ))

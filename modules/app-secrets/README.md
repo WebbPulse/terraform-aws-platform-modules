@@ -137,9 +137,10 @@ Each entry in `secrets`:
 - A generated entry is minted fresh on every write of its blob, so any bump of that secret's `version`
   rotates it. Set `keep = true` on the entry once its value is live and the module reads the current
   version back and writes the same value through again, leaving it untouched while other keys in the
-  blob change. Leave `keep` false only before the first write, because the read fails if the secret
-  has no version yet. Rotating a kept entry on purpose means setting `keep = false` and bumping
-  `version` in the same change.
+  blob change. A kept entry the current blob does not hold yet is minted fresh, so an existing secret
+  can adopt `json_generate` with `keep = true` from the start. Leave `keep` false only for a brand new
+  secret, because the read fails if the secret has no version at all. Rotating a kept entry on purpose
+  means setting `keep = false` and bumping `version` in the same change.
 - The aws provider floor is `>= 6.50`, the release that stopped replacing a version when it switches
   between `secret_string` and `secret_string_wo` without the value changing. The random provider floor
   is `>= 3.9`, which is where the ephemeral `random_bytes` landed (the ephemeral `random_password`
