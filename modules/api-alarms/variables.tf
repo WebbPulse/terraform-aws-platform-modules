@@ -43,31 +43,96 @@ variable "tags" {
   default     = {}
 }
 
+variable "alarms" {
+  description = "Which alarms the module creates, so an account can run a lean set now and turn a richer set back on later without a code change. Every key defaults to the lean set: the API 5xx alarm and the two account wide Lambda alarms on, everything else off. Set a key false to drop that alarm, and its log metric filters with it where it has any. The SNS topic and its subscriptions are never gated, so an alarm created outside this module can keep publishing to the same topic. An alarm still needs its own input as well as its toggle: api_5xx and api_integration_latency need http_api_id, application_errors and telemetry_export_errors need error_log_groups, and the toggle only ever subtracts."
+  type = object({
+    api_5xx                  = optional(bool, true)
+    api_integration_latency  = optional(bool, false)
+    lambda_account_errors    = optional(bool, true)
+    lambda_account_throttles = optional(bool, true)
+    application_errors       = optional(bool, false)
+    rate_limit_failed_open   = optional(bool, false)
+    telemetry_export_errors  = optional(bool, false)
+    dynamodb_throttles       = optional(bool, false)
+  })
+  default = {}
+
+  validation {
+    condition     = !var.alarms.lambda_account_errors || (var.lambda_function_name == null && var.lambda_errors_alarm_function_name == null)
+    error_message = "alarms.lambda_account_errors names its alarm <name_prefix>-lambda-errors, which is the same name lambda_function_name and lambda_errors_alarm_function_name give their per function alarm. Two alarms cannot share one name: set the account wide toggle false to keep the per function alarm, or drop the per function input."
+  }
+
+  validation {
+    condition     = !var.alarms.lambda_account_throttles || var.lambda_function_name == null
+    error_message = "alarms.lambda_account_throttles names its alarm <name_prefix>-lambda-throttles, which is the same name lambda_function_name gives its per function alarm. Set the account wide toggle false to keep the per function alarm, or drop lambda_function_name."
+  }
+}
+
+variable "lambda_account_errors_threshold" {
+  description = "Sum of AWS/Lambda Errors across every function in the account over one period that must be exceeded. The default of 0 with GreaterThanThreshold means any single error in the account alarms, which is the same sensitivity the per function alarms had."
+  type        = number
+  default     = 0
+}
+
+variable "lambda_account_errors_period" {
+  description = "Period in seconds of the account wide Lambda errors alarm. CloudWatch accepts 10, 30, or any multiple of 60."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([10, 30], var.lambda_account_errors_period) || (var.lambda_account_errors_period >= 60 && var.lambda_account_errors_period % 60 == 0)
+    error_message = "lambda_account_errors_period must be 10, 30, or a multiple of 60."
+  }
+}
+
+variable "lambda_account_errors_evaluation_periods" {
+  description = "Number of periods evaluated by the account wide Lambda errors alarm."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.lambda_account_errors_evaluation_periods >= 1 && floor(var.lambda_account_errors_evaluation_periods) == var.lambda_account_errors_evaluation_periods
+    error_message = "lambda_account_errors_evaluation_periods must be a whole number of at least 1."
+  }
+}
+
+variable "lambda_account_throttles_threshold" {
+  description = "Sum of AWS/Lambda Throttles across every function in the account over one period that must be exceeded. The default of 0 with GreaterThanThreshold means any single throttle in the account alarms."
+  type        = number
+  default     = 0
+}
+
+variable "lambda_account_throttles_period" {
+  description = "Period in seconds of the account wide Lambda throttles alarm. CloudWatch accepts 10, 30, or any multiple of 60."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([10, 30], var.lambda_account_throttles_period) || (var.lambda_account_throttles_period >= 60 && var.lambda_account_throttles_period % 60 == 0)
+    error_message = "lambda_account_throttles_period must be 10, 30, or a multiple of 60."
+  }
+}
+
+variable "lambda_account_throttles_evaluation_periods" {
+  description = "Number of periods evaluated by the account wide Lambda throttles alarm."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.lambda_account_throttles_evaluation_periods >= 1 && floor(var.lambda_account_throttles_evaluation_periods) == var.lambda_account_throttles_evaluation_periods
+    error_message = "lambda_account_throttles_evaluation_periods must be a whole number of at least 1."
+  }
+}
+
 variable "lambda_function_name" {
-  description = "Name of the single Lambda function behind the API, the FunctionName dimension of the per function Errors and Throttles alarms. It is the one function form of the input; an application with a function per domain passes lambda_function_names instead, and exactly one of the two forms may be set. null skips both per function Lambda alarms."
+  description = "Name of the single Lambda function behind the API, the FunctionName dimension of the per function Errors and Throttles alarms. null, the default, skips both. An application split into a function per domain leaves this null and uses the account wide alarms instead, which bill one metric each however many functions the account holds."
   type        = string
   default     = null
   nullable    = true
 
   validation {
-    condition     = var.lambda_function_name == null || length(var.lambda_function_names) == 0
-    error_message = "Set lambda_function_name or lambda_function_names, not both. lambda_function_name is the one function form and creates a per function alarm pair; lambda_function_names is the many function form and feeds the aggregate alarms."
-  }
-}
-
-variable "lambda_function_names" {
-  description = "Names of the Lambda functions behind the API, for an application split into a function per domain. It is the many function form of lambda_function_name and exactly one of the two may be set. On its own it creates nothing: it is the list the aggregate alarms sum over, so pair it with lambda_aggregate_alarm = true. Deliberately no per function alarms, because a per function alarm pair across a growing estate is what the aggregate shape exists to avoid. There is no length limit: a CloudWatch alarm may reference at most 10 metrics, so the list is chunked into groups of at most 10 and each group gets its own alarm pair. The order is load bearing, both for the metric math ids inside a group and for which names land in which group, so build the list from a stable source and append rather than reorder."
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition     = alltrue([for n in var.lambda_function_names : can(regex("^[A-Za-z0-9_-]{1,140}$", n))])
-    error_message = "Every entry in lambda_function_names must be a Lambda function name: 1 to 140 characters of letters, digits, hyphens or underscores."
-  }
-
-  validation {
-    condition     = length(distinct(var.lambda_function_names)) == length(var.lambda_function_names)
-    error_message = "lambda_function_names must not repeat a name: each name becomes one metric_query id in the aggregate alarms."
+    condition     = var.lambda_function_name == null || can(regex("^[A-Za-z0-9_-]{1,140}$", coalesce(var.lambda_function_name, "x")))
+    error_message = "lambda_function_name must be a Lambda function name: 1 to 140 characters of letters, digits, hyphens or underscores."
   }
 }
 
@@ -124,45 +189,6 @@ variable "lambda_throttles_evaluation_periods" {
   validation {
     condition     = var.lambda_throttles_evaluation_periods >= 1 && floor(var.lambda_throttles_evaluation_periods) == var.lambda_throttles_evaluation_periods
     error_message = "lambda_throttles_evaluation_periods must be a whole number of at least 1."
-  }
-}
-
-variable "lambda_aggregate_alarm" {
-  description = "Create a <name_prefix>-lambda-errors-aggregate alarm and a <name_prefix>-lambda-throttles-aggregate alarm summing AWS/Lambda Errors and Throttles across the functions in lambda_function_names, instead of a per function alarm pair. Each is a metric math alarm: one metric_query per function that returns no data, plus a SUM expression that does, so the alarms cover exactly the listed functions rather than every function in the account. A CloudWatch alarm may reference at most 10 metrics, so a list longer than 10 is chunked into groups of at most 10 and each group past the first gets a numbered alarm pair, -lambda-errors-aggregate-2 and so on. The alarm names carry no function name, so adding a function changes the expression on an existing alarm rather than the alarm set, until the last group fills. false, the default, creates none, which is what keeps an existing consumer byte identical."
-  type        = bool
-  default     = false
-
-  validation {
-    condition     = !var.lambda_aggregate_alarm || length(var.lambda_function_names) > 0
-    error_message = "lambda_aggregate_alarm = true needs at least one name in lambda_function_names: the alarms sum a metric per listed function, so an empty list has nothing to sum."
-  }
-}
-
-variable "lambda_aggregate_threshold" {
-  description = "Sum of AWS/Lambda Errors, or of Throttles, across the functions one aggregate alarm covers over one period that must be exceeded for that alarm to fire. One threshold covers every aggregate alarm, because they all count the same kind of thing, and when lambda_function_names is long enough to chunk the threshold applies within each group rather than across the estate. The default of 0 with GreaterThanThreshold means any single error or throttle on any listed function alarms."
-  type        = number
-  default     = 0
-}
-
-variable "lambda_aggregate_period" {
-  description = "Period in seconds of every metric feeding the aggregate Lambda alarms. CloudWatch accepts 10, 30, or any multiple of 60. The default 300 matches the per function alarms."
-  type        = number
-  default     = 300
-
-  validation {
-    condition     = contains([10, 30], var.lambda_aggregate_period) || (var.lambda_aggregate_period >= 60 && var.lambda_aggregate_period % 60 == 0)
-    error_message = "lambda_aggregate_period must be 10, 30, or a multiple of 60."
-  }
-}
-
-variable "lambda_aggregate_evaluation_periods" {
-  description = "Number of periods evaluated by each aggregate Lambda alarm."
-  type        = number
-  default     = 1
-
-  validation {
-    condition     = var.lambda_aggregate_evaluation_periods >= 1 && floor(var.lambda_aggregate_evaluation_periods) == var.lambda_aggregate_evaluation_periods
-    error_message = "lambda_aggregate_evaluation_periods must be a whole number of at least 1."
   }
 }
 

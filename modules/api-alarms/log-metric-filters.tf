@@ -1,5 +1,5 @@
 resource "aws_cloudwatch_log_metric_filter" "errors" {
-  for_each = var.error_log_groups
+  for_each = local.error_log_groups
 
   name           = "${var.name_prefix}-${each.key}-errors"
   log_group_name = each.value
@@ -18,7 +18,7 @@ resource "aws_cloudwatch_metric_alarm" "errors" {
   count = local.error_alarm_count
 
   alarm_name          = "${var.name_prefix}-application-errors"
-  alarm_description   = "Application logged error records in ${length(var.error_log_groups)} log group${length(var.error_log_groups) == 1 ? "" : "s"}"
+  alarm_description   = "Application logged error records in ${length(local.error_log_groups)} log group${length(local.error_log_groups) == 1 ? "" : "s"}"
   namespace           = var.error_metric_namespace
   metric_name         = local.error_metric_name
   statistic           = "Sum"

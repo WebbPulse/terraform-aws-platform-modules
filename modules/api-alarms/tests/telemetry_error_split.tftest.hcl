@@ -5,6 +5,11 @@ variables {
     content  = "/aws/lambda/example-staging-content"
     identity = "/aws/lambda/example-staging-identity"
   }
+
+  alarms = {
+    application_errors      = true
+    telemetry_export_errors = true
+  }
 }
 
 provider "aws" {

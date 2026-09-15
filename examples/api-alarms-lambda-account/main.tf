@@ -21,8 +21,6 @@ locals {
   name = "example-staging"
 
   domains = ["content", "resume", "identity", "public"]
-
-  many_domains = [for i in range(1, 13) : format("%s-d%02d", local.name, i)]
 }
 
 data "archive_file" "handler" {
@@ -88,17 +86,15 @@ module "alarms" {
   name_prefix         = local.name
   notification_emails = ["alerts@example.com"]
 
-  lambda_function_names  = [for d in local.domains : aws_lambda_function.domain[d].function_name]
-  lambda_aggregate_alarm = true
-
-  lambda_aggregate_threshold          = 0
-  lambda_aggregate_period             = 300
-  lambda_aggregate_evaluation_periods = 1
-
   error_log_groups = {
     for d in local.domains : d => aws_cloudwatch_log_group.domain[d].name
   }
-  dynamodb_aggregate_alarm = true
+
+  alarms = {
+    application_errors = true
+  }
+
+  depends_on = [aws_lambda_function.domain]
 }
 
 output "alarm_topic_arn" {
@@ -106,37 +102,15 @@ output "alarm_topic_arn" {
   value       = module.alarms.sns_topic_arn
 }
 
-output "lambda_aggregate_alarm_names" {
-  description = "The two alarms covering AWS/Lambda across every domain, errors first."
-  value       = module.alarms.lambda_aggregate_alarm_names
+output "lambda_account_alarm_arns" {
+  description = "The two alarms covering AWS/Lambda across every function in the account, errors first. They cost one billed metric each however many domains the account grows to."
+  value = [
+    module.alarms.lambda_account_errors_alarm_arn,
+    module.alarms.lambda_account_throttles_alarm_arn,
+  ]
 }
 
 output "alarm_names" {
-  description = "Every alarm the module created. Two for Lambda at this domain count."
+  description = "Every alarm the module created: the two account wide Lambda alarms plus the application errors alarm this example switches on."
   value       = module.alarms.alarm_names
-}
-
-module "alarms_chunked" {
-  source = "../../modules/api-alarms"
-
-  name_prefix         = "${local.name}-many"
-  notification_emails = ["alerts@example.com"]
-
-  lambda_function_names  = local.many_domains
-  lambda_aggregate_alarm = true
-}
-
-output "chunked_errors_alarm_names" {
-  description = "One aggregate errors alarm per group of ten function names, in chunk order."
-  value       = module.alarms_chunked.lambda_aggregate_errors_alarm_names
-}
-
-output "chunked_throttles_alarm_names" {
-  description = "One aggregate throttles alarm per group of ten function names, in chunk order."
-  value       = module.alarms_chunked.lambda_aggregate_throttles_alarm_names
-}
-
-output "chunked_function_name_groups" {
-  description = "Which function names the module put in which group, in the same order as the alarm outputs. A runbook uses this to say which alarm covers which function."
-  value       = module.alarms_chunked.lambda_aggregate_function_name_chunks
 }

@@ -3,6 +3,10 @@
 The alarm set for a Lambda-backed HTTP API on DynamoDB: one SNS topic with email subscribers,
 Lambda, HTTP API, DynamoDB and CloudWatch Logs metric filter alarms all publishing to it.
 
+The `alarms` object decides which of them exist. It defaults to a lean set, the API 5xx alarm plus
+the two account wide Lambda alarms, which is three billed metrics; the richer alarms are off until a
+toggle turns one back on. The SNS topic and its subscriptions are never gated.
+
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms`.
 
 ## Usage
@@ -10,15 +14,12 @@ Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms
 ```hcl
 module "alarms" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-  version = "~> 1.7"
+  version = "~> 2.20"
 
   name_prefix         = local.prefix
   notification_emails = ["alerts@example.com"]
 
-  lambda_function_name = module.lambda_api.function_name
-  http_api_id          = module.api.api_id
-
-  dynamodb_aggregate_alarm = true
+  http_api_id = module.api.api_id
 }
 ```
 
@@ -31,18 +32,20 @@ module "alarms" {
 | `sns_topic_name` | Topic name, null for `<name_prefix>-alarms` | `null` |
 | `sns_topic_tags` | Extra tags on the topic only | `{}` |
 | `tags` | Tags on the topic and every alarm | `{}` |
-| `lambda_function_name` | One function form: `FunctionName` of the per function alarm pair; null skips both | `null` |
-| `lambda_function_names` | Many function form: the functions the aggregate alarms sum over; creates nothing alone | `[]` |
+| `alarms` | Which alarms exist; every key defaults to the lean set | `{}` |
+| `lambda_function_name` | `FunctionName` of an optional per function alarm pair; null skips both | `null` |
 | `lambda_errors_threshold` | Sum of `Errors` per period that must be exceeded | `0` |
 | `lambda_errors_period` | Period in seconds | `300` |
 | `lambda_errors_evaluation_periods` | Periods evaluated | `1` |
 | `lambda_throttles_threshold` | Sum of `Throttles` per period that must be exceeded | `0` |
 | `lambda_throttles_period` | Period in seconds | `300` |
 | `lambda_throttles_evaluation_periods` | Periods evaluated | `1` |
-| `lambda_aggregate_alarm` | Create the aggregate errors and throttles pair summing `lambda_function_names` | `false` |
-| `lambda_aggregate_threshold` | Errors, or throttles, summed across the functions one aggregate alarm covers | `0` |
-| `lambda_aggregate_period` | Period in seconds of every metric feeding the aggregate alarms | `300` |
-| `lambda_aggregate_evaluation_periods` | Periods evaluated by each aggregate alarm | `1` |
+| `lambda_account_errors_threshold` | Sum of `Errors` across the whole account per period to exceed | `0` |
+| `lambda_account_errors_period` | Period in seconds | `300` |
+| `lambda_account_errors_evaluation_periods` | Periods evaluated | `1` |
+| `lambda_account_throttles_threshold` | Sum of `Throttles` across the whole account per period to exceed | `0` |
+| `lambda_account_throttles_period` | Period in seconds | `300` |
+| `lambda_account_throttles_evaluation_periods` | Periods evaluated | `1` |
 | `http_api_id` | `ApiId` dimension of the API alarms; null skips both | `null` |
 | `api_5xx_threshold` | Sum of `5xx` per period that must be exceeded | `0` |
 | `api_5xx_period` | Period in seconds | `300` |
@@ -94,16 +97,9 @@ module "alarms" {
 | `subscription_arns` | Email subscription ARNs keyed by address |
 | `alarm_names` | Every alarm name the module created, sorted |
 | `alarm_arns` | Every alarm ARN the module created, sorted |
+| `lambda_account_errors_alarm_arn` | ARN of the account wide Lambda errors alarm, `null` when its toggle is off |
+| `lambda_account_throttles_alarm_arn` | ARN of the account wide Lambda throttles alarm, `null` when its toggle is off |
 | `lambda_alarm_names` | Every `AWS/Lambda` alarm name created, empty when no function input is set |
-| `lambda_aggregate_alarm_names` | Every aggregate alarm name, errors first then throttles, each in chunk order |
-| `lambda_aggregate_alarm_arns` | Every aggregate alarm ARN, errors first then throttles, each in chunk order |
-| `lambda_aggregate_errors_alarm_arn` | ARN of the first aggregate errors alarm, `null` when it is off |
-| `lambda_aggregate_throttles_alarm_arn` | ARN of the first aggregate throttles alarm, `null` when it is off |
-| `lambda_aggregate_errors_alarm_arns` | ARNs of every aggregate errors alarm, one per group, in chunk order |
-| `lambda_aggregate_throttles_alarm_arns` | ARNs of every aggregate throttles alarm, one per group, in chunk order |
-| `lambda_aggregate_errors_alarm_names` | Names of every aggregate errors alarm, one per group, in chunk order |
-| `lambda_aggregate_throttles_alarm_names` | Names of every aggregate throttles alarm, one per group, in chunk order |
-| `lambda_aggregate_function_name_chunks` | The function names as the module grouped them, one list per alarm pair |
 | `api_alarm_names` | The two HTTP API alarm names, empty when `http_api_id` is null |
 | `dynamodb_alarm_names` | Table alarm names keyed by their `dynamodb_tables` key |
 | `dynamodb_aggregate_alarm_name` | Name of the aggregate DynamoDB alarm, `null` when it is off |
@@ -123,10 +119,17 @@ module "alarms" {
 - Application errors from the logs and telemetry export failures are counted as two separate
   metrics: the loggers in `error_excluded_loggers` are cut out of the application errors pattern and
   land on the `-telemetry-export-errors` alarm instead, so a dropped trace never pages as a fault.
-- `lambda_function_name` and `lambda_function_names` are mutually exclusive, and a plan setting both
-  is rejected by a variable validation rather than silently preferring one.
-- `lambda_aggregate_alarm = true` needs a non-empty `lambda_function_names`, and the list is chunked
-  into groups of at most 10, so past 10 names use the plural `_arns` outputs, not the singular ones.
+- The account wide Lambda alarms watch `AWS/Lambda` `Errors` and `Throttles` with no dimension, so
+  they cover every function in the account for one billed metric each however many functions there
+  are, and they see a function the Terraform does not know about. One account per environment is
+  what makes that scope correct; two environments sharing an account would alarm on each other.
+- The account wide alarms take the same names, `<name_prefix>-lambda-errors` and
+  `-lambda-throttles`, that `lambda_function_name` gives its per function pair. Two alarms cannot
+  share a name, so setting both is rejected by a variable validation.
+- A toggle only ever subtracts: an alarm still needs its own input as well, so `alarms.api_5xx`
+  without `http_api_id`, or `alarms.application_errors` without `error_log_groups`, creates nothing.
+- Turning an alarm off removes its log metric filters too, so the metric stops being published and
+  its history ages out of CloudWatch on the usual 15 month retention.
 - `dynamodb_aggregate_period` must be 60 or a multiple of 60: a Metrics Insights alarm is standard
   resolution, so the 10 and 30 second periods the other alarms accept are rejected here.
 - Every email subscription needs an out of band confirmation click; until then it stays
