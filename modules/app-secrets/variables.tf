@@ -50,13 +50,18 @@ variable "secrets" {
 
     Exactly one source of the stored value per secret, or none at all:
 
-    - `generate`   : a random_password generated here and stored. The value never leaves state and the
-                     module never reads it back.
-    - `value`      : a value the caller passes in, typically from a sensitive Terraform variable.
+    - `generate`   : a password generated here by an ephemeral random_password and written straight to
+                     Secrets Manager. The value never enters state or plan output, and the module
+                     never reads it back. Because an ephemeral value is regenerated on every run, the
+                     write happens only when `version` changes, so bumping `version` rotates every
+                     generated entry in that secret.
+    - `value`      : a value the caller passes in, typically from a sensitive Terraform variable. It is
+                     written through the write-only argument, so bump `version` to publish a change.
     - `json`       : a map composed into one JSON object and stored as the secret string. Use it for the
                      single blob an application reads at cold start. Entries whose value is null are
                      dropped; an empty string is kept, because an application that distinguishes
-                     "set to empty" from "absent" needs the key present.
+                     "set to empty" from "absent" needs the key present. It is written through the
+                     write-only argument, so bump `version` to publish a change.
     - `placeholder`: a literal seeded once, with `ignore_changes` on the value, so an operator can set
                      the real value out of band with `aws secretsmanager put-secret-value` and Terraform
                      will not revert it. This is the shape for a value Terraform must never learn.
@@ -68,6 +73,10 @@ variable "secrets" {
     Other per-secret fields:
 
     - `description`             : shown in the console; defaults to description_default.
+    - `version`                 : counter behind the write-only argument. Terraform writes the value
+                                  only when this number changes, because it cannot compare a value it
+                                  never keeps. Bump it to rewrite the value or to rotate generated
+                                  entries.
     - `recovery_window_in_days` : overrides the module default for this secret.
     - `kms_key_id`              : overrides the module default for this secret.
     - `tags`                    : merged over the module-wide tags.
@@ -84,6 +93,7 @@ variable "secrets" {
   type = map(object({
     name        = optional(string)
     description = optional(string)
+    version     = optional(number, 1)
 
     generate                  = optional(bool, false)
     generate_length           = optional(number, 32)
@@ -149,6 +159,14 @@ variable "secrets" {
       s.json == null || length(s.json) > 0
     ])
     error_message = "A secret's json map must hold at least one key. Omit json entirely for a secret with no Terraform-managed value."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      s.version >= 1 && floor(s.version) == s.version
+    ])
+    error_message = "A secret's version must be a whole number of 1 or more. It is the counter the write-only argument compares against, and Secrets Manager is written only when it changes."
   }
 }
 

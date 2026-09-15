@@ -1,6 +1,6 @@
 module "app_secrets" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
-  version = "~> 1.6"
+  version = "~> 2.21"
 
   name_prefix = "example-production"
 
@@ -11,21 +11,25 @@ module "app_secrets" {
       description     = "Session signing key, generated here and never read back"
       generate        = true
       generate_length = 64
+      version         = 1
     }
 
     "admin-username" = {
       description = "Bootstrap admin username, set out of band after the first apply"
       placeholder = "REPLACE_ME"
+      version     = 1
     }
 
     "admin-password" = {
       description = "Bootstrap admin password, set out of band after the first apply"
       placeholder = "REPLACE_ME"
+      version     = 1
     }
 
     "admin-email" = {
       description = "Bootstrap admin email, set out of band after the first apply"
       placeholder = "REPLACE_ME"
+      version     = 1
     }
 
     "sentry-dsn" = {

@@ -1,4 +1,4 @@
-resource "random_password" "this" {
+ephemeral "random_password" "this" {
   for_each = local.generated_keys
 
   length           = var.secrets[each.key].generate_length
@@ -24,17 +24,24 @@ resource "aws_secretsmanager_secret" "this" {
 resource "aws_secretsmanager_secret_version" "this" {
   for_each = local.managed_keys
 
-  secret_id     = aws_secretsmanager_secret.this[each.key].id
-  secret_string = local.version_strings[each.key]
+  secret_id = aws_secretsmanager_secret.this[each.key].id
+
+  secret_string_wo = (
+    var.secrets[each.key].generate ? ephemeral.random_password.this[each.key].result :
+    local.static_version_strings[each.key]
+  )
+  secret_string_wo_version = var.secrets[each.key].version
 }
 
 resource "aws_secretsmanager_secret_version" "placeholder" {
   for_each = local.placeholder_keys
 
-  secret_id     = aws_secretsmanager_secret.this[each.key].id
-  secret_string = local.version_strings[each.key]
+  secret_id = aws_secretsmanager_secret.this[each.key].id
+
+  secret_string_wo         = local.static_version_strings[each.key]
+  secret_string_wo_version = var.secrets[each.key].version
 
   lifecycle {
-    ignore_changes = [secret_string, version_stages]
+    ignore_changes = [secret_string_wo_version, version_stages]
   }
 }

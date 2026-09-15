@@ -46,12 +46,12 @@ run "a_json_secret_is_stored_as_one_blob_terraform_owns" {
   }
 
   assert {
-    condition     = jsondecode(aws_secretsmanager_secret_version.this["app"].secret_string)["SECRET_KEY"] == "not-a-real-key"
+    condition     = jsondecode(local.static_version_strings["app"])["SECRET_KEY"] == "not-a-real-key"
     error_message = "Every entry of the json map must reach the stored object under its own key, because the application reads these by name and a dropped key is a missing configuration value that only surfaces at the first cold start."
   }
 
   assert {
-    condition     = length(keys(jsondecode(aws_secretsmanager_secret_version.this["app"].secret_string))) == 3
+    condition     = length(keys(jsondecode(local.static_version_strings["app"]))) == 3
     error_message = "The stored object must hold exactly the entries the consumer passed, so a consumer can predict what the application parses without reading the value back out of AWS."
   }
 }
@@ -72,17 +72,17 @@ run "a_json_entry_that_is_null_is_dropped_and_an_empty_string_is_kept" {
   }
 
   assert {
-    condition     = !contains(keys(jsondecode(aws_secretsmanager_secret_version.this["app"].secret_string)), "SENTRY_DSN")
+    condition     = !contains(keys(jsondecode(local.static_version_strings["app"])), "SENTRY_DSN")
     error_message = "A null entry must be dropped entirely: it is how a consumer wires an optional variable straight into the map, and a literal null in the blob would be parsed as a configured value of none rather than as absent."
   }
 
   assert {
-    condition     = jsondecode(aws_secretsmanager_secret_version.this["app"].secret_string)["FEATURE_FLAGS"] == ""
+    condition     = jsondecode(local.static_version_strings["app"])["FEATURE_FLAGS"] == ""
     error_message = "An empty string entry must be kept, because an application that distinguishes set to empty from absent needs the key present, and that distinction is the only reason null and empty are treated differently here."
   }
 
   assert {
-    condition     = length(keys(jsondecode(aws_secretsmanager_secret_version.this["app"].secret_string))) == 2
+    condition     = length(keys(jsondecode(local.static_version_strings["app"]))) == 2
     error_message = "Exactly the non-null entries must survive, so the count of keys in the blob is predictable from the module call."
   }
 }
@@ -99,7 +99,7 @@ run "a_value_secret_is_stored_verbatim" {
   }
 
   assert {
-    condition     = aws_secretsmanager_secret_version.this["secret-key"].secret_string == "not-a-real-key"
+    condition     = local.static_version_strings["secret-key"] == "not-a-real-key"
     error_message = "A value secret must be stored exactly as passed, with no encoding or wrapping, because the application reads the raw string rather than parsing it."
   }
 
@@ -180,7 +180,7 @@ run "create_empty_version_gives_a_sourceless_secret_a_version_resource" {
   }
 
   assert {
-    condition     = aws_secretsmanager_secret_version.this["out-of-band"].secret_string == ""
+    condition     = local.static_version_strings["out-of-band"] == ""
     error_message = "The version created this way must hold an empty string, because there is no value to store and any invented placeholder would be read by the application as real configuration."
   }
 }
@@ -205,7 +205,7 @@ run "a_placeholder_secret_is_seeded_in_its_own_resource" {
   }
 
   assert {
-    condition     = aws_secretsmanager_secret_version.placeholder["api-token"].secret_string == "REPLACE_ME"
+    condition     = local.static_version_strings["api-token"] == "REPLACE_ME"
     error_message = "The literal must be seeded once so the secret has a version from the start, which keeps a cold start from failing with ResourceNotFoundException before the operator has acted."
   }
 
@@ -220,7 +220,7 @@ run "a_placeholder_secret_is_seeded_in_its_own_resource" {
   }
 }
 
-run "a_generated_secret_gets_a_random_password_with_the_providers_own_defaults" {
+run "a_generated_secret_gets_a_version_written_from_an_ephemeral_password" {
   command = plan
 
   variables {
@@ -232,62 +232,54 @@ run "a_generated_secret_gets_a_random_password_with_the_providers_own_defaults" 
   }
 
   assert {
-    condition     = length(random_password.this) == 1
-    error_message = "generate must create exactly one random_password per generated secret; the value never leaves state and the module never reads it back, which is the whole point of the shape."
-  }
-
-  assert {
-    condition     = random_password.this["session"].length == 32
-    error_message = "generate_length must default to 32, which is the provider's own default, so an existing random_password resource can be moved into the module without the generator's arguments changing and the value being regenerated."
-  }
-
-  assert {
-    condition     = random_password.this["session"].special
-    error_message = "generate_special must default to true to match the provider's default; flipping it would regenerate the value of every secret an adopting consumer moved in."
-  }
-
-  assert {
-    condition     = random_password.this["session"].min_special == 0
-    error_message = "The generate_min_ floors must all default to zero, again matching the provider, because a non-zero floor changes the generated value and therefore rotates a live secret on adoption."
-  }
-
-  assert {
     condition     = length(aws_secretsmanager_secret_version.this) == 1
-    error_message = "A generated secret must get a Terraform-managed version holding the generated result; without it the random_password exists in state and the secret an application reads stays empty."
+    error_message = "A generated secret must get a Terraform-managed version; the value is written straight from the ephemeral generator, and without the version resource the secret an application reads stays empty."
+  }
+
+  assert {
+    condition     = aws_secretsmanager_secret_version.this["session"].secret_string_wo_version == 1
+    error_message = "A generated secret's write-only counter must default to 1. The generator produces a fresh value on every run, so this counter is the only thing that decides whether Secrets Manager is written, and a counter that moved on its own would rotate the secret on an unrelated apply."
+  }
+
+  assert {
+    condition     = contains(keys(local.generated_keys), "session") || contains(local.generated_keys, "session")
+    error_message = "generate must mark the key as generated so the module writes it from the ephemeral password rather than from the static string map."
+  }
+
+  assert {
+    condition     = !contains(keys(local.static_version_strings), "session") || local.static_version_strings["session"] == ""
+    error_message = "A generated secret must carry no static string: its value exists only for the duration of the run, and a static entry holding it would be the state leak this shape exists to avoid."
   }
 }
 
-run "the_generator_arguments_reach_random_password" {
+run "the_generated_key_set_follows_the_generate_flag" {
   command = plan
 
   variables {
     secrets = {
       session = {
-        generate                  = true
-        generate_length           = 64
-        generate_special          = true
-        generate_override_special = "!#$%"
-        generate_min_special      = 4
-        generate_min_numeric      = 4
-        generate_min_upper        = 4
-        generate_min_lower        = 4
+        generate        = true
+        generate_length = 64
+      }
+      app = {
+        json = { SECRET_KEY = "not-a-real-key" }
       }
     }
   }
 
   assert {
-    condition     = random_password.this["session"].length == 64
-    error_message = "generate_length must reach the generator, because it is the only control a consumer has over how much entropy the secret carries."
+    condition     = length(local.generated_keys) == 1
+    error_message = "Only a secret setting generate may be written from the ephemeral generator; pulling a json secret in would replace a value the consumer supplied with a random one."
   }
 
   assert {
-    condition     = random_password.this["session"].override_special == "!#$%"
-    error_message = "generate_override_special must reach the generator verbatim; it is how a consumer keeps a secret inside the character set some downstream system accepts, and a dropped value produces a secret that system rejects."
+    condition     = contains(local.generated_keys, "session")
+    error_message = "The secret that sets generate must be the one in the generated set, otherwise the module writes the wrong secret from the generator."
   }
 
   assert {
-    condition     = random_password.this["session"].min_numeric == 4
-    error_message = "Each generate_min floor must reach the generator on its own, since a floor silently dropped produces a secret that fails a complexity policy the consumer believed it was enforcing."
+    condition     = length(aws_secretsmanager_secret_version.this) == 2
+    error_message = "A generated secret and a json secret must each get their own managed version resource, since both are values Terraform writes."
   }
 }
 
@@ -397,12 +389,68 @@ run "an_empty_secrets_map_creates_nothing" {
   }
 
   assert {
-    condition     = length(random_password.this) == 0
-    error_message = "With no secrets there is nothing to generate; a stray random_password would sit in state with no secret to write it to."
+    condition     = length(local.generated_keys) == 0
+    error_message = "With no secrets there is nothing to generate; a stray generated key would ask the module to write a secret that does not exist."
   }
 
   assert {
     condition     = length(output.arns) == 0
     error_message = "The arns output must be an empty map rather than failing, because a consumer that looks up a key conditionally still evaluates the output."
   }
+}
+
+run "the_write_only_counter_defaults_to_one_and_is_passed_through" {
+  command = plan
+
+  variables {
+    secrets = {
+      app = {
+        json = { SECRET_KEY = "not-a-real-key" }
+      }
+      rotated = {
+        value   = "not-a-real-key"
+        version = 4
+      }
+    }
+  }
+
+  assert {
+    condition     = aws_secretsmanager_secret_version.this["app"].secret_string_wo_version == 1
+    error_message = "A secret that names no version must sit at 1, so an estate adopting the write-only module writes each value once and then stays quiet on every later run."
+  }
+
+  assert {
+    condition     = aws_secretsmanager_secret_version.this["rotated"].secret_string_wo_version == 4
+    error_message = "An explicit version must reach the resource verbatim: it is the only signal the provider has that the value changed, because a write-only value is never in state to compare against."
+  }
+}
+
+run "a_version_below_one_is_rejected" {
+  command = plan
+
+  variables {
+    secrets = {
+      app = {
+        value   = "not-a-real-key"
+        version = 0
+      }
+    }
+  }
+
+  expect_failures = [var.secrets]
+}
+
+run "a_fractional_version_is_rejected" {
+  command = plan
+
+  variables {
+    secrets = {
+      app = {
+        value   = "not-a-real-key"
+        version = 1.5
+      }
+    }
+  }
+
+  expect_failures = [var.secrets]
 }
