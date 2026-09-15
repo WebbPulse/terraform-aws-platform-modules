@@ -94,18 +94,22 @@ module "alarms" {
   name_prefix         = local.name
   notification_emails = ["alerts@example.com"]
 
-  lambda_function_name = aws_lambda_function.api.function_name
-  http_api_id          = module.api.api_id
+  http_api_id = module.api.api_id
 
   dynamodb_aggregate_alarm = true
   dynamodb_tables          = {}
 
-  lambda_errors_threshold      = 0
-  lambda_throttles_threshold   = 0
-  api_5xx_threshold            = 0
-  api_latency_statistic        = "p99"
-  api_latency_threshold_ms     = 10000
-  dynamodb_aggregate_threshold = 0
+  alarms = {
+    api_integration_latency = true
+    dynamodb_throttles      = true
+  }
+
+  lambda_account_errors_threshold    = 0
+  lambda_account_throttles_threshold = 0
+  api_5xx_threshold                  = 0
+  api_latency_statistic              = "p99"
+  api_latency_threshold_ms           = 10000
+  dynamodb_aggregate_threshold       = 0
 }
 
 output "alarm_topic_arn" {

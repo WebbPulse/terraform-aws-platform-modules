@@ -101,6 +101,14 @@ module "alarms" {
   dynamodb_aggregate_alarm = true
 
   rate_limit_fail_open_alarm = true
+
+  alarms = {
+    lambda_account_errors   = false
+    application_errors      = true
+    rate_limit_failed_open  = true
+    telemetry_export_errors = true
+    dynamodb_throttles      = true
+  }
 }
 
 output "alarm_topic_arn" {
