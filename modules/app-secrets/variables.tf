@@ -57,6 +57,8 @@ variable "secrets" {
                      single blob an application reads at cold start. Entries whose value is null are
                      dropped; an empty string is kept, because an application that distinguishes
                      "set to empty" from "absent" needs the key present.
+                     `json_generate_bytes` adds further keys to the same object whose values this
+                     module generates, so a key no one should ever type or hold stays inside state.
     - `placeholder`: a literal seeded once, with `ignore_changes` on the value, so an operator can set
                      the real value out of band with `aws secretsmanager put-secret-value` and Terraform
                      will not revert it. This is the shape for a value Terraform must never learn.
@@ -79,6 +81,13 @@ variable "secrets" {
       `generate_min_upper`,
       `generate_min_lower`     : passed to random_password when `generate` is true, defaulting to
                                  the provider's own defaults.
+    - `json_generate_bytes`     : map of JSON key to byte length, merged into `json` as base64 values
+                                  produced by random_bytes. Use it for key material the application
+                                  derives from and nobody reads: the value is generated in the plan,
+                                  lives only in state and the secret, and never passes through a
+                                  Terraform variable. Requires `json`. Regenerating a value, by
+                                  changing its length or tainting the resource, invalidates anything
+                                  already encrypted under it.
   EOT
 
   type = map(object({
@@ -97,6 +106,8 @@ variable "secrets" {
     value       = optional(string)
     json        = optional(map(string))
     placeholder = optional(string)
+
+    json_generate_bytes = optional(map(number), {})
 
     recovery_window_in_days = optional(number)
     kms_key_id              = optional(string)
@@ -149,6 +160,30 @@ variable "secrets" {
       s.json == null || length(s.json) > 0
     ])
     error_message = "A secret's json map must hold at least one key. Omit json entirely for a secret with no Terraform-managed value."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      length(s.json_generate_bytes) == 0 || s.json != null
+    ])
+    error_message = "json_generate_bytes only composes into a json secret, so a secret that sets it must also set json."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      alltrue([for _, n in s.json_generate_bytes : n >= 16 && n <= 1024])
+    ])
+    error_message = "Each json_generate_bytes length must be between 16 and 1024 bytes."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      length(setintersection(keys(s.json_generate_bytes), keys(coalesce(s.json, {})))) == 0
+    ])
+    error_message = "A json_generate_bytes key cannot also be set in json; the generated value would be ambiguous."
   }
 }
 

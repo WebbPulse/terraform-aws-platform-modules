@@ -10,6 +10,12 @@ resource "random_password" "this" {
   min_lower        = var.secrets[each.key].generate_min_lower
 }
 
+resource "random_bytes" "json" {
+  for_each = local.generated_json_bytes
+
+  length = each.value
+}
+
 resource "aws_secretsmanager_secret" "this" {
   for_each = var.secrets
 

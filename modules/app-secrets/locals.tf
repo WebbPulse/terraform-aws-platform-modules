@@ -6,6 +6,20 @@ locals {
 
   generated_keys = toset([for k, s in var.secrets : k if s.generate])
 
+  generated_json_bytes = merge([
+    for k, s in var.secrets : {
+      for jk, n in s.json_generate_bytes : "${k}.${jk}" => n
+    }
+  ]...)
+
+  json_values = {
+    for k, s in var.secrets :
+    k => merge(
+      { for jk, jv in coalesce(s.json, {}) : jk => jv if jv != null },
+      { for jk, _ in s.json_generate_bytes : jk => random_bytes.json["${k}.${jk}"].base64 },
+    )
+  }
+
   has_version = {
     for k, s in var.secrets :
     k => nonsensitive(s.generate || (s.value != null && s.value != "") || s.json != null || s.placeholder != null || var.create_empty_version)
@@ -16,7 +30,7 @@ locals {
     k => (
       s.generate ? random_password.this[k].result :
       s.value != null ? s.value :
-      s.json != null ? jsonencode({ for jk, jv in s.json : jk => jv if jv != null }) :
+      s.json != null ? jsonencode(local.json_values[k]) :
       s.placeholder != null ? s.placeholder :
       ""
     )

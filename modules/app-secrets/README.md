@@ -104,6 +104,11 @@ Each entry in `secrets`:
   never plans back over what an operator wrote. `version_ids` for it goes stale after that write.
 - `json` drops entries whose value is null and keeps an empty string, so an application can tell
   "set to empty" from "absent". `jsonencode` sorts keys, so reordering the map is a no-op.
+- `json_generate_bytes` composes generated key material into the same object as `json`, base64
+  encoded, so a value nobody should ever type never passes through a Terraform variable or a
+  terminal. It still lands in state like any Terraform-managed secret. Changing a length or tainting
+  `random_bytes.json` mints a new value, which invalidates anything already encrypted under the old
+  one.
 - Values reaching `generate`, `value`, `json` and `placeholder` land in Terraform state, as any
   Terraform-managed secret does. A value Terraform must never learn belongs in `placeholder` or in a
   secret with no value at all.

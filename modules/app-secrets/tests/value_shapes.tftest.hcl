@@ -406,3 +406,70 @@ run "an_empty_secrets_map_creates_nothing" {
     error_message = "The arns output must be an empty map rather than failing, because a consumer that looks up a key conditionally still evaluates the output."
   }
 }
+
+run "json_generate_bytes_adds_generated_keys_to_the_same_object" {
+  command = plan
+
+  variables {
+    secrets = {
+      app = {
+        json = {
+          SECRET_KEY = "not-a-real-key"
+        }
+        json_generate_bytes = {
+          mfa_master_key = 32
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(random_bytes.json) == 1
+    error_message = "A json_generate_bytes entry must mint exactly one random_bytes resource, because the value is generated here rather than passed in and a missing resource would store the key absent."
+  }
+
+  assert {
+    condition     = random_bytes.json["app.mfa_master_key"].length == 32
+    error_message = "The generated value must carry the byte length the consumer asked for; a shorter master key would silently weaken every seed derived from it."
+  }
+
+  assert {
+    condition     = length(aws_secretsmanager_secret_version.this) == 1
+    error_message = "A json secret carrying generated entries is still one blob Terraform owns, so it must land in the managed version resource the application reads at cold start."
+  }
+}
+
+run "json_generate_bytes_requires_json" {
+  command = plan
+
+  variables {
+    secrets = {
+      app = {
+        json_generate_bytes = {
+          mfa_master_key = 32
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.secrets]
+}
+
+run "json_generate_bytes_refuses_a_key_json_already_sets" {
+  command = plan
+
+  variables {
+    secrets = {
+      app = {
+        json = {
+          mfa_master_key = "not-a-real-key"
+        }
+        json_generate_bytes = {
+          mfa_master_key = 32
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.secrets]
+}
