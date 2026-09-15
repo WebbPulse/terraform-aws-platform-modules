@@ -33,72 +33,60 @@ jobs:
       - name: terraform fmt -recursive -check
         run: terraform fmt -recursive -check -diff
 
-  discover:
-    name: Discover directories
+  resolve:
+    name: Resolve affected modules
     runs-on: ubuntu-latest
     outputs:
-      validate: ${{ steps.find.outputs.validate }}
-      test: ${{ steps.find.outputs.test }}
+      validate: ${{ steps.affected.outputs.validate }}
+      test: ${{ steps.affected.outputs.test }}
+      modules: ${{ steps.affected.outputs.modules }}
+      all: ${{ steps.affected.outputs.all }}
+      any: ${{ steps.affected.outputs.any }}
+      node: ${{ steps.affected.outputs.node }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - id: affected
+        name: Work out the affected modules
+        env:
+          AFFECTED_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/affected_modules.py \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --base "$AFFECTED_BASE" \
+            --head "$GITHUB_SHA"
+
+  resolver-tests:
+    name: resolver tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - id: find
-        name: Build the validate and test matrices
-        env:
-          VALIDATE_SKIP: "modules/acm-certificate modules/staging-dns"
-        run: |
-          set -euo pipefail
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
-          validate=()
-          for d in modules/*/ examples/*/; do
-            d="${d%/}"
-            skip=false
-            for s in $VALIDATE_SKIP; do
-              [ "$d" = "$s" ] && skip=true
-            done
-            if [ "$skip" = true ]; then
-              echo "skip $d (needs a caller supplied provider alias)"
-              continue
-            fi
-            validate+=("$d")
-          done
+      - name: Install pytest
+        run: python3 -m pip install --disable-pip-version-check pytest
 
-          tests=()
-          untested=()
-          for d in modules/*/; do
-            d="${d%/}"
-            if [ -d "$d/tests" ]; then
-              tests+=("$d")
-            else
-              untested+=("$d")
-            fi
-          done
-
-          if [ ${#untested[@]} -gt 0 ]; then
-            for u in "${untested[@]}"; do
-              echo "::error::$u has no tests directory; every module must ship a .tftest.hcl suite"
-            done
-            exit 1
-          fi
-
-          {
-            printf 'validate=%s\n' "$(printf '%s\n' "${validate[@]}" | jq -R . | jq -sc .)"
-            printf 'test=%s\n' "$(printf '%s\n' "${tests[@]}" | jq -R . | jq -sc .)"
-          } >> "$GITHUB_OUTPUT"
-
-          echo "validate: ${#validate[@]} directories"
-          echo "test: ${#tests[@]} modules"
+      - name: pytest .github/scripts
+        run: python3 -m pytest .github/scripts/test_affected_modules.py -q
 
   validate:
     name: validate ${{ matrix.dir }}
-    needs: discover
+    needs: resolve
+    if: needs.resolve.outputs.validate != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        dir: ${{ fromJson(needs.discover.outputs.validate) }}
+        dir: ${{ fromJson(needs.resolve.outputs.validate) }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -122,12 +110,13 @@ jobs:
 
   test:
     name: test ${{ matrix.dir }}
-    needs: discover
+    needs: resolve
+    if: needs.resolve.outputs.test != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        dir: ${{ fromJson(needs.discover.outputs.test) }}
+        dir: ${{ fromJson(needs.resolve.outputs.test) }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -148,6 +137,8 @@ jobs:
 
   node-tests:
     name: node tests staging-access-gate
+    needs: resolve
+    if: needs.resolve.outputs.node == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -173,15 +164,23 @@ jobs:
   all-checks-passed:
     name: all-checks-passed
     runs-on: ubuntu-latest
-    needs: [fmt, discover, validate, test, node-tests]
+    needs: [fmt, resolve, resolver-tests, validate, test, node-tests]
     if: always()
     steps:
-      - name: Fail unless every upstream job succeeded
+      - name: Fail unless every upstream job succeeded or was deliberately skipped
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
+          set -euo pipefail
           echo "$RESULTS"
-          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled|skipped)"'; then
+          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then
             echo "::error::at least one upstream job did not succeed"
             exit 1
           fi
+          for required in fmt resolve resolver-tests; do
+            result="$(echo "$RESULTS" | jq -r --arg job "$required" '.[$job].result')"
+            if [ "$result" != "success" ]; then
+              echo "::error::$required did not succeed: $result"
+              exit 1
+            fi
+          done
