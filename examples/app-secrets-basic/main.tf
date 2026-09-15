@@ -1,6 +1,6 @@
 module "app_secrets" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
-  version = "~> 2.21"
+  version = "~> 2.22"
 
   name_prefix = "example-production"
 

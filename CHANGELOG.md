@@ -7,6 +7,38 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.22.0
+
+### `app-secrets`: generated values can live inside the JSON blob
+
+A generated value could only be a secret of its own, because `generate` and `json` were mutually
+exclusive. An estate that keeps one JSON `app` secret per service had no way to add a generated key
+to it without paying for a second Secrets Manager secret.
+
+`json_generate` is a map of generated keys merged into the same blob as `json`. Each entry picks a
+`format`: `password` for a random_password character string, or `bytes32-base64` for 32 raw random
+bytes in standard base64, which is the shape an HKDF or HMAC key wants and which a character string
+cannot provide. Both generators are ephemeral, so nothing reaches state, and a key may not appear in
+both `json` and `json_generate`.
+
+The blob is written whole, and an ephemeral generator produces a fresh value on every run, so any
+write of the blob would otherwise rotate every generated key in it. That is a real hazard when the
+value is a key material an application has already derived from: rotating it silently invalidates
+whatever it protects. `keep = true` on an entry makes the module read the secret's current version
+through an `ephemeral "aws_secretsmanager_secret_version"` and write the same value through again, so
+the entry survives a `version` bump made for an unrelated key. Leave `keep` false only before the
+first write, because that read fails if the secret has no version yet; rotating on purpose is
+`keep = false` plus a `version` bump in the same change.
+
+The random provider floor moves to `>= 3.9`, where the ephemeral `random_bytes` landed. The ephemeral
+`random_password` that 2.21.0 relies on arrived in 3.7, so a consumer sitting on 3.7 or 3.8 has to
+move. A lockfile pinning random below 3.9 does not re-resolve on its own: the run stalls in init
+instead of reporting a constraint it cannot satisfy, which reads as a hang rather than an error. Run
+`terraform init -upgrade` and commit the refreshed `.terraform.lock.hcl` alongside the module pin.
+
+**no plan change** for a consumer that sets no `json_generate`, once the lockfile carries random 3.9
+or newer.
+
 ## 2.21.0
 
 ### `app-secrets`: secret values are written write-only and never enter state

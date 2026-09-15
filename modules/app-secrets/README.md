@@ -11,7 +11,7 @@ Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secret
 ```hcl
 module "app_secrets" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
-  version = "~> 2.21"
+  version = "~> 2.22"
 
   name_prefix = local.prefix
 
@@ -100,8 +100,9 @@ Each entry in `secrets`:
 
 ## Gotchas
 
-- A secret may set at most one of `generate`, `value`, `json` and `placeholder`; setting two fails
-  validation at plan time.
+- A secret may set at most one of `generate`, `value`, the `json` pair and `placeholder`; setting two
+  fails validation at plan time. `json` and `json_generate` are the one pair that go together, because
+  `json_generate` adds generated keys to the same blob rather than replacing it.
 - An empty string in `value` counts as no value rather than a version holding `""`. Secrets Manager
   has no empty version. Use `create_empty_version` if the version resource must exist regardless.
 - `recovery_window_in_days` defaults to 0 because Secrets Manager refuses to reuse the name of a
@@ -129,7 +130,20 @@ Each entry in `secrets`:
   in state against the one now being written, finds them equal, and plans nothing. A `generate`
   secret is the exception, because the ephemeral generator cannot reproduce the value state holds, so
   the first plan after adoption replaces that version and rotates it.
+- `json_generate` puts a generated key inside the same JSON blob, so a value the application needs
+  alongside its other settings does not cost a second Secrets Manager secret. `format` is `password`
+  for a character string or `bytes32-base64` for 32 raw random bytes in standard base64, which is the
+  shape an HKDF or HMAC key wants. A key may not appear in both `json` and `json_generate`.
+- A generated entry is minted fresh on every write of its blob, so any bump of that secret's `version`
+  rotates it. Set `keep = true` on the entry once its value is live and the module reads the current
+  version back and writes the same value through again, leaving it untouched while other keys in the
+  blob change. Leave `keep` false only before the first write, because the read fails if the secret
+  has no version yet. Rotating a kept entry on purpose means setting `keep = false` and bumping
+  `version` in the same change.
 - The aws provider floor is `>= 6.50`, the release that stopped replacing a version when it switches
   between `secret_string` and `secret_string_wo` without the value changing. The random provider floor
-  is `>= 3.7`, which introduced the ephemeral `random_password`, and `required_version` is `>= 1.11`,
-  which is where write-only arguments landed.
+  is `>= 3.9`, which is where the ephemeral `random_bytes` landed (the ephemeral `random_password`
+  arrived in 3.7), and `required_version` is `>= 1.11`, which is where write-only arguments landed.
+- A caller whose `.terraform.lock.hcl` pins random below 3.9 cannot reach that floor by bumping the
+  module pin alone, and the run stalls in init rather than failing with a constraint error. Run
+  `terraform init -upgrade` and commit the refreshed lock in the same change that adopts this version.
