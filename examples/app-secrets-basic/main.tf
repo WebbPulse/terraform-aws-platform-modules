@@ -1,6 +1,6 @@
 module "app_secrets" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
-  version = "~> 1.6"
+  version = "~> 2.21"
 
   name_prefix = "example-production"
 
@@ -8,10 +8,12 @@ module "app_secrets" {
     "secret-key" = {
       description = "JWT signing key for the API"
       value       = var.secret_key
+      version     = 1
     }
 
     "app" = {
       description = "JSON map of runtime secrets read by the Lambda API at cold start"
+      version     = 1
       json = {
         SECRET_KEY = var.secret_key
         SENTRY_DSN = var.sentry_dsn

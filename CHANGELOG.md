@@ -7,6 +7,42 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.21.0
+
+### `app-secrets`: secret values are written write-only and never enter state
+
+Every value this module managed was stored in `aws_secretsmanager_secret_version.secret_string`,
+which lands in Terraform state and in plan JSON. A generated value came from a managed
+`random_password`, whose `result` sits in state too, so the README's claim that it "never leaves
+state" described the wrong property: the value never left state because it was permanently in it.
+
+Values now go to `secret_string_wo`, the write-only argument, which Terraform sends to AWS and then
+discards. Generated values come from an `ephemeral "random_password"` rather than a managed one, so
+they exist only for the duration of the run. No secret value reaches state or plan output in any
+shape, `placeholder` included.
+
+A write-only value cannot be compared against state, so Terraform needs to be told when to write. Each
+entry in `secrets` takes a new `version` counter, default `1`, passed to `secret_string_wo_version`.
+Terraform writes a secret only when its counter changes. Editing a `value` or a `json` entry without
+bumping `version` is an empty plan and changes nothing in AWS. Bumping it rewrites the secret, and for
+a `generate` secret that means rotating it, because the ephemeral generator produces a fresh value
+every run. The plain counter is deliberate: deriving the trigger from a hash of the value would put a
+SHA-256 of every secret into state, which is a far weaker leak than the plaintext but still an
+offline-guessable fingerprint of a low-entropy value, and it is not worth it when the caller can say
+what changed.
+
+**Add `version = 1` to every secret when adopting.** For a `value`, `json` or `placeholder` secret
+this is an in-place update and not a replacement: aws provider 6.50.0 compares the value already in
+state against the one being written, finds them equal and plans nothing. A `generate` secret is the
+exception, because the ephemeral generator cannot reproduce what state holds, so its version is
+replaced and the secret rotates on the adopting apply. Neither consuming estate uses `generate`
+today, so neither rotates anything taking this.
+
+`required_version` moves to `>= 1.11` for write-only arguments, the aws floor from `>= 5.100` to
+`>= 6.50` for the fix that avoids the needless replacement on the switch, and the random floor from
+`>= 3.5` to `>= 3.7` for the ephemeral resource. Every WebbPulse workspace already resolves aws
+6.63.0 and random 3.8.1 or newer, so no consumer moves a provider version to take this.
+
 ## 2.19.0
 
 ### `staging-access-gate`: the cookie signing material is published as outputs **no plan change**

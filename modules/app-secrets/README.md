@@ -11,13 +11,14 @@ Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secret
 ```hcl
 module "app_secrets" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
-  version = "~> 1.6"
+  version = "~> 2.21"
 
   name_prefix = local.prefix
 
   secrets = {
     "app" = {
       description = "JSON map of runtime secrets read by the Lambda API at cold start"
+      version     = 1
       json = {
         SECRET_KEY = var.secret_key
       }
@@ -26,15 +27,21 @@ module "app_secrets" {
     "session" = {
       generate        = true
       generate_length = 64
+      version         = 1
     }
   }
 }
 ```
 
-A secret takes at most one of `generate` (a `random_password` made here), `value` (a string passed
-in), `json` (a map composed into one JSON object), `placeholder` (a literal seeded once with
-`ignore_changes` so an operator overwrites it out of band), or none of them (created empty, with no
-Terraform-managed version at all).
+Values are written through the `secret_string_wo` write-only argument, so no secret value reaches
+Terraform state or plan output. Terraform cannot compare a value it never keeps, so it writes only
+when a secret's `version` counter changes: bump `version` to publish a changed `value` or `json`, or
+to rotate a generated entry.
+
+A secret takes at most one of `generate` (an ephemeral `random_password` made here), `value` (a
+string passed in), `json` (a map composed into one JSON object), `placeholder` (a literal seeded once
+with `ignore_changes` so an operator overwrites it out of band), or none of them (created empty, with
+no Terraform-managed version at all).
 
 ## Inputs
 
@@ -58,6 +65,7 @@ Each entry in `secrets`:
 {
   name        = optional(string)   # full secret name, overriding name_prefix plus the key
   description = optional(string)   # defaults to description_default
+  version     = optional(number, 1) # bump to rewrite the value or to rotate generated entries
 
   generate                  = optional(bool, false)
   generate_length           = optional(number, 32)    # 8 to 512
@@ -104,10 +112,24 @@ Each entry in `secrets`:
   never plans back over what an operator wrote. `version_ids` for it goes stale after that write.
 - `json` drops entries whose value is null and keeps an empty string, so an application can tell
   "set to empty" from "absent". `jsonencode` sorts keys, so reordering the map is a no-op.
-- Values reaching `generate`, `value`, `json` and `placeholder` land in Terraform state, as any
-  Terraform-managed secret does. A value Terraform must never learn belongs in `placeholder` or in a
-  secret with no value at all.
+- No secret value reaches Terraform state or plan output. Every shape writes through
+  `secret_string_wo`, and a generated value comes from an ephemeral `random_password` that exists
+  only for the duration of the run. A value Terraform must never receive at all, even in memory,
+  still belongs in `placeholder` or in a secret with no value.
+- `version` is the write-only counter, and it is the only thing that triggers a write. Editing a
+  `value` or a `json` entry without bumping `version` changes nothing in AWS, and the plan is empty.
+  Bumping `version` rewrites that secret, which for a `generate` secret means rotating it, since the
+  ephemeral generator produces a fresh value on every run.
 - One read policy per module instance. A second role reading a different subset takes
   `policy_resources` and writes its own statement, or uses a second instance of the module.
 - No rotation, no resource policy and no cross-region replication. Cross-account reads need
   `aws_secretsmanager_secret_policy` attached from outside using the `names` output.
+- Adopting the write-only version from an earlier module version is an in-place update, not a
+  replacement, for a `value`, `json` or `placeholder` secret: the provider compares the value already
+  in state against the one now being written, finds them equal, and plans nothing. A `generate`
+  secret is the exception, because the ephemeral generator cannot reproduce the value state holds, so
+  the first plan after adoption replaces that version and rotates it.
+- The aws provider floor is `>= 6.50`, the release that stopped replacing a version when it switches
+  between `secret_string` and `secret_string_wo` without the value changing. The random provider floor
+  is `>= 3.7`, which introduced the ephemeral `random_password`, and `required_version` is `>= 1.11`,
+  which is where write-only arguments landed.

@@ -11,10 +11,9 @@ locals {
     k => nonsensitive(s.generate || (s.value != null && s.value != "") || s.json != null || s.placeholder != null || var.create_empty_version)
   }
 
-  version_strings = {
+  static_version_strings = {
     for k, s in var.secrets :
     k => (
-      s.generate ? random_password.this[k].result :
       s.value != null ? s.value :
       s.json != null ? jsonencode({ for jk, jv in s.json : jk => jv if jv != null }) :
       s.placeholder != null ? s.placeholder :
@@ -24,7 +23,7 @@ locals {
   }
 
   placeholder_keys = toset([for k, s in var.secrets : k if s.placeholder != null])
-  managed_keys     = toset([for k, _ in local.version_strings : k if !contains(local.placeholder_keys, k)])
+  managed_keys     = toset([for k, _ in local.static_version_strings : k if !contains(local.placeholder_keys, k)])
 
   secret_arns = { for k, r in aws_secretsmanager_secret.this : k => r.arn }
 
