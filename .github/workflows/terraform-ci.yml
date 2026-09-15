@@ -68,15 +68,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
+          version: "0.12.10"
           python-version: "3.13"
 
-      - name: Install pytest
-        run: python3 -m pip install --disable-pip-version-check pytest
-
       - name: pytest .github/scripts
-        run: python3 -m pytest .github/scripts/test_affected_modules.py -q
+        run: uvx pytest -q .github/scripts/test_affected_modules.py
 
   validate:
     name: validate ${{ matrix.dir }}
