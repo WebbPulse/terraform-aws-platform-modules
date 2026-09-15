@@ -4,31 +4,17 @@ locals {
   subscriptions = { for e in var.notification_emails : e => e }
 
   lambda_count = var.lambda_function_name == null ? 0 : 1
-  api_count    = var.http_api_id == null ? 0 : 1
 
-  lambda_aggregate_chunk_size = 10
+  api_5xx_count     = var.http_api_id != null && var.alarms.api_5xx ? 1 : 0
+  api_latency_count = var.http_api_id != null && var.alarms.api_integration_latency ? 1 : 0
 
-  lambda_aggregate_chunks = var.lambda_aggregate_alarm ? chunklist(var.lambda_function_names, local.lambda_aggregate_chunk_size) : []
-
-  lambda_aggregate_count = length(local.lambda_aggregate_chunks)
-
-  lambda_aggregate_metrics = [
-    for chunk in local.lambda_aggregate_chunks : {
-      for i, name in chunk : "m${i}" => name
-    }
-  ]
-
-  lambda_aggregate_expressions = [
-    for chunk in local.lambda_aggregate_chunks : join(" + ", [for i, _ in chunk : "m${i}"])
-  ]
-
-  lambda_aggregate_name_suffixes = [
-    for i, _ in local.lambda_aggregate_chunks : i == 0 ? "" : "-${i + 1}"
-  ]
+  dynamodb_table_alarms = var.alarms.dynamodb_throttles ? var.dynamodb_tables : {}
 
   error_metric_name = coalesce(var.error_metric_name, "${var.name_prefix}-application-errors")
 
-  error_alarm_count = length(var.error_log_groups) > 0 ? 1 : 0
+  error_log_groups = var.alarms.application_errors ? var.error_log_groups : {}
+
+  error_alarm_count = length(local.error_log_groups) > 0 ? 1 : 0
 
   excluded_logger_clauses = [
     for l in var.error_excluded_loggers : "$.logger != \"${l}\""
@@ -49,7 +35,7 @@ locals {
   telemetry_filter_pattern = "{ $.level = \"ERROR\" && (${join(" || ", local.included_logger_clauses)}) }"
 
   telemetry_log_groups = (
-    var.telemetry_alarm_enabled && length(var.error_excluded_loggers) > 0
+    var.alarms.telemetry_export_errors && var.telemetry_alarm_enabled && length(var.error_excluded_loggers) > 0
     ? var.error_log_groups
     : {}
   )
@@ -61,7 +47,7 @@ locals {
   standalone_lambda_errors_count = var.lambda_errors_alarm_function_name != null && var.lambda_function_name == null ? 1 : 0
 
   rate_limit_fail_open_log_groups = (
-    var.rate_limit_fail_open_alarm
+    var.alarms.rate_limit_failed_open && var.rate_limit_fail_open_alarm
     ? (var.rate_limit_fail_open_log_groups == null ? var.error_log_groups : var.rate_limit_fail_open_log_groups)
     : {}
   )

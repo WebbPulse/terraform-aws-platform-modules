@@ -7,6 +7,11 @@ variables {
     identity = "/aws/lambda/example-staging-identity"
     public   = "/aws/lambda/example-staging-public"
   }
+
+  alarms = {
+    application_errors     = true
+    rate_limit_failed_open = true
+  }
 }
 
 provider "aws" {
