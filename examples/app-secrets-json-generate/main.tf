@@ -6,7 +6,7 @@ module "app_secrets" {
 
   secrets = {
     "app" = {
-      description = "Every setting the API reads at cold start, in one blob"
+      description = "Every setting the API reads at cold start, in one blob. Flip keep to true on both generated entries once the first apply has written them, so a later version bump leaves them alone"
       version     = 1
 
       json = {
@@ -18,16 +18,15 @@ module "app_secrets" {
       json_generate = {
         mfa_master_key = {
           format = "bytes32-base64"
-          keep   = true
+          keep   = false
         }
 
         internal_api_key = {
           format = "password"
           length = 48
-          keep   = true
+          keep   = false
         }
       }
-
     }
   }
 }
