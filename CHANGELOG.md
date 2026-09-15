@@ -31,10 +31,13 @@ first write, because that read fails if the secret has no version yet; rotating 
 `keep = false` plus a `version` bump in the same change.
 
 The random provider floor moves to `>= 3.9`, where the ephemeral `random_bytes` landed. The ephemeral
-`random_password` that 2.21.0 relies on arrived in 3.7, so a consumer whose lockfile pins 3.7 or 3.8
-re-resolves on upgrade rather than failing at parse time on an unknown ephemeral resource type.
+`random_password` that 2.21.0 relies on arrived in 3.7, so a consumer sitting on 3.7 or 3.8 has to
+move. A lockfile pinning random below 3.9 does not re-resolve on its own: the run stalls in init
+instead of reporting a constraint it cannot satisfy, which reads as a hang rather than an error. Run
+`terraform init -upgrade` and commit the refreshed `.terraform.lock.hcl` alongside the module pin.
 
-**no plan change** for a consumer that sets no `json_generate`.
+**no plan change** for a consumer that sets no `json_generate`, once the lockfile carries random 3.9
+or newer.
 
 ## 2.21.0
 

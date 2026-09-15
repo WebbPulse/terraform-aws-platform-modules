@@ -144,3 +144,6 @@ Each entry in `secrets`:
   between `secret_string` and `secret_string_wo` without the value changing. The random provider floor
   is `>= 3.9`, which is where the ephemeral `random_bytes` landed (the ephemeral `random_password`
   arrived in 3.7), and `required_version` is `>= 1.11`, which is where write-only arguments landed.
+- A caller whose `.terraform.lock.hcl` pins random below 3.9 cannot reach that floor by bumping the
+  module pin alone, and the run stalls in init rather than failing with a constraint error. Run
+  `terraform init -upgrade` and commit the refreshed lock in the same change that adopts this version.
