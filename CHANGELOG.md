@@ -7,6 +7,16 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.22.1
+
+### `app-secrets`: a kept entry the blob does not hold yet is minted **no plan change**
+
+With `keep = true` the module indexed the current blob by the entry's key, so an existing secret
+adopting `json_generate` had to go through a `keep = false` release first or the plan failed on the
+missing key. A kept entry the current version does not hold is now minted fresh, and read back on
+every write after that. A brand new secret still needs `keep = false` for its first write, because
+the read itself fails when no version exists.
+
 ## 2.22.0
 
 ### `app-secrets`: generated values can live inside the JSON blob

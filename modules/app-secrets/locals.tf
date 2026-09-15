@@ -18,6 +18,15 @@ locals {
   json_generate_bytes_entries    = { for ek, e in local.json_generate_entries : ek => e if e.spec.format == "bytes32-base64" }
   json_generate_password_entries = { for ek, e in local.json_generate_entries : ek => e if e.spec.format == "password" }
 
+  json_generate_fresh = {
+    for ek, e in local.json_generate_entries :
+    ek => (
+      e.spec.format == "bytes32-base64" ?
+      ephemeral.random_bytes.json_generate[ek].base64 :
+      ephemeral.random_password.json_generate[ek].result
+    )
+  }
+
   json_generate_carry = {
     for k in local.json_generate_keys :
     k => { for jk, g in var.secrets[k].json_generate : jk => g.keep }
