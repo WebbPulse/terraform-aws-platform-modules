@@ -6,16 +6,43 @@ locals {
 
   generated_keys = toset([for k, s in var.secrets : k if s.generate])
 
+  json_generate_keys = toset([for k, s in var.secrets : k if length(s.json_generate) > 0])
+
+  json_generate_entries = merge([
+    for k, s in var.secrets : {
+      for jk, g in s.json_generate :
+      "${k}.${jk}" => { secret = k, key = jk, spec = g }
+    }
+  ]...)
+
+  json_generate_bytes_entries    = { for ek, e in local.json_generate_entries : ek => e if e.spec.format == "bytes32-base64" }
+  json_generate_password_entries = { for ek, e in local.json_generate_entries : ek => e if e.spec.format == "password" }
+
+  json_generate_carry = {
+    for k in local.json_generate_keys :
+    k => { for jk, g in var.secrets[k].json_generate : jk => g.keep }
+  }
+
+  json_generate_carry_keys = toset([
+    for k in local.json_generate_keys :
+    k if anytrue(values(local.json_generate_carry[k]))
+  ])
+
   has_version = {
     for k, s in var.secrets :
-    k => nonsensitive(s.generate || (s.value != null && s.value != "") || s.json != null || s.placeholder != null || var.create_empty_version)
+    k => nonsensitive(s.generate || (s.value != null && s.value != "") || s.json != null || length(s.json_generate) > 0 || s.placeholder != null || var.create_empty_version)
+  }
+
+  static_json_maps = {
+    for k, s in var.secrets :
+    k => { for jk, jv in coalesce(s.json, {}) : jk => jv if jv != null }
   }
 
   static_version_strings = {
     for k, s in var.secrets :
     k => (
       s.value != null ? s.value :
-      s.json != null ? jsonencode({ for jk, jv in s.json : jk => jv if jv != null }) :
+      s.json != null ? jsonencode(local.static_json_maps[k]) :
       s.placeholder != null ? s.placeholder :
       ""
     )
@@ -23,7 +50,10 @@ locals {
   }
 
   placeholder_keys = toset([for k, s in var.secrets : k if s.placeholder != null])
-  managed_keys     = toset([for k, _ in local.static_version_strings : k if !contains(local.placeholder_keys, k)])
+  managed_keys = toset([
+    for k, _ in local.static_version_strings :
+    k if !contains(local.placeholder_keys, k) && !contains(local.json_generate_keys, k)
+  ])
 
   secret_arns = { for k, r in aws_secretsmanager_secret.this : k => r.arn }
 

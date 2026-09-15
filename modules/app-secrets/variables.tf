@@ -62,6 +62,14 @@ variable "secrets" {
                      dropped; an empty string is kept, because an application that distinguishes
                      "set to empty" from "absent" needs the key present. It is written through the
                      write-only argument, so bump `version` to publish a change.
+    - `json_generate`: generated keys added to the same blob as `json`, so a value the application
+                     needs alongside its other settings does not cost a second secret. Each entry
+                     picks a `format`: `password` for a random_password character string, or
+                     `bytes32-base64` for 32 raw random bytes in standard base64. A generated entry is
+                     minted fresh on every write of the blob, so set `keep = true` once its value is
+                     live and the module reads the current version back and writes the same value
+                     through again, leaving it alone while other keys change. Leave `keep` false only
+                     before the first write, because the read fails if the secret has no version yet.
     - `placeholder`: a literal seeded once, with `ignore_changes` on the value, so an operator can set
                      the real value out of band with `aws secretsmanager put-secret-value` and Terraform
                      will not revert it. This is the shape for a value Terraform must never learn.
@@ -104,8 +112,20 @@ variable "secrets" {
     generate_min_upper        = optional(number, 0)
     generate_min_lower        = optional(number, 0)
 
-    value       = optional(string)
-    json        = optional(map(string))
+    value = optional(string)
+    json  = optional(map(string))
+    json_generate = optional(map(object({
+      format = optional(string, "password")
+      keep   = optional(bool, false)
+
+      length           = optional(number, 32)
+      special          = optional(bool, true)
+      override_special = optional(string)
+      min_special      = optional(number, 0)
+      min_numeric      = optional(number, 0)
+      min_upper        = optional(number, 0)
+      min_lower        = optional(number, 0)
+    })), {})
     placeholder = optional(string)
 
     recovery_window_in_days = optional(number)
@@ -116,9 +136,41 @@ variable "secrets" {
   validation {
     condition = alltrue([
       for k, s in var.secrets :
-      length([for present in [s.generate, s.value != null, s.json != null, s.placeholder != null] : present if present]) <= 1
+      length([for present in [s.generate, s.value != null, s.json != null || length(s.json_generate) > 0, s.placeholder != null] : present if present]) <= 1
     ])
-    error_message = "Each secret sets at most one of generate, value, json and placeholder. A secret that sets none is created empty and Terraform manages no version for it."
+    error_message = "Each secret sets at most one of generate, value, the json pair and placeholder. json and json_generate go together, because json_generate adds generated keys to the same blob. A secret that sets none is created empty and Terraform manages no version for it."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      alltrue([for g in values(s.json_generate) : contains(["password", "bytes32-base64"], g.format)])
+    ])
+    error_message = "A json_generate entry's format must be password or bytes32-base64. password is a random_password character string; bytes32-base64 is 32 raw random bytes in standard base64, which is the shape a key derivation function or an HMAC key wants."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      length(setintersection(keys(coalesce(s.json, {})), keys(s.json_generate))) == 0
+    ])
+    error_message = "A key cannot appear in both json and json_generate on the same secret. Each key in the blob is either passed in or generated, never both."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      alltrue([for g in values(s.json_generate) : g.format != "password" || (g.length >= 8 && g.length <= 512)])
+    ])
+    error_message = "A password json_generate entry's length must be between 8 and 512. Anything shorter than 8 is not worth generating."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, s in var.secrets :
+      alltrue([for g in values(s.json_generate) : g.format != "password" || (g.min_special + g.min_numeric + g.min_upper + g.min_lower) <= g.length])
+    ])
+    error_message = "The min_* floors of a json_generate entry cannot add up to more than its length."
   }
 
   validation {
