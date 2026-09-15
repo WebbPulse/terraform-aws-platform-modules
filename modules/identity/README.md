@@ -242,6 +242,9 @@ from the same merge it already does.
   way back is every enrolled user re-enrolling.
 - With no envelope key and no `mfa_encryption_key_arn`, `IDENTITY_DATA_KEY_ARN` is absent and TOTP
   enrolment refuses to construct rather than storing a seed in the clear.
+- With `IDENTITY_TOTP_CIPHER = secret` the seeds are sealed under `mfa_master_key` from the app
+  secret, not under the KMS envelope key, so rotating that master key makes every stored seed
+  unreadable and every enrolled user has to re-enrol.
 - `registrable_domain` is close to irreversible: the WebAuthn RP ID is hashed into every credential,
   so changing it invalidates every passkey already registered.
 - `refresh-tokens` carries `user_id-family_id-index` so a password change or reset can sign every
