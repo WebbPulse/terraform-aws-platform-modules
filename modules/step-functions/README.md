@@ -116,8 +116,17 @@ spelled.
 - `definition_substitutions` is applied by this module with `templatestring`, not by the provider:
   `aws_sfn_state_machine` has no such argument. A placeholder with no entry in the map reaches the
   service literally and fails the definition validation with a malformed-ARN error rather than a
-  missing-substitution one. A substituted value lands inside a quoted JSON string, so a value
-  carrying a bare quote corrupts the document.
+  missing-substitution one. Substitution is textual, so a value carrying a bare quote corrupts the
+  document; the module's post-substitution check catches that as invalid JSON rather than letting
+  the service reject it at apply.
+- A placeholder stands for a fragment of the JSON text, not for a string value, so it can take a
+  number or an array. Write it unquoted for those, `"TimeoutSeconds": ${TimeoutSeconds}` or
+  `"Subnets": ${SubnetIdsJson}`, and pass `tostring(...)` or `jsonencode(...)` from the caller.
+  This works because the module validates the definition after substituting it: the raw string with
+  an unquoted `${...}` in a numeric position is not valid JSON on its own, and validating it first
+  rejected every numeric and list substitution a caller wanted to make. The check lives on the
+  state machine resource as a `precondition` rather than on the variable, since a variable
+  `validation` cannot see another input.
 - The provider validates the definition against the live service at plan time, so a plan needs
   real credentials. A `terraform test` run against mock credentials has to override
   `aws_sfn_state_machine` with `override_during = plan`, which is what this module's own tests do.

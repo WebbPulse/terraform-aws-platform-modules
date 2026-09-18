@@ -68,6 +68,34 @@ run "substitutions_replace_the_placeholders_before_the_service_sees_them" {
   }
 }
 
+run "a_numeric_and_a_list_placeholder_survive_validation_and_substitution" {
+  command = plan
+
+  variables {
+    definition = "{\"StartAt\":\"Run\",\"States\":{\"Run\":{\"Type\":\"Task\",\"Resource\":\"arn:aws:states:::ecs:runTask.sync\",\"TimeoutSeconds\":$${TimeoutSeconds},\"Parameters\":{\"NetworkConfiguration\":{\"AwsvpcConfiguration\":{\"Subnets\":$${SubnetIdsJson}}}},\"End\":true}}}"
+
+    definition_substitutions = {
+      TimeoutSeconds = "1800"
+      SubnetIdsJson  = "[\"subnet-aaaa\",\"subnet-bbbb\"]"
+    }
+  }
+
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.this.definition).States.Run.TimeoutSeconds == 1800
+    error_message = "A placeholder standing where a number belongs must survive to the service as a JSON number. The module validates the substituted definition rather than the raw string, because an unquoted $${...} is not valid JSON on its own and validating before substitution rejected every timeout a caller wanted to pass in."
+  }
+
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.this.definition).States.Run.Parameters.NetworkConfiguration.AwsvpcConfiguration.Subnets == ["subnet-aaaa", "subnet-bbbb"]
+    error_message = "A placeholder standing where an array belongs must reach the service as a JSON array. Subnets and security groups are the case that forces it: an ecs:runTask state takes lists, and a caller computing them with jsonencode had no way to pass them while the raw definition was the thing being validated."
+  }
+
+  assert {
+    condition     = !strcontains(aws_sfn_state_machine.this.definition, "$${")
+    error_message = "No placeholder may survive substitution, whatever JSON type it stood for."
+  }
+}
+
 run "the_log_group_defaults_to_the_vendedlogs_prefix" {
   command = plan
 
@@ -184,7 +212,7 @@ run "a_definition_that_is_not_json_is_rejected" {
     definition = "{\"StartAt\":\"Done\",}"
   }
 
-  expect_failures = [var.definition]
+  expect_failures = [aws_sfn_state_machine.this]
 }
 
 run "a_definition_without_a_states_object_is_rejected" {
@@ -194,7 +222,21 @@ run "a_definition_without_a_states_object_is_rejected" {
     definition = "{\"Comment\":\"no states here\",\"StartAt\":\"Done\"}"
   }
 
-  expect_failures = [var.definition]
+  expect_failures = [aws_sfn_state_machine.this]
+}
+
+run "a_definition_a_substitution_makes_invalid_is_rejected" {
+  command = plan
+
+  variables {
+    definition = "{\"StartAt\":\"Done\",\"States\":{\"Done\":{\"Type\":\"Succeed\",\"Comment\":\"$${Note}\"}}}"
+
+    definition_substitutions = {
+      Note = "a \" that closes the string early"
+    }
+  }
+
+  expect_failures = [aws_sfn_state_machine.this]
 }
 
 run "a_retention_cloudwatch_does_not_accept_is_rejected" {

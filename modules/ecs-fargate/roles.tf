@@ -49,13 +49,13 @@ resource "aws_iam_role" "task" {
 }
 
 resource "aws_iam_role_policy" "task" {
-  for_each = local.tasks_with_policies
+  for_each = local.task_keys_with_policies
 
   name = "task"
   role = aws_iam_role.task[each.key].id
 
   policy = jsonencode({
     Version   = "2012-10-17"
-    Statement = each.value
+    Statement = local.task_policy_statements[each.key]
   })
 }
