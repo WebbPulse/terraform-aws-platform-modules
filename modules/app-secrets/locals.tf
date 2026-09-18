@@ -29,7 +29,7 @@ locals {
 
   json_generate_carry = {
     for k in local.json_generate_keys :
-    k => { for jk, g in var.secrets[k].json_generate : jk => g.keep }
+    k => { for jk, g in var.secrets[k].json_generate : jk => g.keep && var.json_generate_carry_enabled }
   }
 
   json_generate_carry_keys = toset([

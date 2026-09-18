@@ -7,6 +7,29 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.25.1
+
+### `app-secrets`: a fresh account can plan a kept `json_generate` entry **no plan change**
+
+`keep = true` declares an ephemeral `aws_secretsmanager_secret_version` on the secret, and on a
+first apply the same run that creates the secret also reads it. The read has nothing to find, so
+the run stops with `reading AWS Secrets Manager Secret Versions Data Source (<null>): couldn't find
+resource` after most of the estate is already created. Standupless staging hit it with 110 of 111
+resources built. The only way through was to ship `keep = false`, apply, then ship `keep = true`
+and apply again, which costs two product commits per fresh account.
+
+Whether the secret has a version yet cannot be known at plan time, so it comes in as
+`json_generate_carry_enabled`, a boolean defaulting to true. True is the historic behaviour and an
+existing consumer's plan is empty. False mints every kept entry fresh, exactly as `keep = false`
+does, declares no ephemeral read at all, and still writes the version, so a fresh account lands in
+one apply. A consumer passes a literal false on the first apply and true afterwards, wired from the
+same switch that gates the function images, for example `bootstrap_image_tag != ""`.
+
+Flipping the switch back to true without bumping `version` plans no change. `secret_string_wo` is
+write-only, so the blob is never in state to diff and `secret_string_wo_version` is the only
+attribute that moves the resource; the stored value stays whatever the first apply minted until a
+`version` bump republishes it.
+
 ## 2.25.0
 
 ### `step-functions`: the definition is validated after substitution, so a placeholder can be a number or a list **no plan change**

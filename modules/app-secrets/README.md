@@ -53,6 +53,7 @@ no Terraform-managed version at all).
 | `recovery_window_in_days` | Default recovery window, 0 or 7 to 30; a secret may override | `0` |
 | `kms_key_id` | Default KMS key id, alias or ARN; null uses `aws/secretsmanager` | `null` |
 | `tags` | Tags on every secret, on top of the provider `default_tags` | `{}` |
+| `json_generate_carry_enabled` | Plan time known switch for whether a kept `json_generate` entry is read back; false mints every kept entry fresh | `true` |
 | `create_empty_version` | Give a secret with no value an empty version resource anyway | `false` |
 | `description_default` | Description for any secret that sets none | `null` |
 | `policy_sid` | Sid on the generated policy statement; null renders no Sid | `null` |
@@ -141,6 +142,22 @@ Each entry in `secrets`:
   can adopt `json_generate` with `keep = true` from the start. Leave `keep` false only for a brand new
   secret, because the read fails if the secret has no version at all. Rotating a kept entry on purpose
   means setting `keep = false` and bumping `version` in the same change.
+- A kept entry's read back is the one thing a fresh account cannot plan. `keep = true` declares an
+  ephemeral `aws_secretsmanager_secret_version` on the secret, and on a first apply the same run that
+  creates the secret also reads it, so the read fails with `reading AWS Secrets Manager Secret
+  Versions Data Source (<null>): couldn't find resource` once most of the estate already exists.
+  Whether a version exists is not knowable at plan time, so it comes in as `json_generate_carry_enabled`,
+  a literal boolean: pass `false` on the first apply in a fresh account and `true` from the second
+  onwards, typically wired from the same switch that gates the function images, for example
+  `bootstrap_image_tag != ""`. False mints every kept entry fresh, exactly as `keep = false` does,
+  declares no ephemeral read at all, and still writes the version, so the estate lands in one apply
+  rather than costing a second product commit to flip `keep`.
+- Flipping `json_generate_carry_enabled` from `false` to `true` without bumping `version` plans no
+  change and rewrites nothing. `secret_string_wo` is write-only, so Terraform never keeps the blob in
+  state and cannot diff it: `secret_string_wo_version` is the only attribute that moves the resource.
+  A plan with the switch flipped and `version` untouched shows the version resource unchanged, and the
+  stored blob keeps the value the first apply minted. Bumping `version` in the same change is what
+  republishes the blob, and from then on the kept entry is carried forward rather than reminted.
 - The aws provider floor is `>= 6.50`, the release that stopped replacing a version when it switches
   between `secret_string` and `secret_string_wo` without the value changing. The random provider floor
   is `>= 3.9`, which is where the ephemeral `random_bytes` landed (the ephemeral `random_password`

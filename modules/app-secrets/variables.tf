@@ -68,8 +68,9 @@ variable "secrets" {
                      `bytes32-base64` for 32 raw random bytes in standard base64. A generated entry is
                      minted fresh on every write of the blob, so set `keep = true` once its value is
                      live and the module reads the current version back and writes the same value
-                     through again, leaving it alone while other keys change. Leave `keep` false only
-                     before the first write, because the read fails if the secret has no version yet.
+                     through again, leaving it alone while other keys change. That read fails if the
+                     secret has no version yet, so a first apply in a fresh account passes
+                     json_generate_carry_enabled = false rather than editing `keep`.
     - `placeholder`: a literal seeded once, with `ignore_changes` on the value, so an operator can set
                      the real value out of band with `aws secretsmanager put-secret-value` and Terraform
                      will not revert it. This is the shape for a value Terraform must never learn.
@@ -220,6 +221,30 @@ variable "secrets" {
     ])
     error_message = "A secret's version must be a whole number of 1 or more. It is the counter the write-only argument compares against, and Secrets Manager is written only when it changes."
   }
+}
+
+variable "json_generate_carry_enabled" {
+  description = <<-EOT
+    Plan time known switch for whether a kept json_generate entry is read back from the secret's
+    current version. True, the default, is the historic behaviour, so a consumer that does not set
+    this sees no plan change at all.
+
+    Set it to a literal false on the first apply in a fresh account. A kept entry makes the module
+    read the secret's current version through an ephemeral aws_secretsmanager_secret_version, and
+    that read fails when the secret has no version yet: the same apply that creates the secret also
+    reads it, and the run stops with "reading AWS Secrets Manager Secret Versions Data Source
+    (<null>): couldn't find resource" after most of the estate has already been created. Whether a
+    version exists is not knowable at plan time, so it has to come in as a boolean the consumer
+    already knows, typically the same switch that gates the function images, for example
+    bootstrap_image_tag != "".
+
+    False mints every kept entry fresh, exactly as keep = false does, does not declare the ephemeral
+    read at all, and still writes the version. Pass true from the second apply onwards and the kept
+    entries are carried forward again.
+  EOT
+
+  type    = bool
+  default = true
 }
 
 variable "create_empty_version" {
