@@ -72,3 +72,18 @@ output "xray_write_policy_attached" {
   description = "Whether the module attached its inline X-Ray write policy to the execution role. False when tracing_mode is not Active or attach_xray_write_policy is off, in which case the application owns that grant."
   value       = local.attach_xray_write_policy
 }
+
+output "sqs_event_source_mapping_uuids" {
+  description = "UUID of each SQS event source mapping, keyed as sqs_event_sources was. The UUID is what an UpdateEventSourceMapping call or a console deep link takes, and it is the only stable handle on a mapping, which has no name."
+  value       = { for key, mapping in aws_lambda_event_source_mapping.sqs : key => mapping.uuid }
+}
+
+output "sqs_event_source_policy_json" {
+  description = "Queue read policy document per sqs_event_sources entry, granting sqs:ReceiveMessage, sqs:DeleteMessage and sqs:GetQueueAttributes on that queue plus kms:Decrypt on its key when one was given. Already attached to the execution role unless attach_role_policies is off, in which case a consumer attaches these itself."
+  value       = local.sqs_event_source_policy_json
+}
+
+output "events_path" {
+  description = "Path the Web Adapter posts a non-HTTP invocation to, which is also the path the application mounts its event route on. Empty when no SQS event source is wired, because the pass through variables are only emitted alongside a mapping."
+  value       = length(var.sqs_event_sources) > 0 ? var.events_path : null
+}

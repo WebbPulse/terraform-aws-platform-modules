@@ -66,7 +66,16 @@ module "lambda_api" {
 | `set_logging_config_log_group` | Name the log group explicitly inside `logging_config` | `false` |
 | `vpc_config` | `{ subnet_ids, security_group_ids }`; null keeps the function outside a VPC | `null` |
 | `ephemeral_storage_size` | Size of `/tmp` in MB, 512 to 10240; null leaves the block out, which is 512 | `null` |
+| `sqs_event_sources` | SQS queues this function polls, as a map; see the shape below | `{}` |
+| `attach_role_policies` | Attach the queue read policies `sqs_event_sources` needs to the execution role | `true` |
+| `events_path` | Path the Web Adapter posts a non-HTTP invocation to, emitted only with an SQS source | `"/events"` |
 | `tags` | Extra tags on the function only | `{}` |
+
+Each `sqs_event_sources` entry takes `queue_arn` (required), and optionally `kms_key_arn`,
+`batch_size` (`10`), `maximum_batching_window_seconds` (`5`), `function_response_types`
+(`["ReportBatchItemFailures"]`), `filter_criteria` (`[]`), `maximum_concurrency` (`null`) and
+`enabled` (`true`). The map key names the mapping in state, so renaming it destroys one mapping and
+creates another.
 
 `code` takes exactly one of three shapes: `{ filename, source_code_hash }` for a local zip,
 `{ s3_bucket, s3_key, s3_object_version, source_code_hash }` for an object in S3, or
@@ -91,6 +100,9 @@ module "lambda_api" {
 | `package_type` | `Zip` or `Image`, echoing the input |
 | `image_uri` | Seed image the function was created with, empty for a `Zip` function |
 | `xray_write_policy_attached` | Whether the module attached its inline X-Ray write policy |
+| `sqs_event_source_mapping_uuids` | UUID of each SQS event source mapping, keyed as `sqs_event_sources` was |
+| `sqs_event_source_policy_json` | Queue read policy per entry, for a consumer attaching it elsewhere |
+| `events_path` | Path the Web Adapter posts a batch to, null when no SQS source is wired |
 
 ## Gotchas
 
@@ -114,5 +126,28 @@ module "lambda_api" {
   that replaces functions.
 - `set_logging_config_log_group` points at the same group either way, but flipping it is an in place
   update of the function, so match what the application already has in state.
+- **An SQS event source needs a route to post the batch to.** Each `sqs_event_sources` entry sets
+  `AWS_LWA_PASS_THROUGH_PATH` and `APP_EVENTS_PATH` to `events_path`, `/events` by default, so the
+  Web Adapter posts a non-HTTP invocation there and the FastAPI app mounts the same route. One input
+  feeds both, so they cannot drift. Wiring a queue to a package that does not serve the path makes
+  the adapter post to a 404 and the mapping retries the batch until the queue's redrive policy parks
+  it. Both variables are emitted only when `sqs_event_sources` is non-empty, and
+  `otel_environment_variables` still wins over them.
+- The queue and the function must be in the same region. An event source mapping is regional and
+  `CreateEventSourceMapping` rejects a cross-region ARN, so the module checks each queue ARN's region
+  against the provider's at plan time rather than letting the apply fail.
+- `attach_role_policies` cannot be false while `sqs_event_sources` is non-empty.
+  `CreateEventSourceMapping` checks the function role can read the queue during the create call, and
+  the mapping is created here, so it can only be ordered behind a grant created here too. Attach the
+  `sqs_event_source_policy_json` outputs by hand and build the mappings yourself if the grants have
+  to live elsewhere.
+- Leave `function_response_types` on its `["ReportBatchItemFailures"]` default and have the handler
+  return the failed message ids. Without it one failed message replays the whole batch, so every
+  message that already succeeded is delivered and processed again.
+- Set `maximum_concurrency` on a queue that can burst. Without it the mapping scales up against the
+  account's unreserved concurrency, so one busy queue can starve every other function in the account.
+- A `batch_size` above 10 requires `maximum_batching_window_seconds` of at least 1. That is the
+  service's rule, and the module validates it so the failure lands at plan rather than on the create
+  call.
 - Terraform cannot express a `depends_on` from inside a module to a resource in the caller. Put the
   `depends_on` on the module block instead when a greenfield apply needs the ordering.
