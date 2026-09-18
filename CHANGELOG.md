@@ -7,6 +7,42 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.24.0
+
+### `lambda-function`: SQS event sources, and `sqs-queue` for the queues behind them **no plan change**
+
+`lambda-function` takes an optional `sqs_event_sources` map. Each entry needs a `queue_arn` and may
+set `kms_key_arn`, `batch_size` (10), `maximum_batching_window_seconds` (5),
+`function_response_types` (`["ReportBatchItemFailures"]`), `filter_criteria` (`[]`),
+`maximum_concurrency` and `enabled` (true). An entry creates an `aws_lambda_event_source_mapping`
+and, unless `attach_role_policies` is off, an inline policy granting exactly `sqs:ReceiveMessage`,
+`sqs:DeleteMessage` and `sqs:GetQueueAttributes` on that queue, plus `kms:Decrypt` on its key when
+one is given.
+
+A wired queue also sets `AWS_LWA_PASS_THROUGH_PATH` and `APP_EVENTS_PATH` from the new `events_path`
+input, `/events` by default, the way `identity` already does for its users stream, so an SQS batch
+reaches the FastAPI app on a route the application mounts. One input feeds both variables, because
+the adapter's path and the application's must not drift. Neither variable is emitted when no queue
+is wired, so an existing consumer's plan stays empty.
+
+`attach_role_policies` cannot be false while `sqs_event_sources` is non-empty, for the reason
+`identity` refuses it for streams: `CreateEventSourceMapping` checks the function role can read the
+source during the create call, and the mapping is created here. A `precondition` also rejects a
+queue whose ARN region differs from the provider's, since an event source mapping is regional.
+
+New `sqs-queue` module. A queue with a dead letter queue behind it, a redrive policy with
+`max_receive_count`, SSE-SQS by default or a KMS key on both queues, optional FIFO with the `.fifo`
+suffix appended to both names, a redrive allow policy naming this queue as the dead letter queue's
+only source, and a `producer_role_arns` list granting `sqs:SendMessage` and `sqs:GetQueueUrl`.
+Outputs cover both queues' ARNs, URLs and names.
+
+Passing `consumer_timeout_seconds` validates at plan time that `visibility_timeout_seconds` is at
+least six times it, the rule Lambda documents for an SQS event source. That is what stops the queue
+handing one message to a second invocation while the first is still working on it.
+
+The provider rejects `sqs_managed_sse_enabled` alongside `kms_master_key_id` even when one is null,
+so the module leaves the managed setting out entirely when a key is given. A test covers it.
+
 ## 2.23.0
 
 ### `vpc-public`: a VPC with public subnets only, for tasks that run on demand **no plan change**
