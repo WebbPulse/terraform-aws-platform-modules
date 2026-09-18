@@ -38,6 +38,37 @@ that way keeps the `for_each` keys independent of anything a statement names. Th
 documents are byte-identical and the resource addresses are unchanged, so a consumer's plan is
 empty.
 
+### `http-api` and `staging-access-gate`: counts a fresh account can plan **no plan change**
+
+A first apply in an empty account creates the hosted zone and the HTTP API in the same run that
+reads their ids, and Terraform refuses a `count` derived from an unknown value with `Invalid count
+argument` rather than deferring it. `http-api` now takes `dns_record_enabled` and
+`staging-access-gate` takes `http_api_attached`, both booleans defaulting to null, which keeps the
+historic derivation from `zone_id` and `http_api_id` so a consumer that sets neither plans exactly
+as before. A consumer bootstrapping a fresh account passes a literal from a switch it already knows,
+its custom domain or staging gate flag, and the zone, the alias record, the API and the gate
+authorizer land in one apply. The id stays required through a resource `precondition`, checked at
+apply time so an unknown id does not fail the plan.
+
+`http-api` also accepts an API with no `integrations` when it has no `routes` and no
+`default_integration`. That is the bootstrap shape: the API, its stage, log group and custom domain
+exist before any function image does, and a later apply with the image tag adds the backends and
+their routes. A route naming an integration that is not declared is still refused.
+
+### `lambda-function`: DynamoDB stream event sources **no plan change**
+
+`lambda-function` takes an optional `dynamodb_stream_event_sources` map, the stream counterpart of
+`sqs_event_sources`. Each entry needs a `stream_arn` and may set `batch_size` (100),
+`starting_position` (`LATEST`), `maximum_batching_window_in_seconds` (0), `filter_patterns` (a list
+of JSON filter strings), `bisect_batch_on_function_error` (true), `maximum_retry_attempts`,
+`on_failure_destination_arn` and `enabled` (true). An entry creates an
+`aws_lambda_event_source_mapping` and, unless `attach_role_policies` is off, an inline policy
+granting the four stream read actions on that stream plus a send or publish grant on the failure
+destination when one is given. The map key names the mapping in state, so renaming a key destroys
+and recreates the mapping and the new one starts from `starting_position`. A table ARN in place of
+a stream ARN is rejected at plan time, because `CreateEventSourceMapping` would reject it on the
+create call otherwise. Empty, the default, creates nothing, so an existing consumer's plan is empty.
+
 ## 2.24.0
 
 ### `lambda-function`: SQS event sources, and `sqs-queue` for the queues behind them **no plan change**
