@@ -58,6 +58,42 @@ account root `kms:*` plus any named extra principals. The root statement is not 
 policy has no effect on a KMS key unless the key policy delegates to IAM, so a key without it
 cannot be fixed afterwards.
 
+### `step-functions` and `ecs-fargate`: new modules for on-demand orchestrated tasks **no plan change**
+
+Two modules for the shape a serverless control plane needs: a Step Functions state machine that
+orchestrates, and Fargate task definitions it launches on demand. Neither exists in the estate
+today, so there is nothing to adopt and no consumer sees a plan change.
+
+`step-functions` takes a Standard state machine's definition as a JSON string plus a substitutions
+map, and creates the execution role, a CloudWatch log group with retention and optional KMS, and the
+logging grant the service needs. The role's work permissions are a caller-supplied statement list in
+the same shape `github-actions-role` uses, because only the definition knows what its states call.
+Log level and include-execution-data are toggles, X-Ray tracing is off by default and carries its own
+grant when turned on. `caller_policy_json` is the other half: start, describe and stop executions,
+plus the three task-token actions an activity worker needs.
+
+Substitution is done in the module with `templatestring` rather than by the provider, because
+`aws_sfn_state_machine` has no `definition_substitutions` argument despite the name appearing in
+SAM and CDK.
+
+`ecs-fargate` takes a map of tasks and creates the cluster, a task definition per entry, a log group
+per task, one shared task execution role and a task role per task. Container Insights is off by
+default on cost grounds and arm64 is the default architecture, which the image has to match. The
+execution role's secret read grant is derived from the ARNs in the task map, picking
+`secretsmanager:GetSecretValue` or `ssm:GetParameters` per ARN and truncating a Secrets Manager ARN's
+json-key suffix for the policy resource while the container's `valueFrom` keeps the full reference.
+`run_task_policy_json` grants `ecs:RunTask` on each family with a revision wildcard, `DescribeTasks`
+and `StopTask`, and the `iam:PassRole` on both roles that `RunTask` is otherwise denied without.
+
+There are no services, no load balancers and no scheduling: something else decides when a task runs.
+Nothing in the module assumes private networking, so a task in a public subnet with a public IP and
+no NAT works as-is; the network configuration belongs to the `RunTask` call.
+
+`examples/step-functions-basic` composes the two, running the Fargate task through
+`ecs:runTask.sync` and then waiting on a task token. Its policy list is a reminder that a `.sync`
+integration needs `events:PutRule`, `events:PutTargets` and `events:DescribeRule` on the managed
+`StepFunctionsGetEventsForECSTaskRule` on top of `ecs:RunTask`.
+
 ## 2.22.1
 
 ### `app-secrets`: a kept entry the blob does not hold yet is minted **no plan change**
