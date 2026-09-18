@@ -43,8 +43,8 @@ variable "integrations" {
   }))
 
   validation {
-    condition     = length(var.integrations) > 0
-    error_message = "integrations must name at least one Lambda backend."
+    condition     = length(var.integrations) > 0 || (length(var.routes) == 0 && var.default_integration == null)
+    error_message = "integrations must name at least one Lambda backend whenever the API has a route. An API with no integrations is allowed only alongside no routes and no default_integration, which is the bootstrap shape: a fresh account creates the API, its stage, its log group and its custom domain before any function image exists, then a later apply adds the backends and their routes."
   }
 
   validation {
@@ -401,6 +401,32 @@ variable "zone_id" {
   validation {
     condition     = var.zone_id == null || var.domain_name != null
     error_message = "zone_id has no effect without a domain_name; remove one or set the other."
+  }
+}
+
+variable "dns_record_enabled" {
+  description = <<-EOT
+    Plan time known override for whether the alias A record is written. Null, the default, derives it
+    the historic way, from domain_name and zone_id both being non null, so a consumer that does not
+    set this sees no plan change at all.
+
+    Set it to a literal boolean when zone_id is unknown at plan time, which is what happens whenever
+    the hosted zone is created by the same apply that reads its id. Terraform refuses to plan a count
+    derived from an unknown value at all, with Invalid count argument, and a null test against an
+    unknown id is exactly such a count. A boolean the consumer writes from inputs it already knows,
+    for example its own custom_domain switch, is always known, so a fresh account can create the zone
+    and the alias record in a single apply.
+
+    zone_id and domain_name are still required when this is true. They are read at apply time rather
+    than at plan time, so an unknown zone id does not fail the plan.
+  EOT
+
+  type    = bool
+  default = null
+
+  validation {
+    condition     = var.dns_record_enabled != true || var.domain_name != null
+    error_message = "dns_record_enabled is true but domain_name is null. The alias record needs a hostname to write; set domain_name or leave dns_record_enabled null."
   }
 }
 

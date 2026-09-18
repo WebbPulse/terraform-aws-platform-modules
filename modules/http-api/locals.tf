@@ -1,6 +1,6 @@
 locals {
   custom_domain = var.domain_name != null
-  dns_record    = local.custom_domain && var.zone_id != null
+  dns_record    = var.dns_record_enabled != null ? var.dns_record_enabled : local.custom_domain && var.zone_id != null
 
   access_log_group_name = coalesce(var.access_log_group_name, "/aws/apigateway/${var.name}")
 
