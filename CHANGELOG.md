@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.23.0
 
 ### `vpc-public`: a VPC with public subnets only, for tasks that run on demand **no plan change**
 
