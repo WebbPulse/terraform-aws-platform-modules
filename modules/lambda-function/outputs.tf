@@ -83,7 +83,17 @@ output "sqs_event_source_policy_json" {
   value       = local.sqs_event_source_policy_json
 }
 
+output "dynamodb_stream_event_source_mapping_uuids" {
+  description = "UUID of each DynamoDB stream event source mapping, keyed as dynamodb_stream_event_sources was. The UUID is what an UpdateEventSourceMapping call or a console deep link takes, and it is the only stable handle on a mapping, which has no name."
+  value       = { for key, mapping in aws_lambda_event_source_mapping.dynamodb_stream : key => mapping.uuid }
+}
+
+output "dynamodb_stream_event_source_policy_json" {
+  description = "Stream read policy document per dynamodb_stream_event_sources entry, granting dynamodb:DescribeStream, dynamodb:GetRecords, dynamodb:GetShardIterator and dynamodb:ListStreams on that stream, plus sqs:SendMessage or sns:Publish on the on failure destination when one was given. Already attached to the execution role unless attach_role_policies is off, in which case a consumer attaches these itself."
+  value       = local.dynamodb_stream_event_source_policy_json
+}
+
 output "events_path" {
-  description = "Path the Web Adapter posts a non-HTTP invocation to, which is also the path the application mounts its event route on. Empty when no SQS event source is wired, because the pass through variables are only emitted alongside a mapping."
-  value       = length(var.sqs_event_sources) > 0 ? var.events_path : null
+  description = "Path the Web Adapter posts a non-HTTP invocation to, which is also the path the application mounts its event route on. Null when no SQS or DynamoDB stream event source is wired, because the pass through variables are only emitted alongside a mapping."
+  value       = local.any_event_source ? var.events_path : null
 }

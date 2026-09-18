@@ -67,8 +67,9 @@ module "lambda_api" {
 | `vpc_config` | `{ subnet_ids, security_group_ids }`; null keeps the function outside a VPC | `null` |
 | `ephemeral_storage_size` | Size of `/tmp` in MB, 512 to 10240; null leaves the block out, which is 512 | `null` |
 | `sqs_event_sources` | SQS queues this function polls, as a map; see the shape below | `{}` |
-| `attach_role_policies` | Attach the queue read policies `sqs_event_sources` needs to the execution role | `true` |
-| `events_path` | Path the Web Adapter posts a non-HTTP invocation to, emitted only with an SQS source | `"/events"` |
+| `dynamodb_stream_event_sources` | DynamoDB table streams this function reads, as a map; see the shape below | `{}` |
+| `attach_role_policies` | Attach the source read policies the two event source maps need to the execution role | `true` |
+| `events_path` | Path the Web Adapter posts a non-HTTP invocation to, emitted only with an event source | `"/events"` |
 | `tags` | Extra tags on the function only | `{}` |
 
 Each `sqs_event_sources` entry takes `queue_arn` (required), and optionally `kms_key_arn`,
@@ -76,6 +77,27 @@ Each `sqs_event_sources` entry takes `queue_arn` (required), and optionally `kms
 (`["ReportBatchItemFailures"]`), `filter_criteria` (`[]`), `maximum_concurrency` (`null`) and
 `enabled` (`true`). The map key names the mapping in state, so renaming it destroys one mapping and
 creates another.
+
+Each `dynamodb_stream_event_sources` entry takes `stream_arn` (required), and optionally
+`batch_size` (`100`), `starting_position` (`"LATEST"`), `maximum_batching_window_in_seconds` (`0`),
+`filter_patterns` (`[]`), `bisect_batch_on_function_error` (`true`), `maximum_retry_attempts`
+(`null`), `on_failure_destination_arn` (`null`) and `enabled` (`true`). `stream_arn` is the table's
+`stream_arn`, usually `module.tables.stream_arns["issues"]`, not the table ARN. `filter_patterns`
+holds already encoded JSON strings, so `jsonencode({ eventName = ["INSERT", "MODIFY"] })` is one
+entry. The map key names the mapping in state, so renaming it destroys one mapping and creates
+another, and the replacement starts from `starting_position` rather than where the old one stopped.
+
+```hcl
+dynamodb_stream_event_sources = {
+  issues = {
+    stream_arn                 = module.tables.stream_arns["issues"]
+    starting_position          = "LATEST"
+    filter_patterns            = [jsonencode({ eventName = ["INSERT", "MODIFY"] })]
+    maximum_retry_attempts     = 3
+    on_failure_destination_arn = module.stream_failures.queue_arn
+  }
+}
+```
 
 `code` takes exactly one of three shapes: `{ filename, source_code_hash }` for a local zip,
 `{ s3_bucket, s3_key, s3_object_version, source_code_hash }` for an object in S3, or
@@ -102,7 +124,9 @@ creates another.
 | `xray_write_policy_attached` | Whether the module attached its inline X-Ray write policy |
 | `sqs_event_source_mapping_uuids` | UUID of each SQS event source mapping, keyed as `sqs_event_sources` was |
 | `sqs_event_source_policy_json` | Queue read policy per entry, for a consumer attaching it elsewhere |
-| `events_path` | Path the Web Adapter posts a batch to, null when no SQS source is wired |
+| `dynamodb_stream_event_source_mapping_uuids` | UUID of each stream event source mapping, keyed as `dynamodb_stream_event_sources` was |
+| `dynamodb_stream_event_source_policy_json` | Stream read policy per entry, for a consumer attaching it elsewhere |
+| `events_path` | Path the Web Adapter posts a batch to, null when no event source is wired |
 
 ## Gotchas
 
@@ -126,13 +150,14 @@ creates another.
   that replaces functions.
 - `set_logging_config_log_group` points at the same group either way, but flipping it is an in place
   update of the function, so match what the application already has in state.
-- **An SQS event source needs a route to post the batch to.** Each `sqs_event_sources` entry sets
-  `AWS_LWA_PASS_THROUGH_PATH` and `APP_EVENTS_PATH` to `events_path`, `/events` by default, so the
-  Web Adapter posts a non-HTTP invocation there and the FastAPI app mounts the same route. One input
-  feeds both, so they cannot drift. Wiring a queue to a package that does not serve the path makes
+- **An event source needs a route to post the batch to.** A non-empty `sqs_event_sources` or
+  `dynamodb_stream_event_sources` sets `AWS_LWA_PASS_THROUGH_PATH` and `APP_EVENTS_PATH` to
+  `events_path`, `/events` by default, so the Web Adapter posts a non-HTTP invocation there and the
+  FastAPI app mounts the same route. One input feeds both, so they cannot drift, and two source kinds
+  on one function share one route. Wiring a source to a package that does not serve the path makes
   the adapter post to a 404 and the mapping retries the batch until the queue's redrive policy parks
-  it. Both variables are emitted only when `sqs_event_sources` is non-empty, and
-  `otel_environment_variables` still wins over them.
+  it or the stream record expires. Both variables are emitted only when at least one source is wired,
+  and `otel_environment_variables` still wins over them.
 - The queue and the function must be in the same region. An event source mapping is regional and
   `CreateEventSourceMapping` rejects a cross-region ARN, so the module checks each queue ARN's region
   against the provider's at plan time rather than letting the apply fail.
@@ -149,5 +174,25 @@ creates another.
 - A `batch_size` above 10 requires `maximum_batching_window_seconds` of at least 1. That is the
   service's rule, and the module validates it so the failure lands at plan rather than on the create
   call.
+- **A `dynamodb_stream_event_sources` entry takes the table's stream ARN, not its table ARN.** A
+  stream ARN ends in `/stream/<label>`, the label changes whenever the stream is turned off and on
+  again, and `stream_arn` on a table is null until `stream_view_type` is set, so the module rejects a
+  table ARN at plan time rather than letting `CreateEventSourceMapping` reject it on the create call.
+- A DynamoDB stream mapping reads each shard in order, so one failing batch blocks its shard until
+  the batch succeeds or the record ages out of the 24 hour retention window. `maximum_retry_attempts`
+  caps the retries, `bisect_batch_on_function_error` stops one poisoned record failing the whole
+  batch forever, and `on_failure_destination_arn` is the only place the discarded batch's metadata is
+  recorded. Set all three on a stream that matters; the defaults bisect and retry until expiry.
+- `starting_position` defaults to `LATEST`, so wiring a stream to a table that already has data
+  processes only changes from the apply onwards. `TRIM_HORIZON` replays the retention window instead,
+  which on a busy table is a burst of invocations against a handler that has never seen them.
+- `filter_patterns` holds already encoded JSON strings, unlike `sqs_event_sources`' `filter_criteria`
+  which takes objects and encodes them for you. The two shapes differ because a stream filter is
+  usually a literal `eventName` pattern that reads better written out once.
+- `attach_role_policies` cannot be false while `dynamodb_stream_event_sources` is non-empty, for the
+  same reason it cannot be false with a queue wired: `CreateEventSourceMapping` checks the function
+  role can read the stream during the create call, and the mapping is created here. Attach the
+  `dynamodb_stream_event_source_policy_json` outputs by hand and build the mappings yourself if the
+  grants have to live elsewhere.
 - Terraform cannot express a `depends_on` from inside a module to a resource in the caller. Put the
   `depends_on` on the module block instead when a greenfield apply needs the ordering.

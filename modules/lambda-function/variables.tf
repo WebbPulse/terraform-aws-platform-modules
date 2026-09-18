@@ -475,17 +475,120 @@ variable "sqs_event_sources" {
   }
 }
 
+variable "dynamodb_stream_event_sources" {
+  description = <<-EOT
+    DynamoDB table streams this function consumes, as a map of a stable key to one stream's wiring.
+    Each entry creates an aws_lambda_event_source_mapping from the stream to this function and,
+    unless attach_role_policies is off, one inline policy on the execution role granting the four
+    actions a stream reader needs on that stream, plus a send or publish grant on the on failure
+    destination when one is given. Empty, the default, creates neither, so an existing consumer sees
+    no plan change.
+
+    The map key names the mapping in state, so it must be stable: renaming a key destroys one
+    mapping and creates another, and the new mapping starts from starting_position rather than from
+    where the old one left off.
+
+    Per entry:
+      stream_arn                         required, the table stream the mapping reads
+      batch_size                         records per invocation, 1 to 10000
+      starting_position                  LATEST or TRIM_HORIZON
+      maximum_batching_window_in_seconds how long to wait to fill a batch, 0 to 300
+      filter_patterns                    list of JSON filter strings, for example INSERT and MODIFY only
+      bisect_batch_on_function_error     split a failing batch in two and retry each half
+      maximum_retry_attempts             retries of a failing record, 0 to 10000, -1 for unlimited
+      on_failure_destination_arn         SQS queue or SNS topic a discarded batch's metadata goes to
+      enabled                            whether the mapping reads, true by default
+
+    A stream ARN carries the table's stream label, so it ends in /stream/<timestamp> rather than
+    naming the table alone. A table ARN in its place is rejected here, because
+    CreateEventSourceMapping would reject it on the create call instead.
+  EOT
+
+  type = map(object({
+    stream_arn                         = string
+    batch_size                         = optional(number, 100)
+    starting_position                  = optional(string, "LATEST")
+    maximum_batching_window_in_seconds = optional(number, 0)
+    filter_patterns                    = optional(list(string), [])
+    bisect_batch_on_function_error     = optional(bool, true)
+    maximum_retry_attempts             = optional(number)
+    on_failure_destination_arn         = optional(string)
+    enabled                            = optional(bool, true)
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      can(regex("^arn:aws[a-z-]*:dynamodb:[a-z0-9-]+:[0-9]{12}:table/[A-Za-z0-9_.-]+/stream/.+$", source.stream_arn))
+    ])
+    error_message = "Every dynamodb_stream_event_sources entry needs a stream ARN of the form arn:aws:dynamodb:<region>:<account>:table/<name>/stream/<label>. A table ARN is not a stream ARN, and the table's stream_arn is null until stream_view_type is set on the table."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      source.batch_size >= 1 && source.batch_size <= 10000 && floor(source.batch_size) == source.batch_size
+    ])
+    error_message = "dynamodb_stream_event_sources batch_size must be a whole number from 1 to 10000."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      contains(["LATEST", "TRIM_HORIZON"], source.starting_position)
+    ])
+    error_message = "dynamodb_stream_event_sources starting_position must be LATEST or TRIM_HORIZON. AT_TIMESTAMP is a Kinesis position and a DynamoDB stream does not accept it."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      source.maximum_batching_window_in_seconds >= 0 && source.maximum_batching_window_in_seconds <= 300 && floor(source.maximum_batching_window_in_seconds) == source.maximum_batching_window_in_seconds
+    ])
+    error_message = "dynamodb_stream_event_sources maximum_batching_window_in_seconds must be a whole number from 0 to 300."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      alltrue([for pattern in source.filter_patterns : can(jsondecode(pattern))])
+    ])
+    error_message = "Every dynamodb_stream_event_sources filter_patterns entry must be a JSON string, for example jsonencode({ eventName = [\"INSERT\", \"MODIFY\"] }). The mapping takes the pattern already encoded."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      source.maximum_retry_attempts == null || (
+        coalesce(source.maximum_retry_attempts, 0) >= -1 &&
+        coalesce(source.maximum_retry_attempts, 0) <= 10000 &&
+        floor(coalesce(source.maximum_retry_attempts, 0)) == coalesce(source.maximum_retry_attempts, 0)
+      )
+    ])
+    error_message = "dynamodb_stream_event_sources maximum_retry_attempts must be a whole number from 0 to 10000, or -1 for the service default of retrying until the record expires, or null to leave the argument unset."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
+      source.on_failure_destination_arn == null || can(regex("^arn:aws[a-z-]*:(sqs|sns):[a-z0-9-]+:[0-9]{12}:.+$", coalesce(source.on_failure_destination_arn, "")))
+    ])
+    error_message = "dynamodb_stream_event_sources on_failure_destination_arn must be an SQS queue ARN or an SNS topic ARN. Those are the only two destinations a stream event source mapping accepts for a discarded batch."
+  }
+}
+
 variable "attach_role_policies" {
   description = <<-EOT
-    Attach the inline queue read policies the sqs_event_sources entries need to the execution role.
-    True, the default, is the ordinary case: the role is created here, so its name is known and the
-    grant can be ordered ahead of the mapping.
+    Attach the inline source read policies the sqs_event_sources and dynamodb_stream_event_sources
+    entries need to the execution role. True, the default, is the ordinary case: the role is created
+    here, so its name is known and the grant can be ordered ahead of the mapping.
 
-    It cannot be false while sqs_event_sources is non-empty. CreateEventSourceMapping checks the
-    function role can read the queue during the create call, and the mapping is created by this
-    module, so it can only be ordered behind a grant this module also creates. Attach the
-    sqs_event_source_policy_json outputs by hand and build the mappings yourself if the grants have
-    to live elsewhere.
+    It cannot be false while either map is non-empty. CreateEventSourceMapping checks the function
+    role can read the source during the create call, and the mapping is created by this module, so it
+    can only be ordered behind a grant this module also creates. Attach the
+    sqs_event_source_policy_json or dynamodb_stream_event_source_policy_json outputs by hand and
+    build the mappings yourself if the grants have to live elsewhere.
   EOT
 
   type    = bool
@@ -495,6 +598,11 @@ variable "attach_role_policies" {
     condition     = var.attach_role_policies || length(var.sqs_event_sources) == 0
     error_message = "attach_role_policies is false but sqs_event_sources is not empty. CreateEventSourceMapping checks the function role can read the queue during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires a queue, or pass no sqs_event_sources and build the mappings yourself from the sqs_event_source_policy_json output."
   }
+
+  validation {
+    condition     = var.attach_role_policies || length(var.dynamodb_stream_event_sources) == 0
+    error_message = "attach_role_policies is false but dynamodb_stream_event_sources is not empty. CreateEventSourceMapping checks the function role can read the stream during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires a stream, or pass no dynamodb_stream_event_sources and build the mappings yourself from the dynamodb_stream_event_source_policy_json output."
+  }
 }
 
 variable "events_path" {
@@ -503,9 +611,10 @@ variable "events_path" {
     its event route on. Reaches the function as both AWS_LWA_PASS_THROUGH_PATH, read by the adapter,
     and APP_EVENTS_PATH, read by the application, so the two cannot drift apart.
 
-    Emitted only when sqs_event_sources is non-empty. Turning pass through on without a package that
-    mounts the route makes the adapter post an SQS batch to a path that 404s, and the mapping then
-    retries the batch until the queue's redrive policy gives up on it.
+    Emitted only when sqs_event_sources or dynamodb_stream_event_sources is non-empty. Turning pass
+    through on without a package that mounts the route makes the adapter post a batch to a path that
+    404s, and the mapping then retries the batch until the queue's redrive policy gives up on it or
+    the stream record expires.
   EOT
 
   type    = string

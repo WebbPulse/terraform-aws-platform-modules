@@ -1,7 +1,3 @@
-data "aws_region" "current" {
-  count = length(var.sqs_event_sources) > 0 ? 1 : 0
-}
-
 resource "aws_lambda_event_source_mapping" "sqs" {
   for_each = var.sqs_event_sources
 
