@@ -7,6 +7,57 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `vpc-public`: a VPC with public subnets only, for tasks that run on demand **no plan change**
+
+New module. A VPC, an internet gateway, one public route table and a public subnet per
+availability zone, with DNS support and hostnames on. No NAT gateway, no private subnets, and no
+VPC endpoints unless asked for, of which only the free S3 and DynamoDB gateway endpoints are
+offered.
+
+The shape follows from the cost. A NAT gateway bills about 32 USD per month per zone before a byte
+moves through it, which on a control plane running a handful of short Fargate tasks a day costs
+more than everything else in the account. A public IP on the task costs nothing and reaches ECR
+and the regional AWS endpoints the same way. The consequence a caller has to know is that
+`assign_public_ip` must be true on such a task: there is no other route off the VPC, and a task
+without one does not fail fast, it sits in PENDING and times out pulling its image. An ECR pull
+over a public IP is authorized through the task execution role, not through a VPC endpoint.
+
+Two security groups come with it. The VPC default security group is adopted and left with no
+rules, because AWS creates it allowing all traffic between its own members and leaving it
+unmanaged means anything launched without an explicit group silently gets that allowance. The
+task security group has all egress on every protocol and no ingress; egress is not narrowed to
+TCP 443 because that also blocks DNS on UDP 53, and a task that cannot resolve a name never opens
+a connection.
+
+Flow logs are optional and off, since a VPC carrying only short lived task traffic would pay
+CloudWatch Logs ingestion for records nobody reads. When on they default to `REJECT`.
+
+### `s3-bucket`: a general purpose private bucket with scoped policy documents **no plan change**
+
+New module. Public access block, bucket owner enforced ownership, versioning on, encryption with
+SSE-S3 or a KMS key the module takes or creates, a TLS-only bucket policy, and optional lifecycle
+rules, EventBridge notifications and CORS. It publishes `read_only_policy_json` and
+`read_write_policy_json`, scoped to the bucket, its objects and its key, with no `s3:*` in either.
+
+The bucket is meant to hold Terraform state, config tarballs and a module registry, so nothing is
+expired by default and there is no artifact-specific behaviour: no placeholder object and no fixed
+lifecycle rule, unlike `lambda-artifacts-bucket`, which keeps both because it has exactly one job.
+
+The load-bearing constraint is state locking. The S3 backend's native lockfile, `use_lockfile` from
+Terraform 1.11, is a plain `PutObject` of `<key>.tflock` carrying an `If-None-Match` header and no
+encryption header, so a bucket policy deny that inspects request headers on `s3:PutObject` breaks
+lock acquisition rather than state writing, and the run fails with an AccessDenied that names no
+condition. `enable_deny_unencrypted_uploads_policy` therefore defaults to false and the only
+default statement is the TLS-only deny, which triggers on `aws:SecureTransport` alone. A test
+asserts the default policy holds no header-conditioned deny and no `s3:PutObject` deny at all.
+
+A created key rotates yearly, takes the 30 day deletion window, and gets a policy granting the
+account root `kms:*` plus any named extra principals. The root statement is not decorative: an IAM
+policy has no effect on a KMS key unless the key policy delegates to IAM, so a key without it
+cannot be fixed afterwards.
+
 ## 2.22.1
 
 ### `app-secrets`: a kept entry the blob does not hold yet is minted **no plan change**
