@@ -9,22 +9,23 @@ variable "name" {
 }
 
 variable "definition" {
-  description = "The Amazon States Language definition as a JSON string, for example jsonencode({ ... }) or file(\"$${path.module}/run.asl.json\"). Placeholders of the form $${key} are replaced from definition_substitutions before the string reaches the service, so a definition file can name a resource it cannot know the ARN of."
+  description = "The Amazon States Language definition as a JSON string, for example jsonencode({ ... }) or file(\"$${path.module}/run.asl.json\"). Placeholders of the form $${key} are replaced from definition_substitutions before the string reaches the service, so a definition file can name a resource it cannot know the ARN of. The module validates the substituted result rather than this string, so a placeholder may stand where a number or an array belongs."
   type        = string
-
-  validation {
-    condition     = can(jsondecode(replace(var.definition, "/\\$\\{[^}]*\\}/", "PLACEHOLDER")))
-    error_message = "definition must be valid JSON once its $${...} placeholders are substituted. A definition built with jsonencode is always valid; a hand-written file with a trailing comma is not."
-  }
-
-  validation {
-    condition     = can(jsondecode(replace(var.definition, "/\\$\\{[^}]*\\}/", "PLACEHOLDER")).States)
-    error_message = "definition must carry a States object. A definition without one is rejected at apply with a validation error that does not name the missing field."
-  }
 }
 
 variable "definition_substitutions" {
-  description = "Values for the $${key} placeholders in definition, for example { TaskDefinitionArn = module.tasks.task_definition_arns[\"plan\"] }. Every key is optional from the module's point of view: a placeholder with no entry here reaches the service literally and fails the definition validation at apply."
+  description = <<-EOT
+    Values for the $${key} placeholders in definition, for example
+    { TaskDefinitionArn = module.tasks.task_definition_arns["plan"] }. Every key is optional from
+    the module's point of view: a placeholder with no entry here reaches the service literally and
+    fails the service's own validation at apply.
+
+    A placeholder is substituted by templatestring, so it stands for a fragment of the JSON text
+    rather than for a JSON string value. A placeholder written unquoted, "Seconds": $${Timeout} or
+    "Subnets": $${SubnetIdsJson}, takes a number or an array; pass tostring(...) or
+    jsonencode(...) for those. The module validates the definition after substitution, so such a
+    definition plans as long as the substituted result is valid JSON.
+  EOT
   type        = map(string)
   default     = {}
 }

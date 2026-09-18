@@ -7,6 +7,37 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.25.0
+
+### `step-functions`: the definition is validated after substitution, so a placeholder can be a number or a list **no plan change**
+
+`definition` was checked for valid JSON and for a `States` object before `definition_substitutions`
+were applied, with the placeholders swapped for the literal `PLACEHOLDER` first. That reads every
+`${...}` as a string, so a placeholder standing where the Amazon States Language wants a number or
+an array was rejected at plan: `"TimeoutSeconds": ${TimeoutSeconds}` and
+`"Subnets": ${SubnetIdsJson}` are not valid JSON until the substitution has happened. The only way
+through was to drop the module's substitution and render the definition with `templatefile` in the
+caller instead, which is what the Terraform control plane's root had to do.
+
+The two checks now run on the substituted definition and live on the state machine resource as
+`precondition` blocks, because a variable `validation` cannot read another input. `templatestring`
+substitution is unchanged and still documented as textual, so a value carrying a bare quote is
+still caught, now as invalid JSON after substitution rather than before it. A definition with no
+placeholders validates exactly as before, and the error messages are the same sentences.
+
+A consumer passing numeric or list substitutions can now hand them to `definition_substitutions`
+with `tostring(...)` and `jsonencode(...)` and let the module do the substitution.
+
+### `ecs-fargate`: the set of task policies is derived from the task keys **no plan change**
+
+`aws_iam_role_policy.task` took its `for_each` from a map built by filtering the rendered statement
+lists, so the keys of the collection were computed from statement contents. It now keys on
+`task_keys_with_policies`, a set derived from `var.tasks` alone, and looks the statements up by
+key. Which tasks get a policy was always answerable from the task map on its own, and deriving it
+that way keeps the `for_each` keys independent of anything a statement names. The rendered
+documents are byte-identical and the resource addresses are unchanged, so a consumer's plan is
+empty.
+
 ## 2.24.0
 
 ### `lambda-function`: SQS event sources, and `sqs-queue` for the queues behind them **no plan change**

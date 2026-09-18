@@ -60,6 +60,10 @@ locals {
     )
   ]
 
+  task_keys_with_policies = toset([
+    for k, t in var.tasks : k if length(t.task_policy_statements) > 0
+  ])
+
   task_policy_statements = {
     for k, t in var.tasks : k => [
       for s in t.task_policy_statements : merge(
@@ -78,10 +82,6 @@ locals {
         },
       )
     ]
-  }
-
-  tasks_with_policies = {
-    for k, statements in local.task_policy_statements : k => statements if length(statements) > 0
   }
 
   task_definition_arns = {

@@ -143,5 +143,10 @@ ARN; the execution role's read grant is derived from what you put there.
 - Every change to a task definition creates a new revision and leaves the old ones in place;
   Terraform does not deregister them. A caller pinning `task_definition_arns` gets the exact
   revision Terraform last created, while `task_definition_family_arns` takes the latest active one.
+- Which tasks get an inline task policy is decided from the task keys alone, not from the rendered
+  statements. A statement may name an ARN Terraform only computes at apply, for example a log group
+  created in the same configuration, and the set of policy resources is still known at plan time.
+  Only the policy document itself waits for apply, which a plan shows as
+  `policy = (known after apply)`.
 - The container definition uses camelCase keys. A snake_case key is ignored by ECS rather than
   rejected, so a hand-written override that misspells one silently does nothing.

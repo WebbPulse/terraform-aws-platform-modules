@@ -90,6 +90,18 @@ resource "aws_iam_role_policy" "work" {
 }
 
 resource "aws_sfn_state_machine" "this" {
+  lifecycle {
+    precondition {
+      condition     = can(jsondecode(local.definition))
+      error_message = "definition must be valid JSON once definition_substitutions have been substituted into it. A definition built with jsonencode is always valid; a hand-written file with a trailing comma is not, and neither is one whose substituted value carries a bare quote."
+    }
+
+    precondition {
+      condition     = can(jsondecode(local.definition).States)
+      error_message = "definition must carry a States object once substituted. A definition without one is rejected at apply with a validation error that does not name the missing field."
+    }
+  }
+
   name     = var.name
   type     = var.type
   role_arn = aws_iam_role.this.arn
