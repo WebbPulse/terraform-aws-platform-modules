@@ -43,8 +43,8 @@ variable "integrations" {
   }))
 
   validation {
-    condition     = length(var.integrations) > 0
-    error_message = "integrations must name at least one Lambda backend."
+    condition     = length(var.integrations) > 0 || (length(var.routes) == 0 && var.default_integration == null)
+    error_message = "integrations must name at least one Lambda backend whenever the API has a route. An API with no integrations is allowed only alongside no routes and no default_integration, which is the bootstrap shape: a fresh account creates the API, its stage, its log group and its custom domain before any function image exists, then a later apply adds the backends and their routes."
   }
 
   validation {

@@ -87,3 +87,40 @@ run "enabled_true_without_a_domain_name_is_rejected" {
 
   expect_failures = [var.dns_record_enabled]
 }
+
+run "an_api_with_no_backends_and_no_routes_is_the_bootstrap_shape" {
+  command = plan
+
+  variables {
+    integrations        = {}
+    default_integration = null
+    routes              = {}
+    zone_id             = "Z0123456789ABCDEFGHIJ"
+    dns_record_enabled  = true
+  }
+
+  assert {
+    condition     = length(aws_apigatewayv2_integration.this) == 0 && length(aws_apigatewayv2_route.this) == 0
+    error_message = "A fresh account has no function image yet, so the API must plan with no integration and no route at all."
+  }
+
+  assert {
+    condition     = length(aws_apigatewayv2_domain_name.this) == 1 && length(aws_route53_record.alias) == 1
+    error_message = "The bootstrap apply still has to build the custom domain and its alias record; only the backends wait for the images."
+  }
+}
+
+run "an_api_with_no_backends_but_a_route_is_refused" {
+  command = plan
+
+  variables {
+    integrations        = {}
+    default_integration = null
+
+    routes = {
+      "ANY /api/auth" = { integration = "identity" }
+    }
+  }
+
+  expect_failures = [var.integrations]
+}

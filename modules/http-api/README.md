@@ -172,6 +172,10 @@ identity_jwt = object({
   the custom domain waits for validation.
 - `zone_id` writes the alias record with the module's own `aws` provider, so the zone must be in the
   same account. Leave it null and write the record yourself otherwise.
+- An API with no `integrations` is accepted only alongside no `routes` and a null
+  `default_integration`. That is the bootstrap shape: a fresh account builds the API, its stage, log
+  group and custom domain before any function image exists, and a later apply adds the backends and
+  their routes. Any route with an empty `integrations` is still refused.
 - `zone_id` is unknown at plan time whenever the hosted zone is created by the same apply, and the
   alias record's count cannot be derived from an unknown value: Terraform stops with `Invalid count
   argument` rather than deferring it. Pass `dns_record_enabled` as a literal boolean from the switch
