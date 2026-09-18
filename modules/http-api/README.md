@@ -58,6 +58,7 @@ module "api" {
 | `domain_name` | Custom hostname, null creates no domain, mapping or DNS record | `null` |
 | `certificate_arn` | Issued ACM certificate in this region, required with `domain_name` | `null` |
 | `zone_id` | Route 53 zone for the alias record, same account as the API | `null` |
+| `dns_record_enabled` | Plan time known override for whether the alias record is written; null derives it from `zone_id` | `null` |
 | `domain_name_tags` | Extra tags on the custom domain only, merged over `tags` | `{}` |
 | `tags` | Tags on the API, stage, log group and custom domain | `{}` |
 | `identity_jwt` | Turns on gateway enforcement of the identity module's access tokens | `null` |
@@ -171,5 +172,10 @@ identity_jwt = object({
   the custom domain waits for validation.
 - `zone_id` writes the alias record with the module's own `aws` provider, so the zone must be in the
   same account. Leave it null and write the record yourself otherwise.
+- `zone_id` is unknown at plan time whenever the hosted zone is created by the same apply, and the
+  alias record's count cannot be derived from an unknown value: Terraform stops with `Invalid count
+  argument` rather than deferring it. Pass `dns_record_enabled` as a literal boolean from the switch
+  the consumer already knows, for example its custom domain flag, and a fresh account creates the
+  zone and the record in one apply. Leave it null and the count derives from the id as before.
 - Changing `lambda_permission_statement_id` replaces the permission, a moment with no permission at
   all.

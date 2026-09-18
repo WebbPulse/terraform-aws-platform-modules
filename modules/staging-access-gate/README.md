@@ -46,6 +46,7 @@ set `disable_execute_api_endpoint = true` and `authorization_type = "CUSTOM"` wi
 | `viewer_request_handler_js` | JavaScript defining `function appHandler(event)`, run before the gate check | `""` |
 | `cloudfront_distribution_arn` | Narrows the login function URL invoke permission to one distribution | `null` |
 | `http_api_id` | HTTP API to attach the origin-verify REQUEST authorizer to | `null` |
+| `http_api_attached` | Plan time known override for whether that authorizer is created; null derives it from `http_api_id` | `null` |
 | `origin_verify_header_name` | Header CloudFront adds to API origin requests and the authorizer checks | `"x-origin-verify"` |
 | `invite_login_url` | URL placed in the Cognito invitation email | `null` |
 | `mfa_configuration` | Cognito MFA setting: `OFF`, `OPTIONAL` or `ON` (software token) | `"OFF"` |
@@ -118,6 +119,11 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
   is a hole straight past the gate.
 - A route key naming no route on the API is inert rather than an error; the module is not given the
   API's route list and cannot tell a typo from a route not added yet.
+- `http_api_id` is unknown at plan time whenever the API is created by the same apply, and the
+  authorizer count cannot be derived from an unknown value: Terraform stops with `Invalid count
+  argument` rather than deferring it. Pass `http_api_attached` as a literal boolean from the switch
+  the consumer already knows, for example its staging gate flag, and a fresh account creates the API
+  and attaches the gate in one apply. Leave it null and the count derives from the id as before.
 - The authorizer environment must stay under Lambda's 4096 byte cap, which is only measured at apply
   time, so anything scaling with consumer configuration fails an apply on a green plan.
 - The authorizer cannot cache: API Gateway keys its cache on identity sources and this one has none,

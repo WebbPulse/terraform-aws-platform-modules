@@ -24,6 +24,8 @@ locals {
 
   default_app_handler = "function appHandler(event) { return event.request; }"
 
+  http_api_attached = var.http_api_attached != null ? var.http_api_attached : var.http_api_id != null
+
   identity_jwt_enabled = var.identity_jwt != null && length(var.identity_jwt_route_keys) > 0
 
   identity_jwt_route_keys = sort(var.identity_jwt_route_keys)

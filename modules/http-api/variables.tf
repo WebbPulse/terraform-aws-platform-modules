@@ -404,6 +404,32 @@ variable "zone_id" {
   }
 }
 
+variable "dns_record_enabled" {
+  description = <<-EOT
+    Plan time known override for whether the alias A record is written. Null, the default, derives it
+    the historic way, from domain_name and zone_id both being non null, so a consumer that does not
+    set this sees no plan change at all.
+
+    Set it to a literal boolean when zone_id is unknown at plan time, which is what happens whenever
+    the hosted zone is created by the same apply that reads its id. Terraform refuses to plan a count
+    derived from an unknown value at all, with Invalid count argument, and a null test against an
+    unknown id is exactly such a count. A boolean the consumer writes from inputs it already knows,
+    for example its own custom_domain switch, is always known, so a fresh account can create the zone
+    and the alias record in a single apply.
+
+    zone_id and domain_name are still required when this is true. They are read at apply time rather
+    than at plan time, so an unknown zone id does not fail the plan.
+  EOT
+
+  type    = bool
+  default = null
+
+  validation {
+    condition     = var.dns_record_enabled != true || var.domain_name != null
+    error_message = "dns_record_enabled is true but domain_name is null. The alias record needs a hostname to write; set domain_name or leave dns_record_enabled null."
+  }
+}
+
 variable "domain_name_tags" {
   description = "Tags applied only to the custom domain resource, merged over tags. Exists so an adopting consumer can keep a Name tag its domain already carries."
   type        = map(string)

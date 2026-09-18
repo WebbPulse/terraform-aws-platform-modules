@@ -73,7 +73,14 @@ resource "aws_lambda_function" "authorizer" {
 }
 
 resource "aws_apigatewayv2_authorizer" "origin_verify" {
-  count = var.http_api_id == null ? 0 : 1
+  count = local.http_api_attached ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.http_api_id != null
+      error_message = "http_api_attached is true but http_api_id is null. The authorizer has to be created on an API; pass the id, or leave http_api_attached null to derive it from the id as before."
+    }
+  }
 
   api_id                            = var.http_api_id
   name                              = "${var.name}-access-gate-origin-verify"
@@ -86,7 +93,7 @@ resource "aws_apigatewayv2_authorizer" "origin_verify" {
 }
 
 resource "aws_lambda_permission" "authorizer" {
-  count = var.http_api_id == null ? 0 : 1
+  count = local.http_api_attached ? 1 : 0
 
   statement_id  = "AllowHttpApiAuthorizerInvoke"
   action        = "lambda:InvokeFunction"

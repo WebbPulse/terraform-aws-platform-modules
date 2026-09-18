@@ -23,6 +23,13 @@ resource "aws_apigatewayv2_api_mapping" "this" {
 resource "aws_route53_record" "alias" {
   count = local.dns_record ? 1 : 0
 
+  lifecycle {
+    precondition {
+      condition     = var.zone_id != null
+      error_message = "dns_record_enabled is true but zone_id is null. The alias record has to be written into a hosted zone; pass the zone id, or leave dns_record_enabled null to derive the record from the id as before."
+    }
+  }
+
   zone_id = var.zone_id
   name    = var.domain_name
   type    = "A"

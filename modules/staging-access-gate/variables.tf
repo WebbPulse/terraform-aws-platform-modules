@@ -110,6 +110,27 @@ variable "http_api_id" {
   default     = null
 }
 
+variable "http_api_attached" {
+  description = <<-EOT
+    Plan time known override for whether the REQUEST authorizer and its invoke permission are created
+    on http_api_id. Null, the default, derives it the historic way, from http_api_id being non null,
+    so a consumer that does not set this sees no plan change at all.
+
+    Set it to a literal boolean when http_api_id is unknown at plan time, which is what happens
+    whenever the HTTP API is created by the same apply that attaches the gate to it. Terraform
+    refuses to plan a count derived from an unknown value at all, with Invalid count argument, and a
+    null test against an unknown api id is exactly such a count. A boolean the consumer writes from
+    inputs it already knows, for example its own staging gate switch, is always known, so a fresh
+    account can create the API and attach the authorizer in a single apply.
+
+    http_api_id is still required when this is true. It is read at apply time rather than at plan
+    time, so an unknown id does not fail the plan.
+  EOT
+
+  type    = bool
+  default = null
+}
+
 variable "origin_verify_header_name" {
   description = "Name of the header CloudFront adds to API origin requests and the HTTP API authorizer checks."
   type        = string
