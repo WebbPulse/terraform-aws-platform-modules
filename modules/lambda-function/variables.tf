@@ -372,3 +372,147 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "sqs_event_sources" {
+  description = <<-EOT
+    SQS queues this function consumes, as a map of a stable key to one queue's wiring. Each entry
+    creates an aws_lambda_event_source_mapping from the queue to this function and, unless
+    attach_role_policies is off, one inline policy on the execution role granting the three actions
+    a poller needs on that queue. Empty, the default, creates neither, so an existing consumer sees
+    no plan change.
+
+    The map key names the mapping in state, so it must be stable: renaming a key destroys one
+    mapping and creates another, which drops in-flight redrive state for that queue.
+
+    Per entry:
+      queue_arn                          required, the queue the mapping polls
+      kms_key_arn                        the queue's CMK, when it has one, so the role can decrypt
+      batch_size                         records per invocation, 1 to 10000
+      maximum_batching_window_seconds    how long to wait to fill a batch, 0 to 300
+      function_response_types            ["ReportBatchItemFailures"] by default
+      filter_criteria                    list of filter pattern objects, encoded with jsonencode
+      maximum_concurrency                scaling_config maximum concurrency, 2 to 1000, null to omit
+      enabled                            whether the mapping polls, true by default
+
+    A batch_size above 10 requires maximum_batching_window_seconds to be at least 1, which is the
+    service's own rule rather than this module's, and is validated here so the failure lands at plan
+    rather than on the CreateEventSourceMapping call.
+  EOT
+
+  type = map(object({
+    queue_arn                       = string
+    kms_key_arn                     = optional(string)
+    batch_size                      = optional(number, 10)
+    maximum_batching_window_seconds = optional(number, 5)
+    function_response_types         = optional(list(string), ["ReportBatchItemFailures"])
+    filter_criteria                 = optional(list(any), [])
+    maximum_concurrency             = optional(number)
+    enabled                         = optional(bool, true)
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      can(regex("^arn:aws[a-z-]*:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,80}(\\.fifo)?$", source.queue_arn))
+    ])
+    error_message = "Every sqs_event_sources entry needs a queue ARN of the form arn:aws:sqs:<region>:<account>:<name>. A queue URL is not an ARN and CreateEventSourceMapping rejects it."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      source.batch_size >= 1 && source.batch_size <= 10000 && floor(source.batch_size) == source.batch_size
+    ])
+    error_message = "sqs_event_sources batch_size must be a whole number from 1 to 10000."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      source.maximum_batching_window_seconds >= 0 && source.maximum_batching_window_seconds <= 300 && floor(source.maximum_batching_window_seconds) == source.maximum_batching_window_seconds
+    ])
+    error_message = "sqs_event_sources maximum_batching_window_seconds must be a whole number from 0 to 300."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      source.batch_size <= 10 || source.maximum_batching_window_seconds >= 1
+    ])
+    error_message = "An sqs_event_sources entry with batch_size above 10 must set maximum_batching_window_seconds to at least 1. Lambda rejects a larger batch with no batching window, because without a window it has nothing to wait on to fill one."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      source.maximum_concurrency == null || (
+        coalesce(source.maximum_concurrency, 2) >= 2 &&
+        coalesce(source.maximum_concurrency, 2) <= 1000 &&
+        floor(coalesce(source.maximum_concurrency, 2)) == coalesce(source.maximum_concurrency, 2)
+      )
+    ])
+    error_message = "sqs_event_sources maximum_concurrency must be a whole number from 2 to 1000, or null to leave the scaling_config block out."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      source.kms_key_arn == null || can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+$", coalesce(source.kms_key_arn, "")))
+    ])
+    error_message = "sqs_event_sources kms_key_arn must be a KMS key ARN. An alias ARN does not work in a kms:Decrypt resource, because the key policy is evaluated against the key."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      length(source.function_response_types) == 0 || alltrue([
+        for response_type in source.function_response_types :
+        response_type == "ReportBatchItemFailures"
+      ])
+    ])
+    error_message = "ReportBatchItemFailures is the only function response type SQS accepts; leave the list empty to opt out of partial batch responses entirely."
+  }
+}
+
+variable "attach_role_policies" {
+  description = <<-EOT
+    Attach the inline queue read policies the sqs_event_sources entries need to the execution role.
+    True, the default, is the ordinary case: the role is created here, so its name is known and the
+    grant can be ordered ahead of the mapping.
+
+    It cannot be false while sqs_event_sources is non-empty. CreateEventSourceMapping checks the
+    function role can read the queue during the create call, and the mapping is created by this
+    module, so it can only be ordered behind a grant this module also creates. Attach the
+    sqs_event_source_policy_json outputs by hand and build the mappings yourself if the grants have
+    to live elsewhere.
+  EOT
+
+  type    = bool
+  default = true
+
+  validation {
+    condition     = var.attach_role_policies || length(var.sqs_event_sources) == 0
+    error_message = "attach_role_policies is false but sqs_event_sources is not empty. CreateEventSourceMapping checks the function role can read the queue during the create call, and the mapping is created by this module, so it can only be ordered behind a grant this module also creates. Leave attach_role_policies true on the apply that wires a queue, or pass no sqs_event_sources and build the mappings yourself from the sqs_event_source_policy_json output."
+  }
+}
+
+variable "events_path" {
+  description = <<-EOT
+    Path the Lambda Web Adapter posts a non-HTTP invocation to, which the FastAPI application mounts
+    its event route on. Reaches the function as both AWS_LWA_PASS_THROUGH_PATH, read by the adapter,
+    and APP_EVENTS_PATH, read by the application, so the two cannot drift apart.
+
+    Emitted only when sqs_event_sources is non-empty. Turning pass through on without a package that
+    mounts the route makes the adapter post an SQS batch to a path that 404s, and the mapping then
+    retries the batch until the queue's redrive policy gives up on it.
+  EOT
+
+  type    = string
+  default = "/events"
+
+  validation {
+    condition     = startswith(var.events_path, "/")
+    error_message = "events_path must start with a slash: the adapter posts to it as an absolute path."
+  }
+}
