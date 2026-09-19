@@ -176,3 +176,18 @@ output "api_keys_tenant_index_name" {
   description = "Name of the api-keys index keyed by tenant_id, null when the table is off or carries no such index. This is API_KEY_TENANT_INDEX, which a multi-tenant admin page listing every key in a workspace queries; without it that listing is a table scan."
   value       = local.api_keys_tenant_index_name
 }
+
+output "share_tokens_table_enabled" {
+  description = "Whether the share-tokens table exists, echoed back."
+  value       = var.share_tokens_table_enabled
+}
+
+output "share_tokens_table_name" {
+  description = "Full name of the share-tokens table, null when share_tokens_table_enabled is false. Also in table_names under share_tokens_table_key."
+  value       = local.share_tokens_table_name
+}
+
+output "share_tokens_tenant_index_name" {
+  description = "Name of the share-tokens index keyed by tenant_id, null when the table is off or carries no such index. This is SHARE_TOKEN_TENANT_INDEX in webbpulse.identity.share_tokens, which listing or purging one tenant's shares queries by that constant rather than through the environment; the token_hash partition cannot answer that listing on its own."
+  value       = local.share_tokens_tenant_index_name
+}
