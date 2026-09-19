@@ -9,6 +9,44 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+### `http-api`: a Lambda authorizer mode that admits agent API keys **no plan change**
+
+`identity_jwt` built API Gateway's native JWT authorizer, which rejects any bearer that is not a
+JWT before the request reaches anything of ours. Products issue agent API keys with their own
+prefix and verify them in process through `claims_or_api_key`, so on a native API those keys got a
+401 the backend never saw. Staging had a way through, because the gate's REQUEST authorizer passes
+listed prefixes on, but production has no gate and no module input could change the native
+authorizer's behaviour. Agents could not reach production routes at all.
+
+`identity_jwt` takes a `mode`, defaulting to `"native"`. Setting `mode = "lambda"` builds a REQUEST
+authorizer from this module instead, switches the marked routes to `CUSTOM`, and admits a bearer
+whose prefix appears in the new `api_key_prefixes` without demanding claims. Everything else about
+the token path is unchanged: the same issuer, audience, expiry and RS256 checks, the same JWKS
+caching with the 4000 ms fetch deadline and its single retry, and the same `authorizer.jwt.claims`
+string map arriving at the integration, so a backend cannot tell the two modes apart on a token.
+`api_key_prefixes` in native mode is refused at plan time rather than silently admitting nothing.
+
+The verification is not a copy. It moved to `shared/identity-authorizer/identity.js` at the repo
+root and is packaged into both this authorizer and the gate's, which keeps staging and production
+on one implementation. The gate keeps its cookie, origin secret and anonymous path admission; this
+authorizer has none of that.
+
+Lambda mode costs an authorizer invocation per request, softened by a
+`result_ttl_seconds` defaulting to 300 keyed on the Authorization header, so repeated
+calls carrying one token cost one invocation per five minutes. Native mode has no per request
+charge, so it stays the default and the right choice wherever API keys are not needed. The
+trade-off, the revocation window the cache opens, and the exact inputs to flip a product are in the
+module README.
+
+The module creates the authorizer's own invoke permission, so a consumer adds nothing. Flipping an
+existing product replaces its marked routes, because their `authorization_type` moves from `JWT` to
+`CUSTOM`, and destroys the native authorizer.
+
+### `staging-access-gate`: the authorizer is repackaged onto the shared source **plan change: authorizer package**
+
+No behaviour changes and no input changes. The handler now requires the shared identity verifier
+instead of carrying its own copy, so the package contents and therefore the deployed code change.
+
 ### `identity`: the OAuth 2.1 authorization server and API key tables, both opt in **no plan change**
 
 The module created the ten tables the identity flows read and write, but not the three the

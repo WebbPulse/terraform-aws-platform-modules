@@ -8,6 +8,11 @@ data "archive_file" "authorizer" {
   }
 
   source {
+    filename = "identity.js"
+    content  = file("${path.module}/../../shared/identity-authorizer/identity.js")
+  }
+
+  source {
     filename = "identity_jwt_config.json"
     content  = local.identity_jwt_config_json
   }

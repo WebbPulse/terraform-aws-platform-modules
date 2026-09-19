@@ -181,5 +181,7 @@ function ev(uri, opts={}) {
     publicPem: apub,
   });
 
+  await require('./http_api_authorizer.js')();
+
   await require('./environment_size.js')();
 })().catch(e => { console.error(e); process.exit(1); });

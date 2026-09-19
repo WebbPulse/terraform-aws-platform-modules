@@ -60,8 +60,8 @@ run "with_identity_jwt_null_the_authorizer_checks_only_the_gate_credentials" {
   }
 
   assert {
-    condition     = length([for src in data.archive_file.authorizer.source : src.filename]) == 2
-    error_message = "The config file must be bundled whether or not enforcement is on. Dropping it when off would change the zip's shape between the two modes and make the off state a different deployment artifact rather than the same function with an empty route list."
+    condition     = length([for src in data.archive_file.authorizer.source : src.filename]) == 3
+    error_message = "The handler, the shared identity verifier and the config file must all be bundled whether or not enforcement is on. Dropping the config when off would change the zip's shape between the two modes and make the off state a different deployment artifact rather than the same function with an empty route list."
   }
 }
 
@@ -163,6 +163,11 @@ run "the_config_file_is_bundled_beside_the_handler" {
   assert {
     condition     = contains([for src in data.archive_file.authorizer.source : src.filename], "index.js")
     error_message = "The handler itself must be in the zip; without index.js the function has nothing to run no matter how the config is shaped."
+  }
+
+  assert {
+    condition     = contains([for src in data.archive_file.authorizer.source : src.filename], "identity.js")
+    error_message = "The shared identity verifier must be bundled beside the handler. It is the same file the http-api module packages, and without it the handler cannot require it and every token fails closed at runtime on a green plan."
   }
 }
 
