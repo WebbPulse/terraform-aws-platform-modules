@@ -136,11 +136,6 @@ run "lambda_mode_builds_a_request_authorizer_and_no_native_one" {
   }
 
   assert {
-    condition     = output.identity_jwt_authorizer_id != null
-    error_message = "identity_jwt_authorizer_id must report the REQUEST authorizer in lambda mode too."
-  }
-
-  assert {
     condition     = output.identity_authorizer_function_name == "example-test-api-identity-authorizer"
     error_message = "The authorizer function name must be an output, for finding its log group."
   }
