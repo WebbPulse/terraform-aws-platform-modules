@@ -62,8 +62,14 @@ identity_jwt = {
   jwks_url           = optional(string) # defaults to <issuer>/.well-known/jwks.json
   jwks_ttl_seconds   = optional(number) # 300
   clock_skew_seconds = optional(number) # 60
+  api_key_prefixes   = optional(list(string)) # []; bearers with these prefixes pass through unverified
 }
 ```
+
+A bearer token on an enforced route whose value starts with one of `api_key_prefixes` is allowed
+through with no claims context, for the function behind the API to verify itself. Empty, the
+default, denies every bearer that is not a valid access token. A prefix may not be empty and may
+not start with `ey`, which is where a JWT header begins.
 
 ## Outputs
 
@@ -117,6 +123,9 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
   JWKS URL that fetches nothing.
 - Only public key material belongs in `identity_anonymous_path_prefixes`. An application path there
   is a hole straight past the gate.
+- A passed-through API key reaches the function with no `jwt.claims`, so only routes whose handlers
+  verify the key in process, through `claims_or_api_key`, belong on an API that sets
+  `api_key_prefixes`. A handler that reads `identity_subject` fails closed with a 401.
 - A route key naming no route on the API is inert rather than an error; the module is not given the
   API's route list and cannot tell a typo from a route not added yet.
 - `http_api_id` is unknown at plan time whenever the API is created by the same apply, and the

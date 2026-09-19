@@ -12,11 +12,17 @@ const ROOT = path.join(__dirname, '.build');
 let counter = 0;
 
 /** Renders identity_jwt_config.json exactly as locals.tf does, with the route keys sorted. */
-function renderConfig({ routeKeys = [], signingPublicKeyPem = '', anonymousPathPrefixes = [] } = {}) {
+function renderConfig({
+  routeKeys = [],
+  signingPublicKeyPem = '',
+  anonymousPathPrefixes = [],
+  apiKeyPrefixes = [],
+} = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
     signing_public_key_pem: signingPublicKeyPem,
     anonymous_path_prefixes: anonymousPathPrefixes,
+    api_key_prefixes: apiKeyPrefixes,
   });
 }
 
@@ -35,6 +41,18 @@ function loadAuthorizer(config) {
   return require(entry);
 }
 
+/** Writes a package whose config predates a key, for the old-package assertions. */
+function loadAuthorizerWithRawConfig(config) {
+  counter += 1;
+  const dir = path.join(ROOT, `authorizer-${counter}`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(SOURCE, path.join(dir, 'index.js'));
+  fs.writeFileSync(path.join(dir, 'identity_jwt_config.json'), JSON.stringify(config));
+  const entry = path.join(dir, 'index.js');
+  delete require.cache[entry];
+  return require(entry);
+}
+
 /** Builds a package with the config file missing, for the fail-closed assertion. */
 function loadAuthorizerWithoutConfig() {
   counter += 1;
@@ -46,4 +64,4 @@ function loadAuthorizerWithoutConfig() {
   return require(entry);
 }
 
-module.exports = { loadAuthorizer, loadAuthorizerWithoutConfig, renderConfig };
+module.exports = { loadAuthorizer, loadAuthorizerWithoutConfig, loadAuthorizerWithRawConfig, renderConfig };

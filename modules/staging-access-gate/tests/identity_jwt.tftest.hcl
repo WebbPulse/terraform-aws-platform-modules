@@ -295,3 +295,57 @@ run "an_explicit_empty_anonymous_prefix_list_is_accepted" {
     error_message = "Passing an empty prefix list must be a valid configuration rather than a rejected one: a consumer whose JWKS is served from somewhere the gate does not guard wants no hole in the gate at all, and removing the default exemption must not disable enforcement."
   }
 }
+
+run "the_packaged_config_carries_an_empty_api_key_prefix_list_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(local.identity_api_key_prefixes) == 0
+    error_message = "api_key_prefixes must always be present in the packaged config and empty unless a consumer asks for prefixes, so an authorizer built without the field denies every non-JWT bearer exactly as it did before."
+  }
+}
+
+run "configured_api_key_prefixes_reach_the_packaged_config" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer           = "https://www.staging.example.com/api/auth"
+      audience         = "example-staging-api"
+      api_key_prefixes = ["wpk_"]
+    }
+  }
+
+  assert {
+    condition     = join(",", local.identity_api_key_prefixes) == "wpk_"
+    error_message = "The prefixes decide which bearers skip the token check, so they must travel in the zip beside the route keys rather than being dropped on the way to the function."
+  }
+}
+
+run "an_empty_api_key_prefix_is_rejected" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer           = "https://www.staging.example.com/api/auth"
+      audience         = "example-staging-api"
+      api_key_prefixes = [""]
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
+
+run "a_jwt_shaped_api_key_prefix_is_rejected" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer           = "https://www.staging.example.com/api/auth"
+      audience         = "example-staging-api"
+      api_key_prefixes = ["eyJ"]
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}

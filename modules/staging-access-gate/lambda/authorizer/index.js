@@ -18,10 +18,11 @@ function loadConfig() {
       routeKeys: Array.isArray(parsed.route_keys) ? parsed.route_keys : [],
       signingPublicKeyPem: typeof parsed.signing_public_key_pem === 'string' ? parsed.signing_public_key_pem : '',
       anonymousPathPrefixes: Array.isArray(parsed.anonymous_path_prefixes) ? parsed.anonymous_path_prefixes : [],
+      apiKeyPrefixes: Array.isArray(parsed.api_key_prefixes) ? parsed.api_key_prefixes : [],
     };
   } catch (err) {
     console.error('identity_jwt_config.json could not be read, failing closed:', err.message);
-    return { routeKeys: [], signingPublicKeyPem: '', anonymousPathPrefixes: [] };
+    return { routeKeys: [], signingPublicKeyPem: '', anonymousPathPrefixes: [], apiKeyPrefixes: [] };
   }
 }
 
@@ -41,6 +42,10 @@ const JWKS_URL = process.env.IDENTITY_JWKS_URL || (ISSUER ? `${ISSUER}/.well-kno
 const JWT_ROUTE_KEYS = new Set(CONFIG.routeKeys.map((s) => String(s).trim()).filter(Boolean));
 
 const ANONYMOUS_PATH_PREFIXES = CONFIG.anonymousPathPrefixes
+  .map((s) => String(s).trim())
+  .filter(Boolean);
+
+const API_KEY_PREFIXES = CONFIG.apiKeyPrefixes
   .map((s) => String(s).trim())
   .filter(Boolean);
 
@@ -365,6 +370,17 @@ function claimsContext(claims) {
   };
 }
 
+/**
+ * True when a bearer token is shaped like one of the packaged API key prefixes.
+ * The token itself is never logged.
+ */
+function isApiKeyBearer(token) {
+  if (API_KEY_PREFIXES.length === 0) {
+    return false;
+  }
+  return API_KEY_PREFIXES.some((prefix) => String(token).startsWith(prefix));
+}
+
 /** True when this request's route key is one of the packaged token-enforced routes. */
 function requiresIdentityJwt(event) {
   if (JWT_ROUTE_KEYS.size === 0 || !ISSUER || !AUDIENCE) {
@@ -378,6 +394,8 @@ function requiresIdentityJwt(event) {
  * HTTP API REQUEST authorizer (payload 2.0). Admits preflights and anonymous key
  * material paths, then requires the origin verification header or valid gate
  * cookies, and additionally an identity access token on enforced route keys.
+ * A bearer matching a configured API key prefix is passed through with no claims
+ * context, for the function to verify itself.
  */
 exports.handler = async (event) => {
   const method = (((event.requestContext || {}).http || {}).method || '').toUpperCase();
@@ -415,6 +433,10 @@ exports.handler = async (event) => {
     return DENY;
   }
 
+  if (isApiKeyBearer(token)) {
+    return ALLOW;
+  }
+
   const claims = await verifyAccessToken(token);
   if (!claims) {
     return DENY;
@@ -430,3 +452,6 @@ exports.anonymousPathPrefixes = () => [...ANONYMOUS_PATH_PREFIXES];
 
 /** Returns the sorted route keys the handler is enforcing. For the tests. */
 exports.enforcedRouteKeys = () => [...JWT_ROUTE_KEYS].sort();
+
+/** Returns the bearer token prefixes passed through on JWT routes. For the tests. */
+exports.apiKeyPrefixes = () => [...API_KEY_PREFIXES];

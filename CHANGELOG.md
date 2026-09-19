@@ -7,6 +7,31 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.26.0
+
+### `staging-access-gate`: API key bearers can pass through on identity JWT routes **no plan change**
+
+A route behind the gate that requires an identity access token denied every bearer that did not
+verify as a JWT, so a product whose routes admit both humans and agents could not put an agent's
+`wpk_` API key on the same route as a human's token. The only way through was a second route, which
+splits one handler's path in two and duplicates the authorization in the product.
+
+`identity_jwt` takes an optional `api_key_prefixes`, a list of bearer token prefixes defaulting to
+empty. It is packaged into `identity_jwt_config.json` as `api_key_prefixes`, and on an enforced
+route a bearer starting with one of them is allowed with no claims context, for the function to
+verify itself through `webbpulse.identity.scopes.claims_or_api_key`. Empty keeps today's behaviour
+exactly: any non-JWT bearer is denied. A missing bearer, and a bearer matching no prefix that does
+not verify, are still denied, and the gate credential check still runs first. An authorizer package
+built before this release has no `api_key_prefixes` key, which reads as empty and keeps failing
+closed.
+
+A prefix may not be empty, since that matches every bearer, and may not start with `ey`, since that
+is where a JWT header's base64url begins and such a prefix would pass real access tokens through
+unverified. Both are variable validations.
+
+Only routes whose handlers verify the key in process belong on an API that sets prefixes. A handler
+reading `identity_subject` sees no claims and fails closed with a 401.
+
 ## 2.25.1
 
 ### `app-secrets`: a fresh account can plan a kept `json_generate` entry **no plan change**

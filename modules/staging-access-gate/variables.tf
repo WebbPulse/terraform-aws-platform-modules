@@ -184,6 +184,10 @@ variable "identity_jwt" {
       jwks_ttl_seconds    optional, how long a fetched key set is reused. Default 300
       clock_skew_seconds  optional leeway on exp and nbf, for skew between the signer and this
                           function. Default 60
+      api_key_prefixes    optional list of bearer token prefixes, for example ["wpk_"]. A bearer
+                          token on a JWT route that starts with one of these is allowed through with
+                          no claims context, so the function must verify the key itself. Empty, the
+                          default, keeps today's behaviour where any non-JWT bearer is denied
 
     Staging only; production enforces the same token through the http-api module's identity_jwt
     input. The gate credential check still runs first, so this only narrows access.
@@ -195,6 +199,7 @@ variable "identity_jwt" {
     jwks_url           = optional(string)
     jwks_ttl_seconds   = optional(number)
     clock_skew_seconds = optional(number)
+    api_key_prefixes   = optional(list(string), [])
   })
   default = null
 
@@ -221,6 +226,16 @@ variable "identity_jwt" {
   validation {
     condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.clock_skew_seconds, null), 60) >= 0
     error_message = "identity_jwt.clock_skew_seconds must not be negative."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || alltrue([for p in coalesce(try(var.identity_jwt.api_key_prefixes, null), []) : trimspace(p) != ""])
+    error_message = "identity_jwt.api_key_prefixes must not contain an empty prefix: an empty prefix matches every bearer token and lets any string past the token check."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || alltrue([for p in coalesce(try(var.identity_jwt.api_key_prefixes, null), []) : !startswith(lower(trimspace(p)), "ey")])
+    error_message = "identity_jwt.api_key_prefixes must not start with ey: that is the base64url of a JWT header, so such a prefix would pass real access tokens through unverified."
   }
 }
 
