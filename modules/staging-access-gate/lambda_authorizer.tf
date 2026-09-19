@@ -63,10 +63,17 @@ resource "aws_lambda_function" "authorizer" {
   runtime          = "nodejs22.x"
   architectures    = ["arm64"]
   memory_size      = 128
-  timeout          = 5
+  timeout          = local.authorizer_timeout_seconds
 
   environment {
     variables = local.authorizer_environment
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.identity_jwks_fetch_timeout_ms <= (local.authorizer_timeout_seconds - 4) * 1000
+      error_message = "identity_jwt.jwks_fetch_timeout_ms must stay at least 4 seconds below the authorizer function timeout, so a fetch that runs to its own deadline still leaves the invocation time to retry once and verify the signature rather than being killed mid-verification."
+    }
   }
 
   depends_on = [aws_cloudwatch_log_group.authorizer, aws_iam_role_policy.authorizer]

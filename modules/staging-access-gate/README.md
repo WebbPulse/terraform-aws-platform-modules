@@ -63,6 +63,7 @@ identity_jwt = {
   jwks_ttl_seconds   = optional(number) # 300
   clock_skew_seconds = optional(number) # 60
   api_key_prefixes   = optional(list(string)) # []; bearers with these prefixes pass through unverified
+  jwks_fetch_timeout_ms = optional(number) # 4000; 500 to 10000, must cover a cold identity function
 }
 ```
 
@@ -121,6 +122,9 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
   `identity_jwt_route_keys`, and `$default` is rejected because it is the anonymous catch-all.
 - `identity_jwt.issuer` must be https with no trailing slash; a trailing slash builds a double-slash
   JWKS URL that fetches nothing.
+- A cold identity function can take about two seconds to serve the JWKS, so `jwks_fetch_timeout_ms`
+  has to cover a cold start. Set it too low and the first authorized call after the TTL expires
+  aborts the fetch and fails with `authorizerError=Forbidden` on a valid token.
 - Only public key material belongs in `identity_anonymous_path_prefixes`. An application path there
   is a hole straight past the gate.
 - A passed-through API key reaches the function with no `jwt.claims`, so only routes whose handlers

@@ -184,6 +184,10 @@ variable "identity_jwt" {
       jwks_ttl_seconds    optional, how long a fetched key set is reused. Default 300
       clock_skew_seconds  optional leeway on exp and nbf, for skew between the signer and this
                           function. Default 60
+      jwks_fetch_timeout_ms  optional, how long one JWKS fetch may take before it is aborted.
+                          Default 4000, and it has to cover a cold identity function, which can
+                          take about two seconds to serve the key set. Between 500 and 10000, and
+                          comfortably below the authorizer function timeout
       api_key_prefixes    optional list of bearer token prefixes, for example ["wpk_"]. A bearer
                           token on a JWT route that starts with one of these is allowed through with
                           no claims context, so the function must verify the key itself. Empty, the
@@ -200,6 +204,8 @@ variable "identity_jwt" {
     jwks_ttl_seconds   = optional(number)
     clock_skew_seconds = optional(number)
     api_key_prefixes   = optional(list(string), [])
+
+    jwks_fetch_timeout_ms = optional(number)
   })
   default = null
 
@@ -227,6 +233,13 @@ variable "identity_jwt" {
     condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.clock_skew_seconds, null), 60) >= 0
     error_message = "identity_jwt.clock_skew_seconds must not be negative."
   }
+
+  validation {
+    condition     = var.identity_jwt == null || (coalesce(try(var.identity_jwt.jwks_fetch_timeout_ms, null), 4000) >= 500 && coalesce(try(var.identity_jwt.jwks_fetch_timeout_ms, null), 4000) <= 10000)
+    error_message = "identity_jwt.jwks_fetch_timeout_ms must be between 500 and 10000. Below 500 a cold identity function cannot serve the key set in time and the first authorized call after the TTL expires is denied; above 10000 the fetch outlives the authorizer function itself."
+  }
+
+
 
   validation {
     condition     = var.identity_jwt == null || alltrue([for p in coalesce(try(var.identity_jwt.api_key_prefixes, null), []) : trimspace(p) != ""])
