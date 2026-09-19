@@ -1,5 +1,5 @@
 resource "aws_dynamodb_table" "this" {
-  for_each = var.tables
+  for_each = local.all_tables
 
   name         = local.table_names[each.key]
   billing_mode = var.billing_mode
@@ -67,7 +67,7 @@ resource "aws_dynamodb_table" "this" {
 }
 
 resource "aws_iam_role_policy" "identity_tables" {
-  count = var.attach_role_policies && length(var.tables) > 0 ? 1 : 0
+  count = var.attach_role_policies && length(local.all_tables) > 0 ? 1 : 0
 
   name   = "identity-tables"
   role   = var.identity_role_name

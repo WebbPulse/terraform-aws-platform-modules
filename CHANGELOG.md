@@ -7,6 +7,46 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `identity`: the OAuth 2.1 authorization server and API key tables, both opt in **no plan change**
+
+The module created the ten tables the identity flows read and write, but not the three the
+authorization server in `webbpulse.identity.oauth_server` needs, nor the one
+`webbpulse.identity.api_keys` mints into. A product that wanted to host a remote MCP server had
+nowhere for its clients, codes and consents to live, so the server stayed flagged off.
+
+`oauth_server_enabled`, default `false`, adds `oauth-clients` keyed by `client_id`,
+`authorization-codes` keyed by `code_hash`, both reclaimed on `expires_at`, and `oauth-consents`
+keyed by `consent_id` with a `user_id-index` GSI and no TTL. The key schemas are
+`OAUTH_SERVER_TABLES` written out: they are the package's contract, and a hash key that does not
+match what the store writes fails at request time rather than at apply time.
+
+These are not `oauth-states` and `oauth-links`. Those two are the social login side, where the
+package is an OAuth *client* against Google and GitHub. The three new ones are the server side.
+
+`api_keys_table_enabled`, default `false`, adds `api-keys` keyed by `key_hash` with
+`user_id-created_at-index` and `tenant_id-created_at-index`. The tenant index answers "every key in
+this workspace", which the `key_hash` partition cannot and the user index answers only one person
+at a time; without it a multi-tenant admin page is a table scan. The two switches are independent:
+a product can mint API keys without hosting an MCP server.
+
+Both sets of tables take the module's existing PITR, deletion protection, billing mode and
+encryption settings and join the one table grant on the identity role, so no new IAM resource
+appears. `authorization-codes` turns PITR off the way `login-attempts` does, since every row lives
+at most ten minutes and is deleted by the exchange that spends it.
+
+Creating the tables does not turn the package's own flag on. `IDENTITY_MCP_OAUTH_ENABLED` and
+`IDENTITY_MCP_RESOURCE_URL` reach the function only when `oauth_server_mcp_resource_url` is set as
+well, because `build_identity_router` raises at startup when the flag is on and no
+`oauth_server_stores` was passed. Infrastructure that flipped the flag by itself would turn a
+missing product argument into a function that will not boot.
+
+New outputs: `oauth_server_enabled`, `oauth_server_table_names`, `consent_user_index_name`,
+`api_keys_table_enabled`, `api_keys_table_name`, `api_keys_user_index_name` and
+`api_keys_tenant_index_name`. Both switches default off, so a consumer that says nothing plans the
+same ten tables it planned before.
+
 ## 2.26.1
 
 ### `staging-access-gate`: the authorizer covers a cold JWKS fetch **plan change: authorizer function and package**

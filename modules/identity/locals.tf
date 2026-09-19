@@ -46,12 +46,20 @@ locals {
     Statement = [local.mfa_policy_statement]
   })
 
+  oauth_server_tables = var.oauth_server_enabled ? var.oauth_server_tables : {}
+
+  api_keys_tables = var.api_keys_table_enabled ? { (var.api_keys_table_key) = var.api_keys_table } : {}
+
+  optional_tables = merge(local.oauth_server_tables, local.api_keys_tables)
+
+  all_tables = merge(var.tables, local.optional_tables)
+
   table_names = {
-    for key, table in var.tables : key => "${var.name_prefix}-${key}"
+    for key, table in local.all_tables : key => "${var.name_prefix}-${key}"
   }
 
   table_tags = {
-    for key, table in var.tables : key => merge(
+    for key, table in local.all_tables : key => merge(
       var.name_tag ? { Name = local.table_names[key] } : {},
       var.tags,
       table.tags,
@@ -129,6 +137,41 @@ locals {
     })
   }
 
+  oauth_server_table_names = {
+    for key in sort(keys(local.oauth_server_tables)) : key => local.table_names[key]
+  }
+
+  api_keys_table_name = var.api_keys_table_enabled ? local.table_names[var.api_keys_table_key] : null
+
+  consent_user_index_name = try(
+    one([
+      for index in local.oauth_server_tables["oauth-consents"].global_secondary_indexes :
+      index.name if index.hash_key == "user_id"
+    ]),
+    null,
+  )
+
+  api_keys_user_index_name = try(
+    one([
+      for index in local.api_keys_tables[var.api_keys_table_key].global_secondary_indexes :
+      index.name if index.hash_key == "user_id"
+    ]),
+    null,
+  )
+
+  api_keys_tenant_index_name = try(
+    one([
+      for index in local.api_keys_tables[var.api_keys_table_key].global_secondary_indexes :
+      index.name if index.hash_key == "tenant_id"
+    ]),
+    null,
+  )
+
+  oauth_server_environment = var.oauth_server_enabled && var.oauth_server_mcp_resource_url != null ? {
+    IDENTITY_MCP_OAUTH_ENABLED = "true"
+    IDENTITY_MCP_RESOURCE_URL  = var.oauth_server_mcp_resource_url
+  } : {}
+
   mfa_environment = local.mfa_key_exists ? {
     IDENTITY_DATA_KEY_ARN = local.mfa_key_arn
   } : {}
@@ -181,5 +224,6 @@ locals {
     local.refresh_user_index_environment,
     local.mfa_environment,
     local.users_stream_environment,
+    local.oauth_server_environment,
   )
 }

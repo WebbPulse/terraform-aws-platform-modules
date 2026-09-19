@@ -1,9 +1,9 @@
 # terraform-aws-identity
 
 A product's identity layer as one module block: the KMS RSA signing keys access tokens are signed
-with, the symmetric KMS key TOTP seeds are sealed under, the ten identity DynamoDB tables, the IAM
-grants that reach them, an optional API Gateway JWT authorizer, and the `IDENTITY_*` environment
-map. It exists so a consumer wires `webbpulse.identity` with one module call instead of rebuilding
+with, the symmetric KMS key TOTP seeds are sealed under, the ten identity DynamoDB tables plus the
+opt in OAuth 2.1 authorization server and API key tables, the IAM grants that reach them, an
+optional API Gateway JWT authorizer, and the `IDENTITY_*` environment map. It exists so a consumer wires `webbpulse.identity` with one module call instead of rebuilding
 key names, table schemas and grants by hand.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/identity`.
@@ -43,6 +43,55 @@ contract rather than this module's preference:
 | `webauthn-challenges` | `challenge_id` | | | `expires_at` |
 | `oauth-states` | `state` | | | `expires_at` |
 | `oauth-links` | `provider_subject` | | `user_id-index` | |
+
+Two further groups of tables are opt in, so an existing consumer's plan stays empty until it
+asks for them.
+
+`oauth_server_enabled = true` adds the three tables the OAuth 2.1 authorization server in
+`webbpulse.identity.oauth_server` reads and writes, which is what a product turns on to host a
+remote MCP server. These are not the social login tables above: `oauth-states` and `oauth-links`
+are the sign-in side, where the package is an OAuth *client* against Google and GitHub, while
+these three are the server side, where the package issues its own codes.
+
+| Logical key | Hash key | Index | TTL |
+| --- | --- | --- | --- |
+| `oauth-clients` | `client_id` | | `expires_at` |
+| `authorization-codes` | `code_hash` | | `expires_at` |
+| `oauth-consents` | `consent_id` | `user_id-index` | none, deliberately |
+
+`api_keys_table_enabled = true` adds the table `webbpulse.identity.api_keys` mints `wpk_` keys
+into, for agents and scripts that are not a browser session.
+
+| Logical key | Hash key | Index | TTL |
+| --- | --- | --- | --- |
+| `api-keys` | `key_hash` | `user_id-created_at-index`, `tenant_id-created_at-index` | none |
+
+Hosting an MCP server is both halves, the tables here and the router in the product:
+
+```hcl
+module "identity" {
+  # ...
+
+  oauth_server_enabled          = true
+  oauth_server_mcp_resource_url = "https://${local.api_host}/mcp"
+}
+```
+
+```python
+app.include_router(
+    build_identity_router(
+        settings,
+        hooks,
+        stores,
+        tokens=TokenService(settings, signing_client(settings)),
+        oauth_server_stores=OAuthServerStores(clients=..., codes=..., consents=...),
+        tenant_resolver=...,
+    )
+)
+```
+
+Land the tables first and add `oauth_server_mcp_resource_url` once the composition root passes
+`oauth_server_stores`, since the package refuses to boot with the flag on and no stores.
 
 ## Inputs
 
@@ -93,6 +142,12 @@ contract rather than this module's preference:
 | `users_stream_maximum_retry_attempts` | Retries before a failing record is dropped. `-1` retries until it expires. | `10` |
 | `users_stream_starting_position` | `LATEST` or `TRIM_HORIZON`. | `"LATEST"` |
 | `users_stream_events_path` | Path the adapter posts to and the app mounts the purge route on. | `"/events"` |
+| `oauth_server_enabled` | Create the three OAuth 2.1 authorization server tables. | `false` |
+| `oauth_server_tables` | The server tables, in the same object shape as `tables`. Created only when the switch is on. | the three package tables |
+| `oauth_server_mcp_resource_url` | The RFC 8707 resource MCP tokens are bound to. Set it and `identity_environment` carries `IDENTITY_MCP_OAUTH_ENABLED` and `IDENTITY_MCP_RESOURCE_URL`. Requires `oauth_server_enabled`. | `null` |
+| `api_keys_table_enabled` | Create the `api-keys` table. Independent of the server switch. | `false` |
+| `api_keys_table` | The `api-keys` table, in the same object shape as one `tables` entry. | the package table with both indexes |
+| `api_keys_table_key` | Logical key the `api-keys` table is created under. | `"api-keys"` |
 
 Object shapes for the two map inputs:
 
@@ -150,6 +205,13 @@ additional_table_grants = map(object({
 | `audience` | The audience, echoed back. |
 | `users_stream_event_source_mapping_uuid` | UUID of the users table stream mapping, null when `users_stream_enabled` is false. |
 | `users_stream_policy_json` | The stream read grant as a policy document, null when `users_stream_enabled` is false. |
+| `oauth_server_enabled` | Whether the authorization server tables exist, echoed back. |
+| `oauth_server_table_names` | Logical key to full table name for the three server tables only, empty when the switch is off. |
+| `consent_user_index_name` | Name of the `oauth-consents` index keyed by `user_id`, which `DynamoConsentStore` takes as `user_index`. Null when the switch is off. |
+| `api_keys_table_enabled` | Whether the `api-keys` table exists, echoed back. |
+| `api_keys_table_name` | Full name of the `api-keys` table, null when the switch is off. |
+| `api_keys_user_index_name` | Name of the `api-keys` index keyed by `user_id`, which is `API_KEY_USER_INDEX`. Null when the switch is off. |
+| `api_keys_tenant_index_name` | Name of the `api-keys` index keyed by `tenant_id`, which is `API_KEY_TENANT_INDEX`. Null when the switch is off. |
 
 ## Purging identity rows when a user is deleted
 
@@ -263,6 +325,36 @@ from the same merge it already does.
   so a product override wins.
 - Every key named in an `additional_table_grants` entry's `tables` must be a key of `tables`, checked
   at plan time.
+- `oauth-states` and `oauth-links` are not the authorization server's tables. They are the social
+  login side, where this package is an OAuth client against Google and GitHub and stores the CSRF
+  state and the provider subject to user mapping. The server side is `oauth_server_enabled`, and a
+  product that confuses the two ends up with an MCP server whose `/authorize` writes into the table
+  that holds Google sign-in state.
+- `oauth_server_enabled = true` creates and grants the tables but does not turn the package's own
+  flag on. `IDENTITY_MCP_OAUTH_ENABLED` reaches the function only when
+  `oauth_server_mcp_resource_url` is also set, because `build_identity_router` raises at startup
+  when the flag is on and no `oauth_server_stores` was passed. Infrastructure that flipped the flag
+  by itself would turn a missing product argument into a function that will not boot, so the tables
+  land first and the product flips the flag when its composition root is ready.
+- `oauth-consents` carries no TTL on purpose. A grant that silently expired would send a user back
+  through an authorization screen they have no way to predict, and the record is small. A consumer
+  overriding `oauth_server_tables` should not add one.
+- `authorization-codes` sets `point_in_time_recovery = false`, matching `login-attempts`. Every row
+  lives at most ten minutes and is deleted by the exchange that spends it, so continuous backups
+  would pay to restore rows that were already invalid.
+- The consent GSI's name reaches the package as a constructor argument rather than an environment
+  variable. `DynamoConsentStore` defaults `user_index` to `CONSENT_USER_INDEX`, which is the same
+  `user_id-index` string, so a consumer that renames the index in `oauth_server_tables` has to pass
+  `consent_user_index_name` through to that constructor or listing a user's grants queries an index
+  that does not exist.
+- The `api-keys` table carries `tenant_id-created_at-index` as well as `user_id-created_at-index`.
+  The user index answers one person's key list; the tenant index answers "every key in this
+  workspace", which a multi-tenant admin page asks and the `key_hash` partition cannot. Without it
+  that page is a table scan. Both names are package constants read in code, not from the
+  environment.
+- Neither index name is in `identity_environment`, because the package reads no environment variable
+  for them. `IDENTITY_REFRESH_USER_INDEX` is the one index whose name the package does look up that
+  way, and adding variables the package ignores would read as configuration that does nothing.
 - One authorizer per module instance. A product needing several on the same API creates the extra
   ones itself from `issuer` and `audience`.
 - `users_stream_enabled`, not the stream ARN, is what the counts key off. When the users table's

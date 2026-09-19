@@ -805,3 +805,274 @@ variable "users_stream_batching_window_seconds" {
     error_message = "users_stream_batching_window_seconds must be a whole number from 0 to 300."
   }
 }
+
+variable "oauth_server_enabled" {
+  description = <<-EOT
+    Create the OAuth 2.1 authorization server tables that `webbpulse.identity.oauth_server`
+    reads and writes: `oauth-clients`, `authorization-codes` and `oauth-consents`. Off by
+    default, so an existing consumer's plan is empty until it turns the server on.
+
+    These are not the social login tables. `oauth-states` and `oauth-links` in the default
+    `tables` map are the sign-in side, where the package is an OAuth client against Google and
+    GitHub. These three are the server side, where the package issues its own authorization
+    codes to an MCP client.
+
+    Turning this on creates the tables and extends the identity role's table grant. The
+    environment gains `IDENTITY_MCP_OAUTH_ENABLED` and `IDENTITY_MCP_RESOURCE_URL` only once
+    `oauth_server_mcp_resource_url` is also set, and the product must then pass
+    `oauth_server_stores` to `build_identity_router`, because the package refuses to boot with
+    the flag on and no stores.
+  EOT
+
+  type     = bool
+  default  = false
+  nullable = false
+}
+
+variable "oauth_server_tables" {
+  description = <<-EOT
+    The OAuth 2.1 authorization server tables, keyed by the logical name the package knows them
+    by, in the same object shape as `tables`. Created only when `oauth_server_enabled` is true.
+
+    The default is `webbpulse.identity.oauth_server_storage.OAUTH_SERVER_TABLES` written out:
+    `oauth-clients` keyed by `client_id` with a TTL on `expires_at`, `authorization-codes` keyed
+    by `code_hash` with the same TTL, and `oauth-consents` keyed by `consent_id` with a
+    `user_id-index` GSI and deliberately no TTL, because a consent that silently expired would
+    send a user back through an authorization screen they cannot predict.
+
+    Override it the way `tables` is overridden, remembering that the key schemas are the
+    package's contract: a hash key that does not match what the store writes fails at request
+    time rather than at apply time.
+  EOT
+
+  type = map(object({
+    attributes = list(object({
+      name = string
+      type = string
+    }))
+    hash_key  = string
+    range_key = optional(string)
+    global_secondary_indexes = optional(list(object({
+      name               = string
+      hash_key           = string
+      range_key          = optional(string)
+      projection_type    = optional(string, "ALL")
+      non_key_attributes = optional(list(string))
+    })), [])
+    ttl_attribute          = optional(string)
+    point_in_time_recovery = optional(bool)
+    deletion_protection    = optional(bool)
+    tags                   = optional(map(string), {})
+  }))
+
+  default = {
+    "oauth-clients" = {
+      attributes    = [{ name = "client_id", type = "S" }]
+      hash_key      = "client_id"
+      ttl_attribute = "expires_at"
+    }
+
+    "authorization-codes" = {
+      attributes             = [{ name = "code_hash", type = "S" }]
+      hash_key               = "code_hash"
+      ttl_attribute          = "expires_at"
+      point_in_time_recovery = false
+    }
+
+    "oauth-consents" = {
+      attributes = [
+        { name = "consent_id", type = "S" },
+        { name = "user_id", type = "S" },
+      ]
+      hash_key = "consent_id"
+      global_secondary_indexes = [
+        {
+          name     = "user_id-index"
+          hash_key = "user_id"
+        },
+      ]
+    }
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.oauth_server_tables : alltrue([for a in t.attributes : contains(["S", "N", "B"], a.type)])
+    ])
+    error_message = "Every attribute type must be S (string), N (number) or B (binary)."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.oauth_server_tables : contains([for a in t.attributes : a.name], t.hash_key)
+    ])
+    error_message = "Each table's hash_key must name one of that table's attributes."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.oauth_server_tables : t.range_key == null || contains([for a in t.attributes : a.name], t.range_key)
+    ])
+    error_message = "A table's range_key, when set, must name one of that table's attributes."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.oauth_server_tables : alltrue([
+        for g in t.global_secondary_indexes : contains([for a in t.attributes : a.name], g.hash_key)
+        && (g.range_key == null || contains([for a in t.attributes : a.name], g.range_key))
+      ])
+    ])
+    error_message = "Every global secondary index hash_key and range_key must name one of the same table's attributes. DynamoDB rejects an index key that has no attribute definition."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.oauth_server_tables : alltrue([
+        for g in t.global_secondary_indexes : contains(["ALL", "KEYS_ONLY", "INCLUDE"], g.projection_type)
+      ])
+    ])
+    error_message = "Every global secondary index projection_type must be ALL, KEYS_ONLY or INCLUDE."
+  }
+
+  validation {
+    condition = alltrue([
+      for k in keys(var.oauth_server_tables) : can(regex("^[A-Za-z0-9_.-]{1,255}$", k))
+    ])
+    error_message = "Table keys may hold only letters, digits, underscores, hyphens and dots, which is what DynamoDB allows in a table name."
+  }
+}
+
+variable "api_keys_table_enabled" {
+  description = <<-EOT
+    Create the `api-keys` table that `webbpulse.identity.api_keys` reads and writes, for a
+    product that mints `wpk_` API keys for agents and scripts. Off by default, so an existing
+    consumer's plan is empty.
+
+    It is separate from `oauth_server_enabled` because the two are independent: a product can
+    mint API keys without hosting an MCP server, and an MCP server does not require API keys.
+  EOT
+
+  type     = bool
+  default  = false
+  nullable = false
+}
+
+variable "api_keys_table" {
+  description = <<-EOT
+    The `api-keys` table, in the same object shape as `tables`, created only when
+    `api_keys_table_enabled` is true. The default is
+    `webbpulse.identity.api_keys.API_KEY_TABLE` written out: hash key `key_hash`, a
+    `user_id-created_at-index` GSI listing one user's keys newest last, and a
+    `tenant_id-created_at-index` GSI listing one tenant's keys for a multi-tenant admin page.
+    No TTL: a key is revoked explicitly, never reclaimed.
+  EOT
+
+  type = object({
+    attributes = list(object({
+      name = string
+      type = string
+    }))
+    hash_key  = string
+    range_key = optional(string)
+    global_secondary_indexes = optional(list(object({
+      name               = string
+      hash_key           = string
+      range_key          = optional(string)
+      projection_type    = optional(string, "ALL")
+      non_key_attributes = optional(list(string))
+    })), [])
+    ttl_attribute          = optional(string)
+    point_in_time_recovery = optional(bool)
+    deletion_protection    = optional(bool)
+    tags                   = optional(map(string), {})
+  })
+
+  default = {
+    attributes = [
+      { name = "key_hash", type = "S" },
+      { name = "user_id", type = "S" },
+      { name = "tenant_id", type = "S" },
+      { name = "created_at", type = "S" },
+    ]
+    hash_key = "key_hash"
+    global_secondary_indexes = [
+      {
+        name      = "user_id-created_at-index"
+        hash_key  = "user_id"
+        range_key = "created_at"
+      },
+      {
+        name      = "tenant_id-created_at-index"
+        hash_key  = "tenant_id"
+        range_key = "created_at"
+      },
+    ]
+  }
+
+  nullable = false
+
+  validation {
+    condition     = alltrue([for a in var.api_keys_table.attributes : contains(["S", "N", "B"], a.type)])
+    error_message = "Every attribute type must be S (string), N (number) or B (binary)."
+  }
+
+  validation {
+    condition     = contains([for a in var.api_keys_table.attributes : a.name], var.api_keys_table.hash_key)
+    error_message = "api_keys_table.hash_key must name one of that table's attributes."
+  }
+
+  validation {
+    condition = alltrue([
+      for g in var.api_keys_table.global_secondary_indexes :
+      contains([for a in var.api_keys_table.attributes : a.name], g.hash_key)
+      && (g.range_key == null || contains([for a in var.api_keys_table.attributes : a.name], g.range_key))
+    ])
+    error_message = "Every api_keys_table global secondary index hash_key and range_key must name one of that table's attributes."
+  }
+}
+
+variable "api_keys_table_key" {
+  description = "Logical key the api-keys table is created under, which is also its name suffix and its key in table_names. The package resolves \"api-keys\" through webbpulse.dynamodb.table_name, so changing this only makes sense alongside a product that passes the table name explicitly."
+  type        = string
+  default     = "api-keys"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]{1,255}$", var.api_keys_table_key))
+    error_message = "api_keys_table_key may hold only letters, digits, underscores, hyphens and dots."
+  }
+}
+
+variable "oauth_server_mcp_resource_url" {
+  description = <<-EOT
+    The canonical URL of this product's MCP resource: the RFC 8707 `resource` a client asks for
+    and the `aud` the authorization server binds its tokens to. When it is set and
+    `oauth_server_enabled` is true, `identity_environment` carries
+    `IDENTITY_MCP_OAUTH_ENABLED = "true"` and `IDENTITY_MCP_RESOURCE_URL`.
+
+    Left null, the tables are created and granted but the environment carries neither, so the
+    product mounts the server itself once its composition root is ready to pass
+    `oauth_server_stores`. That split is deliberate: the package refuses to boot when the flag
+    is on and no stores were passed, so infrastructure that flipped the flag on its own would
+    turn a missing product argument into a dead function.
+  EOT
+
+  type     = string
+  default  = null
+  nullable = true
+
+  validation {
+    condition     = var.oauth_server_mcp_resource_url == null || can(regex("^https?://", var.oauth_server_mcp_resource_url))
+    error_message = "oauth_server_mcp_resource_url must be an absolute http or https URL."
+  }
+
+  validation {
+    condition     = var.oauth_server_mcp_resource_url == null || !strcontains(var.oauth_server_mcp_resource_url, "#")
+    error_message = "oauth_server_mcp_resource_url must carry no fragment. RFC 8707 refuses one, and the package's own settings validation rejects it at startup."
+  }
+
+  validation {
+    condition     = var.oauth_server_mcp_resource_url == null || var.oauth_server_enabled
+    error_message = "oauth_server_mcp_resource_url was given with oauth_server_enabled false. The resource URL names a server whose tables this module would not create, so the identity function would advertise endpoints backed by nothing."
+  }
+}
