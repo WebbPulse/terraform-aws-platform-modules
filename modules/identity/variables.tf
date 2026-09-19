@@ -817,8 +817,9 @@ variable "oauth_server_enabled" {
     GitHub. These three are the server side, where the package issues its own authorization
     codes to an MCP client.
 
-    Turning this on creates the tables and extends the identity role's table grant. The product
-    still has to set `IDENTITY_MCP_OAUTH_ENABLED` and `IDENTITY_MCP_RESOURCE_URL` and pass
+    Turning this on creates the tables and extends the identity role's table grant. The
+    environment gains `IDENTITY_MCP_OAUTH_ENABLED` and `IDENTITY_MCP_RESOURCE_URL` only once
+    `oauth_server_mcp_resource_url` is also set, and the product must then pass
     `oauth_server_stores` to `build_identity_router`, because the package refuses to boot with
     the flag on and no stores.
   EOT
