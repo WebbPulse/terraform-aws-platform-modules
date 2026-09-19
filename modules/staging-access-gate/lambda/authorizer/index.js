@@ -6,6 +6,7 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 
 const CONFIG_PATH = path.join(__dirname, 'identity_jwt_config.json');
+const DEFAULT_JWKS_FETCH_TIMEOUT_MS = 4000;
 
 /**
  * Reads the packaged identity JWT configuration.
@@ -19,10 +20,17 @@ function loadConfig() {
       signingPublicKeyPem: typeof parsed.signing_public_key_pem === 'string' ? parsed.signing_public_key_pem : '',
       anonymousPathPrefixes: Array.isArray(parsed.anonymous_path_prefixes) ? parsed.anonymous_path_prefixes : [],
       apiKeyPrefixes: Array.isArray(parsed.api_key_prefixes) ? parsed.api_key_prefixes : [],
+      jwksFetchTimeoutMs: Number(parsed.jwks_fetch_timeout_ms) > 0 ? Number(parsed.jwks_fetch_timeout_ms) : DEFAULT_JWKS_FETCH_TIMEOUT_MS,
     };
   } catch (err) {
     console.error('identity_jwt_config.json could not be read, failing closed:', err.message);
-    return { routeKeys: [], signingPublicKeyPem: '', anonymousPathPrefixes: [], apiKeyPrefixes: [] };
+    return {
+      routeKeys: [],
+      signingPublicKeyPem: '',
+      anonymousPathPrefixes: [],
+      apiKeyPrefixes: [],
+      jwksFetchTimeoutMs: DEFAULT_JWKS_FETCH_TIMEOUT_MS,
+    };
   }
 }
 
@@ -69,7 +77,8 @@ function isAnonymousPath(event) {
 }
 
 const JWKS_TTL_MS = Number(process.env.IDENTITY_JWKS_TTL_SECONDS || 300) * 1000;
-const JWKS_TIMEOUT_MS = Number(process.env.IDENTITY_JWKS_TIMEOUT_MS || 2000);
+const JWKS_TIMEOUT_MS = CONFIG.jwksFetchTimeoutMs;
+const JWKS_RETRY_BUDGET_MS = Number(process.env.IDENTITY_JWKS_RETRY_BUDGET_MS || 9000);
 
 const CLOCK_SKEW_SECONDS = Number(process.env.IDENTITY_CLOCK_SKEW_SECONDS || 60);
 
@@ -187,10 +196,10 @@ function resetJwksCache() {
 }
 
 /**
- * Fetches the issuer's JWKS, presenting the origin verification header so the
- * fetch survives the gate that guards the issuer's own API.
+ * Fetches the issuer's JWKS once, presenting the origin verification header so
+ * the fetch survives the gate that guards the issuer's own API.
  */
-async function fetchJwks() {
+async function fetchJwksOnce() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), JWKS_TIMEOUT_MS);
   try {
@@ -212,6 +221,25 @@ async function fetchJwks() {
     return keys;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetches the JWKS, retrying once when the first attempt fails and the retry's
+ * own timeout still fits the budget left inside this invocation. A cold identity
+ * function is the common first failure, and it is warm by the second attempt.
+ */
+async function fetchJwks() {
+  const startedAt = Date.now();
+  try {
+    return await fetchJwksOnce();
+  } catch (err) {
+    const remaining = JWKS_RETRY_BUDGET_MS - (Date.now() - startedAt);
+    if (remaining < JWKS_TIMEOUT_MS) {
+      throw err;
+    }
+    console.warn('JWKS fetch failed, retrying once:', err.message);
+    return fetchJwksOnce();
   }
 }
 

@@ -349,3 +349,76 @@ run "a_jwt_shaped_api_key_prefix_is_rejected" {
 
   expect_failures = [var.identity_jwt]
 }
+
+run "the_packaged_config_carries_the_default_jwks_fetch_timeout" {
+  command = plan
+
+  assert {
+    condition     = local.identity_jwks_fetch_timeout_ms == 4000
+    error_message = "The JWKS fetch timeout must default to 4000 ms and travel in the zip: a cold identity function takes about two seconds to serve the key set, and a shorter deadline aborts the fetch so the first authorized call after the TTL expires is denied with authorizerError=Forbidden."
+  }
+
+  assert {
+    condition     = aws_lambda_function.authorizer.timeout * 1000 >= local.identity_jwks_fetch_timeout_ms + 4000
+    error_message = "The authorizer function timeout must exceed the JWKS fetch timeout with room to retry once and verify the signature, otherwise the invocation is killed mid-verification and a valid token is refused."
+  }
+}
+
+run "a_configured_jwks_fetch_timeout_reaches_the_packaged_config" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer                = "https://www.staging.example.com/api/auth"
+      audience              = "example-staging-api"
+      jwks_fetch_timeout_ms = 2500
+    }
+  }
+
+  assert {
+    condition     = local.identity_jwks_fetch_timeout_ms == 2500
+    error_message = "A consumer whose identity function is slower or faster than the default must be able to set the fetch deadline, so the configured value has to reach the packaged config rather than being dropped."
+  }
+}
+
+run "a_jwks_fetch_timeout_below_the_floor_is_rejected" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer                = "https://www.staging.example.com/api/auth"
+      audience              = "example-staging-api"
+      jwks_fetch_timeout_ms = 200
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
+
+run "a_jwks_fetch_timeout_over_the_function_timeout_is_rejected" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer                = "https://www.staging.example.com/api/auth"
+      audience              = "example-staging-api"
+      jwks_fetch_timeout_ms = 12000
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
+
+run "a_jwks_fetch_timeout_without_headroom_is_refused_at_plan_time" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer                = "https://www.staging.example.com/api/auth"
+      audience              = "example-staging-api"
+      jwks_fetch_timeout_ms = 9000
+    }
+  }
+
+  expect_failures = [aws_lambda_function.authorizer]
+}

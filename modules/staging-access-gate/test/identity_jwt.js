@@ -456,5 +456,93 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
 
   console.log('identity jwt api key passthrough tests passed');
 
+  const savedFetch = globalThis.fetch;
+
+  /**
+   * Serves the JWKS after `delayMs`, honouring the abort signal exactly as the
+   * runtime's fetch does, so a fetch past its deadline rejects rather than resolving late.
+   */
+  const slowJwks = (delayMs, onAttempt = () => {}) => async (url, init = {}) => {
+    onAttempt();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve({ ok: true, status: 200, json: async () => ({ keys: served }) }), delayMs);
+      const signal = init.signal;
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          const err = new Error('This operation was aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      }
+    });
+  };
+
+  const TIMEOUT_MS = 600;
+
+  const timed = loadAuthorizer({
+    routeKeys: ENFORCED,
+    signingPublicKeyPem: publicPem,
+    jwksFetchTimeoutMs: TIMEOUT_MS,
+  });
+
+  timed.resetJwksCache();
+  globalThis.fetch = slowJwks(TIMEOUT_MS - 250);
+  r = await timed.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(
+    r.isAuthorized,
+    true,
+    'a JWKS fetch that resolves just inside the configured timeout verifies the token and is allowed',
+  );
+
+  timed.resetJwksCache();
+  let slowAttempts = 0;
+  globalThis.fetch = slowJwks(TIMEOUT_MS * 4, () => {
+    slowAttempts += 1;
+  });
+  r = await timed.handler(req(PROTECTED, sign(claims())));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'a JWKS fetch that outruns the configured timeout is aborted and the token is denied, failing closed',
+  );
+  assert.strictEqual(slowAttempts, 2, 'the aborted fetch is retried exactly once inside the same invocation');
+
+  timed.resetJwksCache();
+  let coldAttempts = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    coldAttempts += 1;
+    if (coldAttempts === 1) {
+      return slowJwks(TIMEOUT_MS * 4)(url, init);
+    }
+    return { ok: true, status: 200, json: async () => ({ keys: served }) };
+  };
+  r = await timed.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(
+    r.isAuthorized,
+    true,
+    'a cold first fetch that aborts is retried once and the warm second attempt verifies the token',
+  );
+  assert.strictEqual(coldAttempts, 2, 'the warm retry is the second and last attempt');
+
+  const defaulted = loadAuthorizerWithRawConfig({
+    route_keys: [...ENFORCED].sort(),
+    signing_public_key_pem: publicPem,
+    anonymous_path_prefixes: [],
+    api_key_prefixes: [],
+  });
+  defaulted.resetJwksCache();
+  globalThis.fetch = slowJwks(2100);
+  r = await defaulted.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(
+    r.isAuthorized,
+    true,
+    'with no jwks_fetch_timeout_ms in the package the default covers a cold identity function serving the key set in about two seconds',
+  );
+
+  globalThis.fetch = savedFetch;
+
+  console.log('identity jwt jwks fetch timeout tests passed');
+
   console.log('identity jwt authorizer tests passed');
 };

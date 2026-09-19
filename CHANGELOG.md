@@ -7,6 +7,29 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.26.1
+
+### `staging-access-gate`: the authorizer covers a cold JWKS fetch **plan change: authorizer function and package**
+
+The authorizer aborted its JWKS fetch after 2000 ms. A cold identity Lambda takes about 1850 ms to
+serve the key set, so the first authorized call against a cold JWKS cache and a cold identity
+backend lost the race, logged `access token rejected: JWKS unavailable: This operation was
+aborted`, and denied a valid token. The caller saw a 403 with `authorizerError=Forbidden`.
+
+The fetch deadline is now packaged in `identity_jwt_config.json` as `jwks_fetch_timeout_ms` rather
+than read from the environment, and `identity_jwt` takes an optional `jwks_fetch_timeout_ms`
+defaulting to 4000. It has to be between 500 and 10000, and a value without at least 4 seconds of
+headroom under the function timeout is refused by a precondition at plan time rather than timing
+the invocation out in production.
+
+A failed fetch is retried once inside the same invocation, only when the retry's own deadline still
+fits the budget, which covers the common case of a cold identity function that is warm by the
+second attempt. A fetch that fails both times still fails closed, unchanged.
+
+The authorizer function timeout goes from 5 to 10 seconds, so a fetch that runs to its own deadline
+and retries still leaves time to verify the signature. Both the function and its package change, so
+an apply replaces the deployed code.
+
 ## 2.26.0
 
 ### `staging-access-gate`: API key bearers can pass through on identity JWT routes **no plan change**

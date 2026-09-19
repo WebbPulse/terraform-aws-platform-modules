@@ -17,12 +17,14 @@ function renderConfig({
   signingPublicKeyPem = '',
   anonymousPathPrefixes = [],
   apiKeyPrefixes = [],
+  jwksFetchTimeoutMs = 4000,
 } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
     signing_public_key_pem: signingPublicKeyPem,
     anonymous_path_prefixes: anonymousPathPrefixes,
     api_key_prefixes: apiKeyPrefixes,
+    jwks_fetch_timeout_ms: jwksFetchTimeoutMs,
   });
 }
 

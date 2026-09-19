@@ -53,11 +53,16 @@ locals {
     for p in coalesce(var.identity_jwt.api_key_prefixes, []) : trimspace(p) if trimspace(p) != ""
   ] : []
 
+  identity_jwks_fetch_timeout_ms = var.identity_jwt != null ? coalesce(var.identity_jwt.jwks_fetch_timeout_ms, 4000) : 4000
+
+  authorizer_timeout_seconds = 10
+
   identity_jwt_config_json = jsonencode({
     route_keys              = local.identity_jwt_enabled ? local.identity_jwt_route_keys : []
     signing_public_key_pem  = tls_private_key.signing.public_key_pem
     anonymous_path_prefixes = local.identity_anonymous_path_prefixes
     api_key_prefixes        = local.identity_api_key_prefixes
+    jwks_fetch_timeout_ms   = local.identity_jwks_fetch_timeout_ms
   })
 
   identity_anonymous_path_prefixes = var.identity_anonymous_path_prefixes != null ? var.identity_anonymous_path_prefixes : (
