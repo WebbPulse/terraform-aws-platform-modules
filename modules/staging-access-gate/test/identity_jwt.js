@@ -6,7 +6,7 @@
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 const ssmMod = require('@aws-sdk/client-ssm');
-const { loadAuthorizer } = require('./package.js');
+const { loadAuthorizer, loadAuthorizerWithRawConfig } = require('./package.js');
 
 const ISSUER = 'https://api.staging.example.com/api/auth';
 const AUDIENCE = 'example-staging-api';
@@ -348,6 +348,113 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
     { isAuthorized: false },
     'with no exempt prefixes rendered, the well-known paths are gated as before',
   );
+
+  const API_KEY = 'wpk_live_abc123def456';
+
+  const keyed = loadAuthorizer({
+    routeKeys: ENFORCED,
+    signingPublicKeyPem: publicPem,
+    apiKeyPrefixes: ['wpk_'],
+  });
+
+  assert.deepStrictEqual(
+    keyed.apiKeyPrefixes(),
+    ['wpk_'],
+    'the API key prefixes come from the package',
+  );
+
+  keyed.resetJwksCache();
+  fetches = 0;
+  r = await keyed.handler(req(PROTECTED, API_KEY));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: true },
+    'an API key bearer on an enforced route is allowed through with no claims context',
+  );
+  assert.strictEqual(fetches, 0, 'a passed-through key never fetches the JWKS');
+
+  keyed.resetJwksCache();
+  fetches = 0;
+  r = await keyed.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(r.isAuthorized, true, 'a real JWT still verifies when prefixes are configured');
+  assert.strictEqual(
+    JSON.parse(r.context['jwt.claims']).sub,
+    'user-123',
+    'and it still arrives with its claims context',
+  );
+
+  keyed.resetJwksCache();
+  fetches = 0;
+  r = await keyed.handler(req(OPEN, API_KEY));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: true },
+    'a route outside the enforced keys is allowed as before, prefixes or not',
+  );
+  assert.strictEqual(fetches, 0, 'and it never reaches the token check');
+
+  keyed.resetJwksCache();
+  r = await keyed.handler(req(PROTECTED, 'wpq_not_a_configured_prefix'));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'a bearer matching no configured prefix and verifying as no JWT is denied',
+  );
+
+  keyed.resetJwksCache();
+  r = await keyed.handler(req(PROTECTED, null));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'a missing bearer is still denied on an enforced route with prefixes configured',
+  );
+
+  fresh();
+  r = await auth.handler(req(PROTECTED, API_KEY));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'with no prefixes configured, an API key bearer is denied as before',
+  );
+
+  keyed.resetJwksCache();
+  r = await keyed.handler(req(PROTECTED, API_KEY, { noGate: true }));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'a matching prefix does not get past the gate credential check',
+  );
+
+  keyed.resetJwksCache();
+  r = await keyed.handler({
+    ...req(PROTECTED, API_KEY),
+    cookies: gateCookies(signPolicy(now() - 5)),
+  });
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'an expired gate cookie denies a matching prefix too',
+  );
+
+  const oldPackage = loadAuthorizerWithRawConfig({
+    route_keys: [...ENFORCED].sort(),
+    signing_public_key_pem: publicPem,
+    anonymous_path_prefixes: [],
+  });
+  assert.deepStrictEqual(
+    oldPackage.apiKeyPrefixes(),
+    [],
+    'a config with no api_key_prefixes key reads as no prefixes',
+  );
+  oldPackage.resetJwksCache();
+  r = await oldPackage.handler(req(PROTECTED, API_KEY));
+  assert.deepStrictEqual(
+    r,
+    { isAuthorized: false },
+    'and such a package keeps failing closed on an API key bearer',
+  );
+
+  console.log('identity jwt api key passthrough tests passed');
 
   console.log('identity jwt authorizer tests passed');
 };
