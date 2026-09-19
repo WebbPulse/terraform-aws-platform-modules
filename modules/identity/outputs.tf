@@ -141,3 +141,38 @@ output "users_stream_policy_json" {
   description = "IAM policy document granting the four dynamodb stream read actions on the users table stream, null when users_stream_enabled is false. Already attached to identity_role_name when attach_role_policies is true; this output is for a consumer composing one inline policy out of several statements or attaching it to a role the module was not told about."
   value       = local.users_stream_policy_json
 }
+
+output "oauth_server_enabled" {
+  description = "Whether the OAuth 2.1 authorization server tables exist, echoed back so a consumer branching on the same switch reads it from one place."
+  value       = var.oauth_server_enabled
+}
+
+output "oauth_server_table_names" {
+  description = "Logical key to full table name for the three authorization server tables only, empty when oauth_server_enabled is false. They are also in table_names; this is the subset a product hands to OAuthServerStores without picking them out of the full map."
+  value       = local.oauth_server_table_names
+}
+
+output "consent_user_index_name" {
+  description = "Name of the oauth-consents index keyed by user_id, null when the server is off or the configured table carries no such index. DynamoConsentStore takes it as user_index and defaults to CONSENT_USER_INDEX, which is the same string; listing a user's grants queries it, so a consumer that overrides oauth_server_tables and drops the index leaves the consent page unable to answer."
+  value       = local.consent_user_index_name
+}
+
+output "api_keys_table_enabled" {
+  description = "Whether the api-keys table exists, echoed back."
+  value       = var.api_keys_table_enabled
+}
+
+output "api_keys_table_name" {
+  description = "Full name of the api-keys table, null when api_keys_table_enabled is false. Also in table_names under api_keys_table_key."
+  value       = local.api_keys_table_name
+}
+
+output "api_keys_user_index_name" {
+  description = "Name of the api-keys index keyed by user_id, null when the table is off or carries no such index. This is API_KEY_USER_INDEX in webbpulse.identity.api_keys, which listing and purging one user's keys queries by that constant rather than through the environment."
+  value       = local.api_keys_user_index_name
+}
+
+output "api_keys_tenant_index_name" {
+  description = "Name of the api-keys index keyed by tenant_id, null when the table is off or carries no such index. This is API_KEY_TENANT_INDEX, which a multi-tenant admin page listing every key in a workspace queries; without it that listing is a table scan."
+  value       = local.api_keys_tenant_index_name
+}
