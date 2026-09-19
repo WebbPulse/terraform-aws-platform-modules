@@ -11,13 +11,51 @@ locals {
 
   identity_jwt_enabled = var.identity_jwt != null
 
-  identity_jwt_create = local.identity_jwt_enabled && var.identity_jwt.authorizer_id == null
+  identity_jwt_mode = local.identity_jwt_enabled ? coalesce(var.identity_jwt.mode, "native") : null
 
-  identity_jwt_name = local.identity_jwt_create ? coalesce(var.identity_jwt.name, "${var.name}-identity-jwt") : null
+  identity_jwt_supplied = local.identity_jwt_enabled && var.identity_jwt.authorizer_id != null
+
+  identity_jwt_create = local.identity_jwt_enabled && !local.identity_jwt_supplied && local.identity_jwt_mode == "native"
+
+  identity_lambda_create = local.identity_jwt_enabled && !local.identity_jwt_supplied && local.identity_jwt_mode == "lambda"
+
+  identity_jwt_any_create = local.identity_jwt_create || local.identity_lambda_create
+
+  identity_jwt_name = local.identity_jwt_any_create ? coalesce(var.identity_jwt.name, "${var.name}-identity-jwt") : null
 
   identity_jwt_audiences = local.identity_jwt_create ? coalesce(var.identity_jwt.audiences, [var.identity_jwt.audience]) : null
 
-  identity_jwt_identity_sources = local.identity_jwt_create ? coalesce(var.identity_jwt.identity_sources, ["$request.header.Authorization"]) : null
+  identity_jwt_identity_sources = local.identity_jwt_any_create ? coalesce(var.identity_jwt.identity_sources, ["$request.header.Authorization"]) : null
+
+  identity_lambda_name = local.identity_lambda_create ? coalesce(var.identity_jwt.lambda_function_name, "${var.name}-identity-authorizer") : null
+
+  identity_lambda_log_group_name = local.identity_lambda_create ? "/aws/lambda/${local.identity_lambda_name}" : null
+
+  identity_lambda_timeout_seconds = 10
+
+  identity_lambda_result_ttl_seconds = local.identity_lambda_create ? var.identity_jwt.result_ttl_seconds : null
+
+  identity_jwks_fetch_timeout_ms = local.identity_jwt_enabled ? coalesce(var.identity_jwt.jwks_fetch_timeout_ms, 4000) : 4000
+
+  identity_api_key_prefixes = local.identity_jwt_enabled ? [
+    for p in coalesce(var.identity_jwt.api_key_prefixes, []) : trimspace(p) if trimspace(p) != ""
+  ] : []
+
+  identity_lambda_config_json = jsonencode({
+    route_keys            = local.identity_jwt_route_keys
+    api_key_prefixes      = local.identity_api_key_prefixes
+    jwks_fetch_timeout_ms = local.identity_jwks_fetch_timeout_ms
+  })
+
+  identity_lambda_environment = local.identity_lambda_create ? {
+    IDENTITY_ISSUER   = var.identity_jwt.issuer
+    IDENTITY_AUDIENCE = var.identity_jwt.audience
+
+    IDENTITY_JWKS_URL = coalesce(var.identity_jwt.jwks_url, "${var.identity_jwt.issuer}/.well-known/jwks.json")
+
+    IDENTITY_JWKS_TTL_SECONDS   = tostring(coalesce(var.identity_jwt.jwks_ttl_seconds, 300))
+    IDENTITY_CLOCK_SKEW_SECONDS = tostring(coalesce(var.identity_jwt.clock_skew_seconds, 60))
+  } : {}
 
   identity_jwt_route_keys = sort([
     for k, r in var.routes : k if coalesce(r.require_identity_jwt, false)
@@ -35,9 +73,11 @@ locals {
 
   all_routes = merge(local.default_route, var.routes)
 
+  identity_route_authorization_type = local.identity_jwt_mode == "lambda" ? "CUSTOM" : "JWT"
+
   route_identity_type = {
     for k, r in local.all_routes : k =>
-    coalesce(r.require_identity_jwt, false) && local.identity_jwt_enabled ? "JWT" : null
+    coalesce(r.require_identity_jwt, false) && local.identity_jwt_enabled ? local.identity_route_authorization_type : null
   }
 
   resolved_routes = {
