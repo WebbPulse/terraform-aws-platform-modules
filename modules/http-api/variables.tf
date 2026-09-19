@@ -470,6 +470,40 @@ variable "identity_jwt" {
                        required, because they are what the validations check the configuration
                        against, but nothing here reads them when this is set
 
+      mode     optional, "native" (the default) or "lambda".
+
+               native is API Gateway's own JWT authorizer: no function, no per request cost, and
+               the gateway refuses any bearer that is not a well formed JWT before the request
+               reaches anything of ours. That last property is the problem it cannot solve, because
+               an agent API key is not a JWT.
+
+               lambda builds a REQUEST authorizer on this API from the same source the staging
+               access gate runs, so the admission a product sees in staging is the admission it
+               gets in production: the same RS256 verification against the issuer's JWKS, the same
+               cached key set and fetch timeout, the same claims context, and api_key_prefixes
+               bearers passed through for the function to verify itself. It has no gate cookie and
+               no origin secret; the token is the only admission.
+
+      api_key_prefixes   optional list of bearer token prefixes, for example ["wpk_"]. A bearer on
+                         an enforced route starting with one of these is allowed through with no
+                         claims context, so the function must verify the key itself. Empty, the
+                         default, denies any non-JWT bearer. lambda mode only: native mode cannot
+                         honour it, and the module refuses the combination rather than accepting a
+                         setting that would silently do nothing
+      result_ttl_seconds optional, how long API Gateway caches an authorizer result, keyed by the
+                         identity sources, so repeated calls with one token cost one invocation.
+                         Default 300, 0 disables the cache. lambda mode only
+      jwks_url              optional override of the derived JWKS URL. lambda mode only
+      jwks_ttl_seconds      optional, how long a fetched key set is reused. Default 300. lambda only
+      clock_skew_seconds    optional leeway on exp and nbf. Default 60. lambda mode only
+      jwks_fetch_timeout_ms optional, how long one JWKS fetch may take before it is aborted.
+                            Default 4000, which has to cover a cold identity function. Between 500
+                            and 10000, and comfortably below the 10 second function timeout.
+                            lambda mode only
+      lambda_function_name       optional name for the authorizer function, defaults to
+                                 "<var.name>-identity-authorizer". lambda mode only
+      lambda_log_retention_days  optional retention on the authorizer's log group. Default 14
+
     Set in production; leave null in staging, where the access gate's Lambda authorizer enforces the
     same token on the routes named by the identity_jwt_route_keys output.
   EOT
@@ -481,6 +515,19 @@ variable "identity_jwt" {
     audiences        = optional(list(string))
     identity_sources = optional(list(string))
     authorizer_id    = optional(string)
+
+    mode = optional(string)
+
+    api_key_prefixes   = optional(list(string), [])
+    result_ttl_seconds = optional(number, 300)
+
+    jwks_url              = optional(string)
+    jwks_ttl_seconds      = optional(number)
+    clock_skew_seconds    = optional(number)
+    jwks_fetch_timeout_ms = optional(number)
+
+    lambda_function_name      = optional(string)
+    lambda_log_retention_days = optional(number, 14)
   })
   default = null
 
@@ -507,6 +554,51 @@ variable "identity_jwt" {
   validation {
     condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.identity_sources, null), ["x"])) > 0
     error_message = "identity_jwt.identity_sources must be null or a non-empty list; an empty list makes the authorizer accept a request carrying no token at all."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || contains(["native", "lambda"], coalesce(try(var.identity_jwt.mode, null), "native"))
+    error_message = "identity_jwt.mode must be native or lambda."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.mode, null), "native") == "lambda" || length(coalesce(try(var.identity_jwt.api_key_prefixes, null), [])) == 0
+    error_message = "identity_jwt.api_key_prefixes needs mode = \"lambda\". API Gateway's native JWT authorizer rejects any bearer that is not a JWT before the request reaches anything of ours, so the prefixes would silently admit nothing and agent keys would keep getting 401."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || alltrue([for p in coalesce(try(var.identity_jwt.api_key_prefixes, null), []) : trimspace(p) != ""])
+    error_message = "identity_jwt.api_key_prefixes must not contain an empty prefix: an empty prefix matches every bearer token and lets any string past the token check."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || alltrue([for p in coalesce(try(var.identity_jwt.api_key_prefixes, null), []) : !startswith(lower(trimspace(p)), "ey")])
+    error_message = "identity_jwt.api_key_prefixes must not start with ey: that is the base64url of a JWT header, so such a prefix would pass real access tokens through unverified."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || (coalesce(try(var.identity_jwt.result_ttl_seconds, null), 300) >= 0 && coalesce(try(var.identity_jwt.result_ttl_seconds, null), 300) <= 3600)
+    error_message = "identity_jwt.result_ttl_seconds must be between 0 and 3600, the range API Gateway accepts for an authorizer result cache."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.jwks_ttl_seconds, null), 300) > 0
+    error_message = "identity_jwt.jwks_ttl_seconds must be greater than zero."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.clock_skew_seconds, null), 60) >= 0
+    error_message = "identity_jwt.clock_skew_seconds must not be negative."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || (coalesce(try(var.identity_jwt.jwks_fetch_timeout_ms, null), 4000) >= 500 && coalesce(try(var.identity_jwt.jwks_fetch_timeout_ms, null), 4000) <= 10000)
+    error_message = "identity_jwt.jwks_fetch_timeout_ms must be between 500 and 10000. Below 500 a cold identity function cannot serve the key set in time and the first authorized call after the TTL expires is denied; above 10000 the fetch outlives the authorizer function itself."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.mode, null), "native") == "lambda" || try(var.identity_jwt.jwks_url, null) == null
+    error_message = "identity_jwt.jwks_url needs mode = \"lambda\". The native JWT authorizer derives the key set from the issuer's discovery document and has nowhere to put an override."
   }
 }
 

@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SOURCE = path.join(__dirname, '..', 'lambda', 'authorizer', 'index.js');
+const SHARED = path.join(__dirname, '..', '..', '..', 'shared', 'identity-authorizer', 'identity.js');
 const ROOT = path.join(__dirname, '.build');
 
 let counter = 0;
@@ -37,6 +38,7 @@ function loadAuthorizer(config) {
   const dir = path.join(ROOT, `authorizer-${counter}`);
   fs.mkdirSync(dir, { recursive: true });
   fs.copyFileSync(SOURCE, path.join(dir, 'index.js'));
+  fs.copyFileSync(SHARED, path.join(dir, 'identity.js'));
   fs.writeFileSync(path.join(dir, 'identity_jwt_config.json'), renderConfig(config));
   const entry = path.join(dir, 'index.js');
   delete require.cache[entry];
@@ -49,6 +51,7 @@ function loadAuthorizerWithRawConfig(config) {
   const dir = path.join(ROOT, `authorizer-${counter}`);
   fs.mkdirSync(dir, { recursive: true });
   fs.copyFileSync(SOURCE, path.join(dir, 'index.js'));
+  fs.copyFileSync(SHARED, path.join(dir, 'identity.js'));
   fs.writeFileSync(path.join(dir, 'identity_jwt_config.json'), JSON.stringify(config));
   const entry = path.join(dir, 'index.js');
   delete require.cache[entry];
@@ -61,6 +64,7 @@ function loadAuthorizerWithoutConfig() {
   const dir = path.join(ROOT, `authorizer-${counter}`);
   fs.mkdirSync(dir, { recursive: true });
   fs.copyFileSync(SOURCE, path.join(dir, 'index.js'));
+  fs.copyFileSync(SHARED, path.join(dir, 'identity.js'));
   const entry = path.join(dir, 'index.js');
   delete require.cache[entry];
   return require(entry);
