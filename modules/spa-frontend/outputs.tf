@@ -47,3 +47,13 @@ output "frontend_url" {
   description = "Public URL of the site: https:// plus the first alias, or the CloudFront hostname without aliases."
   value       = local.frontend_url
 }
+
+output "viewer_request_function_arn" {
+  description = "ARN of the viewer-request function in force on the default behavior: the one this module built from viewer_request_function, the one passed in, or the gate's when access_gate is set."
+  value       = local.viewer_request_function_arn
+}
+
+output "viewer_request_handler_js" {
+  description = "The rendered appHandler JavaScript when viewer_request_function is set, for passing to a staging-access-gate as viewer_request_handler_js so the gate wraps it. Null otherwise."
+  value       = local.viewer_request_handler_js
+}

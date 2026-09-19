@@ -21,7 +21,11 @@ locals {
     var.index_cache_policies != null ? var.index_cache_policies.response_headers_policy_id : var.response_headers_policy_id
   )
 
-  viewer_request_function_arn = local.gate_enabled ? var.access_gate.viewer_request_function_arn : var.viewer_request_function_arn
+  viewer_request_function_arn = (
+    local.gate_enabled ? var.access_gate.viewer_request_function_arn :
+    var.viewer_request_function != null ? aws_cloudfront_function.viewer_request[0].arn :
+    var.viewer_request_function_arn
+  )
 
   spa_shell_path = "/${var.default_root_object}"
 

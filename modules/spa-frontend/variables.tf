@@ -370,3 +370,32 @@ variable "distribution_tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "viewer_request_function" {
+  description = "Build the viewer-request CloudFront Function in this module instead of taking one by ARN. canonical_host picks which hostname wins: apex redirects www.<domain> to <domain>, www redirects <domain> to www.<domain>, and none writes no redirect at all and leaves only the SPA URI rewrite. domain is the registrable domain without a www prefix. Null keeps today's behaviour, where the function is the caller's and arrives through viewer_request_function_arn. Setting both is refused."
+  type = object({
+    domain         = string
+    canonical_host = optional(string, "apex")
+    name           = optional(string)
+    comment        = optional(string)
+    publish        = optional(bool, true)
+    runtime        = optional(string, "cloudfront-js-2.0")
+  })
+  default  = null
+  nullable = true
+
+  validation {
+    condition     = var.viewer_request_function == null || contains(["apex", "www", "none"], coalesce(try(var.viewer_request_function.canonical_host, null), "apex"))
+    error_message = "viewer_request_function.canonical_host must be apex, www or none."
+  }
+
+  validation {
+    condition     = var.viewer_request_function == null || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.viewer_request_function.domain))
+    error_message = "viewer_request_function.domain must be a bare domain name."
+  }
+
+  validation {
+    condition     = var.viewer_request_function == null || !startswith(var.viewer_request_function.domain, "www.")
+    error_message = "viewer_request_function.domain is the registrable domain without a www prefix; canonical_host decides which side of it is canonical."
+  }
+}

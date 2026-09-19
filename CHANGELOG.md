@@ -116,6 +116,55 @@ New outputs: `oauth_server_enabled`, `oauth_server_table_names`, `consent_user_i
 `api_keys_tenant_index_name`. Both switches default off, so a consumer that says nothing plans the
 same ten tables it planned before.
 
+### `transaction-search`: the X-Ray Transaction Search wiring becomes a module **new module**
+
+Three products carried byte-identical `transaction_search.tf`: the CloudWatch Logs resource policy
+X-Ray puts span events under, the `CloudWatchLogs` trace segment destination, the `Default`
+indexing rule, and the `adopt_spans_log_group` bootstrap dance around the reserved `aws/spans`
+group. All of it moves here.
+
+`adopt_spans_log_group` defaults to false, which is the safe value for a fresh account: `aws/spans`
+is reserved, X-Ray creates it on the first span export, and an `import` block whose target does not
+exist is a plan time error. The partition, account and region now come from the provider rather
+than from hardcoded strings and a `var.aws_region`.
+
+An adopting product's plan is empty once the four `moved` blocks in the module README are in place,
+one per resource, because every address changes. CarModPicker additionally drops the
+`moved` block it carried for the pre-`for_each` spans group; that move is already applied in its
+state. The module pins aws provider >= 6.46, above the repository floor, for the two X-Ray
+resources.
+
+### `ses-identity`: the transactional SES setup becomes a module **new module**
+
+CarModPicker, Standupless and Portfolio each hand-rolled a configuration set, a domain identity with
+Easy DKIM, a custom MAIL FROM, feedback attributes and the `ses_verified_recipients` loop, with
+Portfolio additionally writing DKIM and DMARC records and a send grant. The union is one module.
+
+The module authors resources only. It has no input that requests SES sandbox removal or production
+access, and recipient identities are created from the explicit `verified_recipients` list and from
+nothing else. `manage_account_vdm_attributes` and `vdm_options_enabled` are separate because the
+first is account scoped and the second is per configuration set.
+
+An adopting product's plan is empty for the identity, MAIL FROM, feedback and recipient resources
+given the `moved` blocks in the module README. It is **not** empty for tags: the originals wrote a
+different `Name` per resource and the module writes one `tags` map across the set and the identity,
+so expect a tag-only diff on those two. Portfolio's DKIM, DMARC and IAM resources stay in the
+product, since they are written through its `aws.dns` provider alias.
+
+### `spa-frontend`: the viewer-request function can be built here **no plan change**
+
+`viewer_request_function` takes `{ domain, canonical_host }` and renders the canonical host redirect
+plus the SPA URI rewrite that CarModPicker and Standupless had each copied into their own
+`cloudfront_functions/` directory. `canonical_host` is `apex`, `www` or `none`. The existing
+`viewer_request_function_arn` keeps working unchanged and the two are mutually exclusive, refused by
+a precondition. A consumer that does not set `viewer_request_function` plans no change.
+
+A product adopting it does **not** get an empty plan: the executable logic is byte-identical to what
+both deploy today, but the shared template's comments are worded once for both redirect directions
+rather than per product, and `code` is a tracked attribute, so the apply republishes the function
+with identical behaviour. The new `viewer_request_handler_js` output feeds a staging-access-gate's
+input of the same name so a gated distribution keeps wrapping the application handler.
+
 ## 2.26.1
 
 ### `staging-access-gate`: the authorizer covers a cold JWKS fetch **plan change: authorizer function and package**
