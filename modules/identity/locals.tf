@@ -50,7 +50,9 @@ locals {
 
   api_keys_tables = var.api_keys_table_enabled ? { (var.api_keys_table_key) = var.api_keys_table } : {}
 
-  optional_tables = merge(local.oauth_server_tables, local.api_keys_tables)
+  share_tokens_tables = var.share_tokens_table_enabled ? { (var.share_tokens_table_key) = var.share_tokens_table } : {}
+
+  optional_tables = merge(local.oauth_server_tables, local.api_keys_tables, local.share_tokens_tables)
 
   all_tables = merge(var.tables, local.optional_tables)
 
@@ -162,6 +164,16 @@ locals {
   api_keys_tenant_index_name = try(
     one([
       for index in local.api_keys_tables[var.api_keys_table_key].global_secondary_indexes :
+      index.name if index.hash_key == "tenant_id"
+    ]),
+    null,
+  )
+
+  share_tokens_table_name = var.share_tokens_table_enabled ? local.table_names[var.share_tokens_table_key] : null
+
+  share_tokens_tenant_index_name = try(
+    one([
+      for index in local.share_tokens_tables[var.share_tokens_table_key].global_secondary_indexes :
       index.name if index.hash_key == "tenant_id"
     ]),
     null,
