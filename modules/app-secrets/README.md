@@ -121,7 +121,9 @@ Each entry in `secrets`:
 - `version` is the write-only counter, and it is the only thing that triggers a write. Editing a
   `value` or a `json` entry without bumping `version` changes nothing in AWS, and the plan is empty.
   Bumping `version` rewrites that secret, which for a `generate` secret means rotating it, since the
-  ephemeral generator produces a fresh value on every run.
+  ephemeral generator produces a fresh value on every run. Adding a `json_generate` entry to a secret
+  that already has a version is the same edit: the new key is not minted until `version` is bumped in
+  the same change, and until then the application reads a blob without it.
 - One read policy per module instance. A second role reading a different subset takes
   `policy_resources` and writes its own statement, or uses a second instance of the module.
 - No rotation, no resource policy and no cross-region replication. Cross-account reads need
