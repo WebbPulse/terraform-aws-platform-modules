@@ -55,6 +55,11 @@ run "the_share_tokens_table_is_off_by_default" {
   }
 
   assert {
+    condition     = output.share_tokens_target_index_name == null
+    error_message = "share_tokens_target_index_name must be null while the table is off: no index exists to name when no table does."
+  }
+
+  assert {
     condition     = !contains(keys(local.table_names), "share-tokens")
     error_message = "No share-tokens key may reach table_names while the switch is off."
   }
@@ -93,8 +98,8 @@ run "turning_the_switch_on_adds_exactly_the_one_package_table" {
   }
 
   assert {
-    condition     = length(local.all_tables["share-tokens"].attributes) == 3
-    error_message = "DynamoDB wants an attribute definition for every key the table and its index use: token_hash, tenant_id and created_at."
+    condition     = length(local.all_tables["share-tokens"].attributes) == 4
+    error_message = "DynamoDB wants an attribute definition for every key the table and its indexes use: token_hash, tenant_id, created_at and target_key."
   }
 
   assert {
@@ -103,18 +108,42 @@ run "turning_the_switch_on_adds_exactly_the_one_package_table" {
   }
 
   assert {
-    condition     = one(local.all_tables["share-tokens"].global_secondary_indexes).name == "tenant_id-created_at-index"
-    error_message = "list_for_tenant queries SHARE_TOKEN_TENANT_INDEX, which is tenant_id-created_at-index."
+    condition     = length(local.all_tables["share-tokens"].global_secondary_indexes) == 2
+    error_message = "The table carries both package indexes: the tenant listing and the per target lookup."
   }
 
   assert {
-    condition     = one(local.all_tables["share-tokens"].global_secondary_indexes).range_key == "created_at"
+    condition = [for g in local.all_tables["share-tokens"].global_secondary_indexes : g.name] == [
+      "tenant_id-created_at-index",
+      "tenant_id-target_key-index",
+    ]
+    error_message = "Both index names are a contract with webbpulse.identity.share_tokens, which reads them as SHARE_TOKEN_TENANT_INDEX and SHARE_TOKEN_TARGET_INDEX."
+  }
+
+  assert {
+    condition     = alltrue([for g in local.all_tables["share-tokens"].global_secondary_indexes : g.hash_key == "tenant_id"])
+    error_message = "Both indexes partition on tenant_id, so one tenant's shares stay in one partition and neither question crosses a tenant."
+  }
+
+  assert {
+    condition = one([
+      for g in local.all_tables["share-tokens"].global_secondary_indexes :
+      g.range_key if g.name == "tenant_id-created_at-index"
+    ]) == "created_at"
     error_message = "The tenant index ranges on created_at so a settings page lists one tenant's shares newest last without sorting in the function."
   }
 
   assert {
-    condition     = one(local.all_tables["share-tokens"].global_secondary_indexes).projection_type == "ALL"
-    error_message = "The tenant listing renders the capability of each share, so a narrower projection would make every listed row a second read."
+    condition = one([
+      for g in local.all_tables["share-tokens"].global_secondary_indexes :
+      g.range_key if g.name == "tenant_id-target_key-index"
+    ]) == "target_key"
+    error_message = "The target index ranges on target_key so every share on one target is a query, not a read of the whole tenant."
+  }
+
+  assert {
+    condition     = alltrue([for g in local.all_tables["share-tokens"].global_secondary_indexes : g.projection_type == "ALL"])
+    error_message = "Both listings render the capability of each share, so a narrower projection would make every listed row a second read."
   }
 
   assert {
@@ -131,6 +160,110 @@ run "turning_the_switch_on_adds_exactly_the_one_package_table" {
     condition     = output.share_tokens_tenant_index_name == "tenant_id-created_at-index"
     error_message = "The tenant index name must be exported: the package reads it as a constant rather than from the environment, so a consumer renaming it has to pass it through."
   }
+
+  assert {
+    condition     = output.share_tokens_target_index_name == "tenant_id-target_key-index"
+    error_message = "The target index name must be exported alongside the tenant one, and the two must not collapse into each other now that both partition on tenant_id."
+  }
+}
+
+run "both_indexes_reach_the_table_the_resource_is_built_from" {
+  command = plan
+
+  variables {
+    share_tokens_table_enabled = true
+  }
+
+  assert {
+    condition     = contains(keys(aws_dynamodb_table.this), "share-tokens")
+    error_message = "The share-tokens table must be planned, since every index assertion below is about the map entry the resource is built from."
+  }
+
+  assert {
+    condition = alltrue([
+      for g in local.all_tables["share-tokens"].global_secondary_indexes :
+      contains([for a in local.all_tables["share-tokens"].attributes : a.name], g.hash_key)
+      && contains([for a in local.all_tables["share-tokens"].attributes : a.name], g.range_key)
+    ])
+    error_message = "Every index key must have an attribute definition, or DynamoDB refuses the table at apply time rather than at plan time."
+  }
+
+  assert {
+    condition     = contains([for a in local.all_tables["share-tokens"].attributes : a.name], "target_key")
+    error_message = "target_key must join the attribute definitions, or the index that ranges on it cannot be created."
+  }
+
+  assert {
+    condition     = length(distinct([for g in local.all_tables["share-tokens"].global_secondary_indexes : g.name])) == 2
+    error_message = "The two indexes must carry distinct names, or DynamoDB refuses the table."
+  }
+}
+
+run "a_consumer_keeping_only_the_tenant_index_still_resolves_both_outputs" {
+  command = plan
+
+  variables {
+    share_tokens_table_enabled = true
+
+    share_tokens_table = {
+      attributes = [
+        { name = "token_hash", type = "S" },
+        { name = "tenant_id", type = "S" },
+        { name = "created_at", type = "S" },
+      ]
+      hash_key = "token_hash"
+      global_secondary_indexes = [
+        {
+          name      = "tenant_id-created_at-index"
+          hash_key  = "tenant_id"
+          range_key = "created_at"
+        },
+      ]
+      ttl_attribute = "expires_at"
+    }
+  }
+
+  assert {
+    condition     = output.share_tokens_tenant_index_name == "tenant_id-created_at-index"
+    error_message = "A consumer passing its own table with only the tenant index must still get that index name back, so the two indexes are told apart by range key and not by there being one of them."
+  }
+
+  assert {
+    condition     = output.share_tokens_target_index_name == null
+    error_message = "The target index name must be null for a table that carries no such index, rather than naming an index no query can use."
+  }
+}
+
+run "a_target_index_key_with_no_attribute_definition_is_refused" {
+  command = plan
+
+  variables {
+    share_tokens_table_enabled = true
+
+    share_tokens_table = {
+      attributes = [
+        { name = "token_hash", type = "S" },
+        { name = "tenant_id", type = "S" },
+        { name = "created_at", type = "S" },
+      ]
+      hash_key = "token_hash"
+      global_secondary_indexes = [
+        {
+          name      = "tenant_id-created_at-index"
+          hash_key  = "tenant_id"
+          range_key = "created_at"
+        },
+        {
+          name      = "tenant_id-target_key-index"
+          hash_key  = "tenant_id"
+          range_key = "target_key"
+        },
+      ]
+      ttl_attribute = "expires_at"
+    }
+  }
+
+  expect_failures = [var.share_tokens_table]
 }
 
 run "the_share_tokens_table_joins_the_role_grant" {
@@ -168,6 +301,11 @@ run "no_identity_environment_variable_follows_the_table" {
   assert {
     condition     = !contains(keys(local.identity_environment), "IDENTITY_SHARE_TOKEN_TENANT_INDEX")
     error_message = "The package reads the tenant index as a constant, so adding an environment variable it ignores would read as configuration that does nothing."
+  }
+
+  assert {
+    condition     = !contains(keys(local.identity_environment), "IDENTITY_SHARE_TOKEN_TARGET_INDEX")
+    error_message = "The target index is read as a constant too, so it gets no environment variable either."
   }
 }
 

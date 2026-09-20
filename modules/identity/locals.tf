@@ -174,7 +174,15 @@ locals {
   share_tokens_tenant_index_name = try(
     one([
       for index in local.share_tokens_tables[var.share_tokens_table_key].global_secondary_indexes :
-      index.name if index.hash_key == "tenant_id"
+      index.name if index.hash_key == "tenant_id" && index.range_key == "created_at"
+    ]),
+    null,
+  )
+
+  share_tokens_target_index_name = try(
+    one([
+      for index in local.share_tokens_tables[var.share_tokens_table_key].global_secondary_indexes :
+      index.name if index.hash_key == "tenant_id" && index.range_key == "target_key"
     ]),
     null,
   )

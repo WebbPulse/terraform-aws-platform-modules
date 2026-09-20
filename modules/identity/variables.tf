@@ -1106,8 +1106,9 @@ variable "share_tokens_table" {
     The `share-tokens` table, in the same object shape as `tables`, created only when
     `share_tokens_table_enabled` is true. The default is
     `webbpulse.identity.share_tokens.SHARE_TOKEN_TABLE` written out: hash key `token_hash`, a
-    `tenant_id-created_at-index` GSI listing one tenant's shares newest last, and a TTL on
-    `expires_at`.
+    `tenant_id-created_at-index` GSI listing one tenant's shares newest last, a
+    `tenant_id-target_key-index` GSI answering "every share token on this target" without scanning
+    the tenant, and a TTL on `expires_at`.
 
     A TTL, unlike `api-keys`. A share is a link a person hands out and forgets, so the table would
     otherwise grow without bound, and nobody is served by an expired share staying visible. Expiry
@@ -1139,6 +1140,7 @@ variable "share_tokens_table" {
       { name = "token_hash", type = "S" },
       { name = "tenant_id", type = "S" },
       { name = "created_at", type = "S" },
+      { name = "target_key", type = "S" },
     ]
     hash_key = "token_hash"
     global_secondary_indexes = [
@@ -1146,6 +1148,11 @@ variable "share_tokens_table" {
         name      = "tenant_id-created_at-index"
         hash_key  = "tenant_id"
         range_key = "created_at"
+      },
+      {
+        name      = "tenant_id-target_key-index"
+        hash_key  = "tenant_id"
+        range_key = "target_key"
       },
     ]
     ttl_attribute = "expires_at"
