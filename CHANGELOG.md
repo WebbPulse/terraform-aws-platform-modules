@@ -7,6 +7,34 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `identity`: a target index on the share token table **no plan change**
+
+The `share-tokens` table carried one index, `tenant_id-created_at-index`, which answers "every
+share in this workspace, newest last". Products also ask the narrower question, "every share token
+on this target", for a page showing what it has already shared and for revoking the lot when the
+target is deleted. Neither the `token_hash` partition nor the tenant index answers it: the tenant
+index would read every share the workspace ever minted and throw most of them away, which is a
+scan in all but name once a workspace has shared a few hundred things.
+
+The default `share_tokens_table` adds a second GSI, `tenant_id-target_key-index`, hashed on
+`tenant_id` and ranged on `target_key`, projecting `ALL` like the tenant index, plus the
+`target_key` attribute definition DynamoDB requires for it. Both names are the contract with
+`webbpulse.identity.share_tokens`, which reads them as `SHARE_TOKEN_TENANT_INDEX` and
+`SHARE_TOKEN_TARGET_INDEX` rather than from the environment. `target_key` is opaque to the package,
+so one table serves an issue tracker's share link, an album's and a report's alike.
+
+A new `share_tokens_target_index_name` output names it, null when the switch is off or a consumer
+passed a table without that index. `share_tokens_tenant_index_name` now tells the two apart by
+range key: both indexes partition on `tenant_id`, so a lookup by hash key alone would have stopped
+resolving either.
+
+A workspace with `share_tokens_table_enabled = false` plans no change at all, since nothing outside
+that table's default moved. A workspace with it on gets an in place update on the one table, adding
+the index and its attribute definition. DynamoDB backfills a new GSI online, so the table stays
+readable and writable throughout, and the index answers queries once its backfill finishes.
+
 ## 2.27.1
 
 ### `identity`: an optional table can be named in `additional_table_grants` **no plan change**

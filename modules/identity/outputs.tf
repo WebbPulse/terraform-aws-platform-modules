@@ -188,6 +188,11 @@ output "share_tokens_table_name" {
 }
 
 output "share_tokens_tenant_index_name" {
-  description = "Name of the share-tokens index keyed by tenant_id, null when the table is off or carries no such index. This is SHARE_TOKEN_TENANT_INDEX in webbpulse.identity.share_tokens, which listing or purging one tenant's shares queries by that constant rather than through the environment; the token_hash partition cannot answer that listing on its own."
+  description = "Name of the share-tokens index keyed by tenant_id and ranged on created_at, null when the table is off or carries no such index. This is SHARE_TOKEN_TENANT_INDEX in webbpulse.identity.share_tokens, which listing or purging one tenant's shares queries by that constant rather than through the environment; the token_hash partition cannot answer that listing on its own."
   value       = local.share_tokens_tenant_index_name
+}
+
+output "share_tokens_target_index_name" {
+  description = "Name of the share-tokens index keyed by tenant_id and ranged on target_key, null when the table is off or carries no such index. This is SHARE_TOKEN_TARGET_INDEX in webbpulse.identity.share_tokens, which answers every share token on one target by that constant rather than through the environment; the tenant index would make that question a scan of the tenant's shares."
+  value       = local.share_tokens_target_index_name
 }

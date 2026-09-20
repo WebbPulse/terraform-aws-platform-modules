@@ -75,10 +75,13 @@ opaque to the package, so the one table serves an issue tracker's share link, an
 report's alike. Like an API key it is stored only as a SHA-256 hash with no clear text prefix, so
 a leaked table authenticates as nobody. Unlike an API key it carries a TTL on `expires_at`: a
 share is a link a person hands out and forgets, and the table would otherwise grow without bound.
+The second index, `tenant_id-target_key-index`, answers "every share token on this target", which
+a page showing what it has already shared asks and neither the `token_hash` partition nor the
+tenant index can answer without reading every share in the tenant.
 
 | Logical key | Hash key | Index | TTL |
 | --- | --- | --- | --- |
-| `share-tokens` | `token_hash` | `tenant_id-created_at-index` | `expires_at` |
+| `share-tokens` | `token_hash` | `tenant_id-created_at-index`, `tenant_id-target_key-index` | `expires_at` |
 
 Hosting an MCP server is both halves, the tables here and the router in the product:
 
@@ -163,7 +166,7 @@ Land the tables first and add `oauth_server_mcp_resource_url` once the compositi
 | `api_keys_table` | The `api-keys` table, in the same object shape as one `tables` entry. | the package table with both indexes |
 | `api_keys_table_key` | Logical key the `api-keys` table is created under. | `"api-keys"` |
 | `share_tokens_table_enabled` | Create the `share-tokens` table. Independent of the other two switches. | `false` |
-| `share_tokens_table` | The `share-tokens` table, in the same object shape as one `tables` entry. | the package table with the tenant index and a TTL |
+| `share_tokens_table` | The `share-tokens` table, in the same object shape as one `tables` entry. | the package table with both indexes and a TTL |
 | `share_tokens_table_key` | Logical key the `share-tokens` table is created under. | `"share-tokens"` |
 
 Object shapes for the two map inputs:
@@ -231,7 +234,8 @@ additional_table_grants = map(object({
 | `api_keys_tenant_index_name` | Name of the `api-keys` index keyed by `tenant_id`, which is `API_KEY_TENANT_INDEX`. Null when the switch is off. |
 | `share_tokens_table_enabled` | Whether the `share-tokens` table exists, echoed back. |
 | `share_tokens_table_name` | Full name of the `share-tokens` table, null when the switch is off. |
-| `share_tokens_tenant_index_name` | Name of the `share-tokens` index keyed by `tenant_id`, which is `SHARE_TOKEN_TENANT_INDEX`. Null when the switch is off. |
+| `share_tokens_tenant_index_name` | Name of the `share-tokens` index keyed by `tenant_id` and ranged on `created_at`, which is `SHARE_TOKEN_TENANT_INDEX`. Null when the switch is off. |
+| `share_tokens_target_index_name` | Name of the `share-tokens` index keyed by `tenant_id` and ranged on `target_key`, which is `SHARE_TOKEN_TARGET_INDEX`. Null when the switch is off. |
 
 ## Purging identity rows when a user is deleted
 
@@ -388,8 +392,15 @@ from the same merge it already does.
   their tenant. The `wps_` and `wpk_` prefixes are what route a presented bearer value to the right
   verifier without parsing it, so a product that merged the tables would be deciding authority by a
   stored attribute it also has to trust.
-- Neither `api-keys` index name is in `identity_environment`, and neither is the `share-tokens`
-  tenant index, because the package reads no environment variable
+- `share-tokens` carries `tenant_id-target_key-index` beside `tenant_id-created_at-index`. Both
+  partition on `tenant_id`, so a tenant's shares stay one partition, and the range key is what
+  separates them: `created_at` orders a settings page listing newest last, while `target_key`
+  gathers every share on one target under a prefix. Asking the target question through the tenant
+  index would read every share in the tenant and discard most of them, which is a scan in all but
+  name once a workspace has shared a few hundred things. `target_key` is opaque to the package, so
+  a product composes it however it identifies a target.
+- Neither `api-keys` index name is in `identity_environment`, and neither `share-tokens` index name
+  is either, because the package reads no environment variable
   for them. `IDENTITY_REFRESH_USER_INDEX` is the one index whose name the package does look up that
   way, and adding variables the package ignores would read as configuration that does nothing.
 - One authorizer per module instance. A product needing several on the same API creates the extra
