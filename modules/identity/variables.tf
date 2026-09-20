@@ -587,10 +587,18 @@ variable "additional_table_grants" {
   validation {
     condition = alltrue(flatten([
       for grant in var.additional_table_grants : [
-        for table in grant.tables : contains(keys(var.tables), table)
+        for table in grant.tables : contains(
+          concat(
+            keys(var.tables),
+            var.oauth_server_enabled ? keys(var.oauth_server_tables) : [],
+            var.api_keys_table_enabled ? [var.api_keys_table_key] : [],
+            var.share_tokens_table_enabled ? [var.share_tokens_table_key] : [],
+          ),
+          table,
+        )
       ]
     ]))
-    error_message = "Every table named in additional_table_grants must be a key of var.tables. Only the tables this module creates can be granted here, and a name that is not one of them would silently grant nothing."
+    error_message = "Every table named in additional_table_grants must be a table this module creates: a key of var.tables, or an optional table whose flag is on. A name that is not one of them would silently grant nothing."
   }
 
   validation {

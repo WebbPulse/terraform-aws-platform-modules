@@ -343,8 +343,11 @@ from the same merge it already does.
 - `identity_environment` carries no product strings (`IDENTITY_ENVIRONMENT`, `IDENTITY_RP_NAME`,
   `IDENTITY_PRODUCT_NAME`, `IDENTITY_SUPPORT_EMAIL`, `IDENTITY_FRONTEND_BASE_URL`); merge it first
   so a product override wins.
-- Every key named in an `additional_table_grants` entry's `tables` must be a key of `tables`, checked
-  at plan time.
+- Every key named in an `additional_table_grants` entry's `tables` must be a table this module
+  creates, checked at plan time: a key of `tables`, or an optional table whose flag is on
+  (`api_keys_table_key` under `api_keys_table_enabled`, `share_tokens_table_key` under
+  `share_tokens_table_enabled`, the `oauth_server_tables` keys under `oauth_server_enabled`).
+  Naming an optional table whose flag is off is refused, since the table would not exist to grant.
 - `oauth-states` and `oauth-links` are not the authorization server's tables. They are the social
   login side, where this package is an OAuth client against Google and GitHub and stores the CSRF
   state and the provider subject to user mapping. The server side is `oauth_server_enabled`, and a
