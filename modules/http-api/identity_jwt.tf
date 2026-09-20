@@ -37,6 +37,7 @@ resource "aws_apigatewayv2_route" "identity_jwt" {
     each.value.authorizer_id,
     var.identity_jwt.authorizer_id,
     one(aws_apigatewayv2_authorizer.identity_jwt[*].id),
+    one(aws_apigatewayv2_authorizer.identity_lambda[*].id),
   )
 
   authorization_scopes = each.value.authorization_scopes

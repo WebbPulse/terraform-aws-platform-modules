@@ -34,6 +34,27 @@ module "api" {
 }
 ```
 
+## Admitting agent API keys
+
+Products issue agent keys with their own prefix, for example `wpk_`, and verify them in process.
+Those bearers are not JWTs, so the native authorizer 401s them at the gateway. Switch the marked
+routes to this module's Lambda authorizer to let them through:
+
+```hcl
+identity_jwt = {
+  issuer   = "https://api.example.com/api/auth"
+  audience = "example-production-api"
+
+  mode             = "lambda"
+  api_key_prefixes = ["wpk_"]
+}
+```
+
+Nothing else changes. The routes already marked `require_identity_jwt` keep their marking, the
+authorizer invoke permission is created by this module, and the backend sees the same
+`authorizer.jwt.claims` for a token as it did under native mode. A bearer starting with a listed
+prefix arrives with no claims, which is the backend's signal to verify the key itself.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -61,7 +82,7 @@ module "api" {
 | `dns_record_enabled` | Plan time known override for whether the alias record is written; null derives it from `zone_id` | `null` |
 | `domain_name_tags` | Extra tags on the custom domain only, merged over `tags` | `{}` |
 | `tags` | Tags on the API, stage, log group and custom domain | `{}` |
-| `identity_jwt` | Turns on gateway enforcement of the identity module's access tokens | `null` |
+| `identity_jwt` | Turns on gateway enforcement of the identity module's access tokens, `mode` picking the native or the Lambda authorizer | `null` |
 | `identity_jwt_depends_on` | What must already answer before the JWT authorizer is created | `[]` |
 
 Object shapes:
@@ -105,6 +126,20 @@ identity_jwt = object({
   audiences        = optional(list(string))
   identity_sources = optional(list(string)) # defaults to ["$request.header.Authorization"]
   authorizer_id    = optional(string)       # attach an existing authorizer instead of creating one
+
+  # "native" is API Gateway's own JWT authorizer, "lambda" is this module's
+  # REQUEST authorizer. Only "lambda" can admit an API key bearer.
+  mode = optional(string, "native")
+
+  # lambda mode only
+  api_key_prefixes          = optional(list(string), [])
+  result_ttl_seconds        = optional(number, 300)
+  jwks_url                  = optional(string) # defaults to "<issuer>/.well-known/jwks.json"
+  jwks_ttl_seconds          = optional(number, 300)
+  jwks_fetch_timeout_ms     = optional(number, 4000)
+  clock_skew_seconds        = optional(number, 60)
+  lambda_function_name      = optional(string) # defaults to "<name>-identity-authorizer"
+  lambda_log_retention_days = optional(number, 14)
 })
 ```
 
@@ -129,8 +164,13 @@ identity_jwt = object({
 | `custom_domain_target_domain_name` | Regional hostname to alias to, null when no custom domain |
 | `custom_domain_hosted_zone_id` | Hosted zone id of that hostname, null when no custom domain |
 | `api_url` | `https://<domain_name>`, or the execute-api endpoint without a domain |
-| `identity_jwt_authorizer_id` | Id of the JWT authorizer, null when `identity_jwt` is unset |
-| `identity_jwt_authorizer_name` | Name of the JWT authorizer, null when it was not created |
+| `identity_jwt_authorizer_id` | Id of the identity authorizer in either mode, null when `identity_jwt` is unset |
+| `identity_jwt_authorizer_name` | Name of the authorizer this module created, null when one was supplied |
+| `identity_jwt_mode` | `"native"` or `"lambda"`, null when `identity_jwt` is unset |
+| `identity_authorizer_function_name` | Authorizer function name, null outside lambda mode |
+| `identity_authorizer_function_arn` | Authorizer function ARN, null outside lambda mode |
+| `identity_authorizer_log_group_name` | Authorizer log group, the first place to read a 401, null outside lambda mode |
+| `identity_api_key_prefixes` | The bearer prefixes passed through to the backend, empty outside lambda mode |
 | `identity_jwt_route_keys` | The marked route keys, sorted; pass to staging-access-gate |
 | `route_identity_jwt_required` | Route key to whether it requires an identity token, the audit view |
 
@@ -183,3 +223,29 @@ identity_jwt = object({
   zone and the record in one apply. Leave it null and the count derives from the id as before.
 - Changing `lambda_permission_statement_id` replaces the permission, a moment with no permission at
   all.
+- API Gateway's native JWT authorizer rejects any bearer that is not a JWT before the request reaches
+  anything of ours, so an agent API key gets a 401 the backend never sees and no module input can
+  change that. Admitting API keys at the gateway needs a REQUEST authorizer, which is what
+  `identity_jwt.mode = "lambda"` builds. The module refuses `api_key_prefixes` in native mode rather
+  than accept a setting that would silently admit nothing.
+- Native and lambda mode hand the integration the same thing: `authorizer.jwt.claims` as a string
+  map with the same keys, so a backend verifying in process cannot tell them apart. The one
+  difference is that lambda mode also admits a bearer matching `api_key_prefixes` without claims,
+  leaving the backend to verify the key as it already does.
+- Lambda mode costs an authorizer invocation and its duration. `result_ttl_seconds` defaults to 300
+  with `identity_sources = ["$request.header.Authorization"]`, so repeated calls carrying one token
+  cost one invocation per five minutes per token, and the cache key is the token itself, never a
+  path, so a cached allow cannot leak across routes. Set `result_ttl_seconds = 0` to disable the
+  cache and pay per request. Native mode has no per request charge at all, so stay on native
+  wherever API keys are not needed.
+- Because the result cache is keyed on the token, revoking an API key or a session still leaves it
+  admitted at the gateway for up to `result_ttl_seconds`. The backend's own verification is what
+  makes a revocation immediate, so a product that needs instant revocation at the edge sets
+  `result_ttl_seconds = 0`.
+- The module creates the authorizer's `aws_lambda_permission` itself. A consumer does not add one.
+- `jwks_fetch_timeout_ms` must leave the authorizer time to answer: the function's timeout is 10
+  seconds and a precondition rejects anything above `(10 - 4) * 1000`. The default 4000 ms allows one
+  retry inside the budget.
+- Flipping a product to lambda mode replaces the routes, because their `authorization_type` moves
+  from `JWT` to `CUSTOM`, and destroys the native authorizer. Plan it as a route flip, in the same
+  apply.

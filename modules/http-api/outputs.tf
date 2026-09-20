@@ -87,13 +87,42 @@ output "api_url" {
 }
 
 output "identity_jwt_authorizer_id" {
-  description = "Id of the JWT authorizer the marked routes are behind, whether this module created it or identity_jwt.authorizer_id supplied it. Null when identity_jwt is not set. Already attached to every route that sets require_identity_jwt, so a consumer needs this only to attach it to a route it creates outside the module."
-  value       = local.identity_jwt_enabled ? coalesce(var.identity_jwt.authorizer_id, one(aws_apigatewayv2_authorizer.identity_jwt[*].id)) : null
+  description = "Id of the authorizer the marked routes are behind, whether this module created it (native or lambda mode) or identity_jwt.authorizer_id supplied it. Null when identity_jwt is not set. Already attached to every route that sets require_identity_jwt, so a consumer needs this only to attach it to a route it creates outside the module."
+  value = local.identity_jwt_enabled ? coalesce(
+    var.identity_jwt.authorizer_id,
+    one(aws_apigatewayv2_authorizer.identity_jwt[*].id),
+    one(aws_apigatewayv2_authorizer.identity_lambda[*].id),
+  ) : null
 }
 
 output "identity_jwt_authorizer_name" {
-  description = "Name of the JWT authorizer, null when it was not created."
-  value       = one(aws_apigatewayv2_authorizer.identity_jwt[*].name)
+  description = "Name of the authorizer this module created, in either mode. Null when it was not created."
+  value       = try(coalesce(one(aws_apigatewayv2_authorizer.identity_jwt[*].name), one(aws_apigatewayv2_authorizer.identity_lambda[*].name)), null)
+}
+
+output "identity_jwt_mode" {
+  description = "Which admission the marked routes run under: native for API Gateway's own JWT authorizer, lambda for this module's REQUEST authorizer. Null when identity_jwt is not set."
+  value       = local.identity_jwt_mode
+}
+
+output "identity_authorizer_function_name" {
+  description = "Name of the Lambda authorizer function, null outside lambda mode. Read it to find the log group when a 401 needs explaining."
+  value       = one(aws_lambda_function.identity_lambda[*].function_name)
+}
+
+output "identity_authorizer_function_arn" {
+  description = "ARN of the Lambda authorizer function, null outside lambda mode."
+  value       = one(aws_lambda_function.identity_lambda[*].arn)
+}
+
+output "identity_authorizer_log_group_name" {
+  description = "Log group the Lambda authorizer writes its denial reasons to, null outside lambda mode."
+  value       = one(aws_cloudwatch_log_group.identity_lambda[*].name)
+}
+
+output "identity_api_key_prefixes" {
+  description = "The bearer token prefixes passed through to the integration unverified, sorted as packaged. Empty in native mode, where API Gateway refuses any bearer that is not a JWT."
+  value       = local.identity_api_key_prefixes
 }
 
 output "identity_jwt_route_keys" {

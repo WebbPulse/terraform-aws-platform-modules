@@ -130,6 +130,12 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
 - A passed-through API key reaches the function with no `jwt.claims`, so only routes whose handlers
   verify the key in process, through `claims_or_api_key`, belong on an API that sets
   `api_key_prefixes`. A handler that reads `identity_subject` fails closed with a 401.
+- The authorizer's identity half lives in `shared/identity-authorizer/identity.js` at the repo root,
+  not in this module, and is packaged into both this authorizer and the http-api module's
+  `identity_jwt.mode = "lambda"` authorizer. Token verification, JWKS caching and the API key
+  prefix passthrough are therefore the same code in staging and production. Edits to it change both,
+  and the node suite here is what covers it. Only the cookie, origin secret and anonymous path
+  admission is this module's own.
 - A route key naming no route on the API is inert rather than an error; the module is not given the
   API's route list and cannot tell a typo from a route not added yet.
 - `http_api_id` is unknown at plan time whenever the API is created by the same apply, and the
