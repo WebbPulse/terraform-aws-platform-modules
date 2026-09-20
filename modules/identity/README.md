@@ -2,7 +2,8 @@
 
 A product's identity layer as one module block: the KMS RSA signing keys access tokens are signed
 with, the symmetric KMS key TOTP seeds are sealed under, the ten identity DynamoDB tables plus the
-opt in OAuth 2.1 authorization server and API key tables, the IAM grants that reach them, an
+opt in OAuth 2.1 authorization server, API key and share token tables, the IAM grants that reach
+them, an
 optional API Gateway JWT authorizer, and the `IDENTITY_*` environment map. It exists so a consumer wires `webbpulse.identity` with one module call instead of rebuilding
 key names, table schemas and grants by hand.
 
@@ -44,7 +45,7 @@ contract rather than this module's preference:
 | `oauth-states` | `state` | | | `expires_at` |
 | `oauth-links` | `provider_subject` | | `user_id-index` | |
 
-Two further groups of tables are opt in, so an existing consumer's plan stays empty until it
+Three further groups of tables are opt in, so an existing consumer's plan stays empty until it
 asks for them.
 
 `oauth_server_enabled = true` adds the three tables the OAuth 2.1 authorization server in
@@ -65,6 +66,19 @@ into, for agents and scripts that are not a browser session.
 | Logical key | Hash key | Index | TTL |
 | --- | --- | --- | --- |
 | `api-keys` | `key_hash` | `user_id-created_at-index`, `tenant_id-created_at-index` | none |
+
+`share_tokens_table_enabled = true` adds the table that backs `webbpulse.identity.share_tokens`,
+which mints `wps_` tokens for public read only share links. A share token is the third credential
+kind beside a session JWT and an API key: holding it is the whole authorization, there is no
+account behind it, and it grants exactly what its stored row's capability says. The payload is
+opaque to the package, so the one table serves an issue tracker's share link, an album's and a
+report's alike. Like an API key it is stored only as a SHA-256 hash with no clear text prefix, so
+a leaked table authenticates as nobody. Unlike an API key it carries a TTL on `expires_at`: a
+share is a link a person hands out and forgets, and the table would otherwise grow without bound.
+
+| Logical key | Hash key | Index | TTL |
+| --- | --- | --- | --- |
+| `share-tokens` | `token_hash` | `tenant_id-created_at-index` | `expires_at` |
 
 Hosting an MCP server is both halves, the tables here and the router in the product:
 
@@ -148,6 +162,9 @@ Land the tables first and add `oauth_server_mcp_resource_url` once the compositi
 | `api_keys_table_enabled` | Create the `api-keys` table. Independent of the server switch. | `false` |
 | `api_keys_table` | The `api-keys` table, in the same object shape as one `tables` entry. | the package table with both indexes |
 | `api_keys_table_key` | Logical key the `api-keys` table is created under. | `"api-keys"` |
+| `share_tokens_table_enabled` | Create the `share-tokens` table. Independent of the other two switches. | `false` |
+| `share_tokens_table` | The `share-tokens` table, in the same object shape as one `tables` entry. | the package table with the tenant index and a TTL |
+| `share_tokens_table_key` | Logical key the `share-tokens` table is created under. | `"share-tokens"` |
 
 Object shapes for the two map inputs:
 
@@ -212,6 +229,9 @@ additional_table_grants = map(object({
 | `api_keys_table_name` | Full name of the `api-keys` table, null when the switch is off. |
 | `api_keys_user_index_name` | Name of the `api-keys` index keyed by `user_id`, which is `API_KEY_USER_INDEX`. Null when the switch is off. |
 | `api_keys_tenant_index_name` | Name of the `api-keys` index keyed by `tenant_id`, which is `API_KEY_TENANT_INDEX`. Null when the switch is off. |
+| `share_tokens_table_enabled` | Whether the `share-tokens` table exists, echoed back. |
+| `share_tokens_table_name` | Full name of the `share-tokens` table, null when the switch is off. |
+| `share_tokens_tenant_index_name` | Name of the `share-tokens` index keyed by `tenant_id`, which is `SHARE_TOKEN_TENANT_INDEX`. Null when the switch is off. |
 
 ## Purging identity rows when a user is deleted
 
@@ -352,7 +372,21 @@ from the same merge it already does.
   workspace", which a multi-tenant admin page asks and the `key_hash` partition cannot. Without it
   that page is a table scan. Both names are package constants read in code, not from the
   environment.
-- Neither index name is in `identity_environment`, because the package reads no environment variable
+- `share-tokens` carries a TTL on `expires_at` where `api-keys` carries none, and the difference is
+  deliberate. An API key is revoked explicitly by the person who minted it, so reclaiming one on a
+  timer would delete a working credential nobody retired. A share link has no such owner watching
+  it, so without the TTL the table grows for as long as the product runs. Expiry is still checked
+  on the read path, because the DynamoDB sweep is not prompt: a row past `expires_at` can sit
+  readable for hours, and a share token whose expiry only the sweep enforced would keep opening the
+  link that whole time.
+- `share-tokens` and `api-keys` are separate tables rather than one credential table with a kind
+  attribute, because the two authenticate as different things. A share token's subject is the
+  literal `share` and it acts as nobody, while an API key acts as the person who minted it inside
+  their tenant. The `wps_` and `wpk_` prefixes are what route a presented bearer value to the right
+  verifier without parsing it, so a product that merged the tables would be deciding authority by a
+  stored attribute it also has to trust.
+- Neither `api-keys` index name is in `identity_environment`, and neither is the `share-tokens`
+  tenant index, because the package reads no environment variable
   for them. `IDENTITY_REFRESH_USER_INDEX` is the one index whose name the package does look up that
   way, and adding variables the package ignores would read as configuration that does nothing.
 - One authorizer per module instance. A product needing several on the same API creates the extra

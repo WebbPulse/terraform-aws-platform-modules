@@ -1076,3 +1076,103 @@ variable "oauth_server_mcp_resource_url" {
     error_message = "oauth_server_mcp_resource_url was given with oauth_server_enabled false. The resource URL names a server whose tables this module would not create, so the identity function would advertise endpoints backed by nothing."
   }
 }
+
+variable "share_tokens_table_enabled" {
+  description = <<-EOT
+    Create the `share-tokens` table that `webbpulse.identity.share_tokens` reads and writes, for
+    a product that mints `wps_` tokens behind public read only share links. Off by default, so an
+    existing consumer's plan is empty.
+
+    It is independent of `api_keys_table_enabled` and `oauth_server_enabled`. A share token is the
+    third credential kind beside a session JWT and an API key: holding it is the entire
+    authorization, there is no account behind it, and it grants exactly what its stored row says.
+  EOT
+
+  type     = bool
+  default  = false
+  nullable = false
+}
+
+variable "share_tokens_table" {
+  description = <<-EOT
+    The `share-tokens` table, in the same object shape as `tables`, created only when
+    `share_tokens_table_enabled` is true. The default is
+    `webbpulse.identity.share_tokens.SHARE_TOKEN_TABLE` written out: hash key `token_hash`, a
+    `tenant_id-created_at-index` GSI listing one tenant's shares newest last, and a TTL on
+    `expires_at`.
+
+    A TTL, unlike `api-keys`. A share is a link a person hands out and forgets, so the table would
+    otherwise grow without bound, and nobody is served by an expired share staying visible. Expiry
+    is still checked on the read path, because the sweep is not prompt.
+  EOT
+
+  type = object({
+    attributes = list(object({
+      name = string
+      type = string
+    }))
+    hash_key  = string
+    range_key = optional(string)
+    global_secondary_indexes = optional(list(object({
+      name               = string
+      hash_key           = string
+      range_key          = optional(string)
+      projection_type    = optional(string, "ALL")
+      non_key_attributes = optional(list(string))
+    })), [])
+    ttl_attribute          = optional(string)
+    point_in_time_recovery = optional(bool)
+    deletion_protection    = optional(bool)
+    tags                   = optional(map(string), {})
+  })
+
+  default = {
+    attributes = [
+      { name = "token_hash", type = "S" },
+      { name = "tenant_id", type = "S" },
+      { name = "created_at", type = "S" },
+    ]
+    hash_key = "token_hash"
+    global_secondary_indexes = [
+      {
+        name      = "tenant_id-created_at-index"
+        hash_key  = "tenant_id"
+        range_key = "created_at"
+      },
+    ]
+    ttl_attribute = "expires_at"
+  }
+
+  nullable = false
+
+  validation {
+    condition     = alltrue([for a in var.share_tokens_table.attributes : contains(["S", "N", "B"], a.type)])
+    error_message = "Every attribute type must be S (string), N (number) or B (binary)."
+  }
+
+  validation {
+    condition     = contains([for a in var.share_tokens_table.attributes : a.name], var.share_tokens_table.hash_key)
+    error_message = "share_tokens_table.hash_key must name one of that table's attributes."
+  }
+
+  validation {
+    condition = alltrue([
+      for g in var.share_tokens_table.global_secondary_indexes :
+      contains([for a in var.share_tokens_table.attributes : a.name], g.hash_key)
+      && (g.range_key == null || contains([for a in var.share_tokens_table.attributes : a.name], g.range_key))
+    ])
+    error_message = "Every share_tokens_table global secondary index hash_key and range_key must name one of that table's attributes."
+  }
+}
+
+variable "share_tokens_table_key" {
+  description = "Logical key the share-tokens table is created under, which is also its name suffix and its key in table_names. The package resolves \"share-tokens\" through webbpulse.dynamodb.table_name, so changing this only makes sense alongside a product that passes the table name explicitly."
+  type        = string
+  default     = "share-tokens"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]{1,255}$", var.share_tokens_table_key))
+    error_message = "share_tokens_table_key may hold only letters, digits, underscores, hyphens and dots."
+  }
+}

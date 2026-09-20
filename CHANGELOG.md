@@ -9,6 +9,38 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+### `identity`: the share token table, opt in **no plan change**
+
+The module had nowhere for `webbpulse.identity.share_tokens` to put a row. A product that wanted a
+public read only share link, the third credential kind beside a session JWT and an API key, had to
+create the table by hand and grant it separately, so the feature stayed off.
+
+`share_tokens_table_enabled`, default `false`, adds `share-tokens` keyed by `token_hash` with a
+`tenant_id-created_at-index` GSI and a TTL on `expires_at`. The key schema is `SHARE_TOKEN_TABLE`
+written out: it is the package's contract, and a hash key that does not match what the store writes
+fails at request time rather than at apply time. The token is stored only as a SHA-256 hash with no
+clear text prefix, exactly as an API key is, so a leaked table authenticates as nobody.
+
+The TTL is where this table differs from `api-keys`. An API key is revoked explicitly by the person
+who minted it, so reclaiming one on a timer would delete a credential nobody retired. A share link
+has no owner watching it, and without the TTL the table grows for as long as the product runs.
+Expiry is still checked on the read path, because the sweep is not prompt.
+
+The tenant index answers "every share in this workspace", which the `token_hash` partition cannot:
+partitioning by the hash is what makes resolving a presented token one point read, and it is also
+what leaves that listing unanswerable without the index. Listing and purging both query it.
+
+The switch is independent of `oauth_server_enabled` and `api_keys_table_enabled`. The table takes
+the module's existing PITR, deletion protection, billing mode and encryption settings and joins the
+one table grant on the identity role, so no new IAM resource appears. No `IDENTITY_*` variable
+follows it: the package reads the index name as a constant, and a variable it ignores would read as
+configuration that does nothing.
+
+New inputs: `share_tokens_table_enabled`, `share_tokens_table` and `share_tokens_table_key`. New
+outputs: `share_tokens_table_enabled`, `share_tokens_table_name` and
+`share_tokens_tenant_index_name`. The switch defaults off, so a consumer that says nothing plans the
+same tables it planned before.
+
 ### `identity`: the OAuth 2.1 authorization server and API key tables, both opt in **no plan change**
 
 The module created the ten tables the identity flows read and write, but not the three the
