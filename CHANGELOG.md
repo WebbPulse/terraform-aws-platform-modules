@@ -129,7 +129,9 @@ exist is a plan time error. The partition, account and region now come from the 
 than from hardcoded strings and a `var.aws_region`.
 
 An adopting product's plan is empty once the four `moved` blocks in the module README are in place,
-one per resource, because every address changes. CarModPicker additionally drops the
+one per resource, because every address changes. The `import` block stays in the product's root
+module, since Terraform allows `import` only there; a consumer setting `adopt_spans_log_group` also
+writes the import against `module.<name>.aws_cloudwatch_log_group.spans`, as the README shows. CarModPicker additionally drops the
 `moved` block it carried for the pre-`for_each` spans group; that move is already applied in its
 state. The module pins aws provider >= 6.46, above the repository floor, for the two X-Ray
 resources.

@@ -61,13 +61,6 @@ resource "aws_xray_trace_segment_destination" "this" {
   depends_on = [aws_cloudwatch_log_resource_policy.spans]
 }
 
-import {
-  for_each = local.spans_log_groups
-
-  to = aws_cloudwatch_log_group.spans[each.key]
-  id = each.value
-}
-
 resource "aws_cloudwatch_log_group" "spans" {
   for_each = local.spans_log_groups
 

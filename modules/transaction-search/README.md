@@ -55,6 +55,24 @@ module "transaction_search" {
   destination. An `import` block whose target does not exist is a plan time error, not a skipped
   import, so a brand new account applies once with this false, generates one span, then sets it
   true. Every environment that has already exported a span takes true immediately.
+- **The `import` block lives in the consumer's root module, not here.** Terraform only allows
+  `import` blocks in the root module, so this one cannot ship inside the module. The module
+  declares the `aws_cloudwatch_log_group.spans` resource, and a consumer that sets
+  `adopt_spans_log_group = true` must also write the matching import against the module's address:
+
+  ```hcl
+  import {
+    for_each = var.adopt_spans_log_group ? toset(["aws/spans"]) : toset([])
+
+    to = module.transaction_search.aws_cloudwatch_log_group.spans[each.key]
+    id = each.value
+  }
+  ```
+
+  Without it, an apply with `adopt_spans_log_group = true` tries to *create* `aws/spans` and fails
+  with an `InvalidParameterException` naming the reserved prefix. The `for_each` has to be gated on
+  the same variable the module gets, or the import fires on an account where the group does not
+  exist yet and fails at plan time.
 - Without the adoption the group still exists and still collects spans; it just keeps the default
   never-expire retention and bills for it. Adopting it is the only reason this input exists.
 - The resource policy has to exist before the trace segment destination is switched, or X-Ray
