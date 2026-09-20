@@ -1,0 +1,30 @@
+// Application viewer-request logic, rendered by Terraform.
+//
+// Standalone: wrapped by uri_rewrite.js.tftpl as handler(event).
+// Behind the staging access gate: passed to the gate module as viewer_request_handler_js and
+// run by the gate function before its session check.
+//
+// Returns the possibly rewritten request. No canonical host redirect is written.
+function appHandler(event) {
+  var request = event.request;
+  var uri = request.uri;
+
+  if (uri === '' || uri === '/') {
+    return request;
+  }
+
+  // Paths ending with / get index.html appended.
+  if (uri.endsWith('/')) {
+    request.uri = uri + 'index.html';
+    return request;
+  }
+
+  // Extensionless paths (no dot in the final segment) are SPA routes.
+  var lastSlash = uri.lastIndexOf('/');
+  var lastSegment = uri.slice(lastSlash + 1);
+  if (lastSegment.indexOf('.') === -1) {
+    request.uri = uri + '/index.html';
+  }
+
+  return request;
+}

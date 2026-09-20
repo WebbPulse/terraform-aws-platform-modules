@@ -53,7 +53,8 @@ module "frontend" {
 | `forwarded_values` | Legacy cache settings used only in `forwarded_values` mode | `{}` |
 | `spa_fallback_error_codes` | Origin error codes turned into a 200 carrying the SPA shell | `[403, 404]` |
 | `error_caching_min_ttl` | Seconds the fallback response is cached | `0` |
-| `viewer_request_function_arn` | CloudFront Function for the default behavior | `null` |
+| `viewer_request_function_arn` | Existing CloudFront Function for the default behavior | `null` |
+| `viewer_request_function` | Build the viewer-request function here from a `canonical_host`; see Gotchas | `null` |
 | `access_gate` | staging-access-gate outputs; wires the gate into this distribution | `null` |
 | `access_gate_origin_verify_header_value` | The gate's origin verification header value, sensitive | `null` |
 | `create_dns_records` | Create alias records for `dns_records` in `zone_id` | `false` |
@@ -107,6 +108,13 @@ access_gate = {
 | `origin_id` | `origin_id` of the S3 origin |
 | `frontend_url` | `https://` plus the first alias, or the CloudFront hostname |
 
+### Outputs added with `viewer_request_function`
+
+| Name | Description |
+| --- | --- |
+| `viewer_request_function_arn` | ARN of the viewer-request function in force on the default behavior |
+| `viewer_request_handler_js` | Rendered `appHandler` JavaScript, for a gate's `viewer_request_handler_js` |
+
 ## Gotchas
 
 - SPA `index.html` must not be cached like the hashed bundles; verify a cache-control flip from the
@@ -136,3 +144,35 @@ access_gate = {
 - A live distribution that mixes the two cache models, `forwarded_values` on the default behavior and
   a policy-driven SPA shell behavior, plans an update on that one behavior until `index_cache_mode`
   and `index_cache_policies` match what the console shows.
+- **`viewer_request_function` builds the function here instead of taking one by ARN.** It renders
+  the same two templates every product had copied into its own `cloudfront_functions/` directory:
+  a canonical host 301 redirect followed by the SPA URI rewrite. `canonical_host = "apex"`
+  redirects `www.<domain>` to `<domain>`, `"www"` redirects the other way, and `"none"` writes no
+  redirect at all and leaves only the rewrite. `domain` is the registrable domain with no `www.`
+  prefix either way; the module refuses one, because `canonical_host` is what picks the side.
+- `viewer_request_function` and `viewer_request_function_arn` are mutually exclusive and the module
+  refuses both, as a `precondition` on the function. Leaving `viewer_request_function` null keeps
+  the existing input working exactly as before, and an existing consumer's plan is empty.
+- With `access_gate` set, the module still renders `viewer_request_handler_js` but builds no
+  function of its own: the gate's function wraps the handler and takes the viewer-request slot.
+  Pass the output into the gate's `viewer_request_handler_js` and the two stay in step.
+- **A product adopting `viewer_request_function` from its own copy will see a one line function code
+  diff, not an empty plan.** The redirect and rewrite logic is byte-identical to what CarModPicker
+  and Standupless deploy today, but the comments in the shared template are worded once for both
+  directions rather than per product, and `code` is a tracked attribute of
+  `aws_cloudfront_function`. The apply republishes the function with identical behaviour. Adopt it
+  in its own commit so that diff is readable, and add:
+
+  ```hcl
+  moved {
+    from = aws_cloudfront_function.frontend_uri_rewrite
+    to   = module.frontend.aws_cloudfront_function.viewer_request[0]
+  }
+  ```
+
+  The `[0]` is the module's `count`. Delete the product's `cloudfront_function.tf` and its
+  `cloudfront_functions/` directory in the same commit. The function's `name` defaults to
+  `<name>-uri-rewrite`, which for a module named `<prefix>-frontend` is the
+  `<prefix>-frontend-uri-rewrite` both products already use; `name` is immutable on a CloudFront
+  Function, so a product whose existing function is called something else passes
+  `viewer_request_function.name` or the `moved` block turns into a replacement.
