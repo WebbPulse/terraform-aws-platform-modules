@@ -9,6 +9,19 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+### `identity`: an optional table can be named in `additional_table_grants` **no plan change**
+
+`additional_table_grants` resolves each named table through `aws_dynamodb_table.this`, which is
+keyed on every table the module creates, optional ones included. Its validation checked `var.tables`
+instead, which holds only the always-on ten. So granting a second role on `api-keys`, the table
+`api_keys_table_enabled` creates, was refused at plan time with "must be a key of var.tables" even
+though the grant itself would have resolved correctly. The first consumer to want it was a control
+plane whose runs function mints run tokens into that table, and it had no way to express the grant.
+
+The validation now accepts a key of `tables` or an optional table whose flag is on, matching what
+the resource actually creates. Naming an optional table whose flag is off is still refused, because
+the table does not exist to grant. No behaviour changes for a grant that already planned.
+
 ### `http-api`: a Lambda authorizer mode that admits agent API keys **no plan change**
 
 `identity_jwt` built API Gateway's native JWT authorizer, which rejects any bearer that is not a

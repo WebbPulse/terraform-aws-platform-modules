@@ -404,6 +404,50 @@ run "a_grant_naming_a_table_the_module_does_not_create_is_refused" {
   ]
 }
 
+run "a_grant_may_name_an_optional_table_whose_flag_is_on" {
+  command = plan
+
+  variables {
+    api_keys_table_enabled = true
+
+    additional_table_grants = {
+      runs = {
+        role_name = "example-staging-runs"
+        tables    = ["api-keys"]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.additional_table_grants) == 1
+    error_message = "An optional table the module does create must be grantable. The validation reads var.tables, which holds only the always-on tables, so a flagged-on table was refused despite aws_dynamodb_table.this carrying it."
+  }
+
+  assert {
+    condition     = length(local.additional_grant_resources["runs"]) == 2
+    error_message = "An optional table must produce the table and its index wildcard, the same shape an always-on table takes. api-keys carries two indexes, and a table-only policy denies the Query the package makes against them."
+  }
+}
+
+run "a_grant_naming_an_optional_table_whose_flag_is_off_is_refused" {
+  command = plan
+
+  variables {
+    api_keys_table_enabled = false
+
+    additional_table_grants = {
+      runs = {
+        role_name = "example-staging-runs"
+        tables    = ["api-keys"]
+      }
+    }
+  }
+
+  expect_failures = [
+    var.additional_table_grants,
+  ]
+}
+
 run "a_grant_naming_no_tables_is_refused" {
   command = plan
 
