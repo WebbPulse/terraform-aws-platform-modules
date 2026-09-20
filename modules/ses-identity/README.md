@@ -134,6 +134,21 @@ resource "aws_iam_role_policy" "api_ses" {
   ```
 
   A `moved` block on a `for_each` resource moves every instance, so the recipient loop needs no key.
+  A product that verified a single address instead of a domain moves `aws_sesv2_email_identity.sender[0]`
+  the same way, and one that wired an SNS event destination or the account VDM attributes moves those
+  too, because both are counted here:
+
+  ```hcl
+  moved {
+    from = aws_sesv2_configuration_set_event_destination.sns
+    to   = module.ses.aws_sesv2_configuration_set_event_destination.notifications[0]
+  }
+
+  moved {
+    from = aws_sesv2_account_vdm_attributes.main
+    to   = module.ses.aws_sesv2_account_vdm_attributes.this[0]
+  }
+  ```
 - The tags the originals wrote were per resource (`${local.prefix}-ses-domain` on the identity,
   `${local.prefix}-transactional` on the set). This module writes one `tags` map to both, so an
   adopter that wants its old per resource `Name` tags back has to accept a tag-only diff or pass

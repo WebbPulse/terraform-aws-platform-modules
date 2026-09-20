@@ -171,4 +171,8 @@ access_gate = {
   ```
 
   The `[0]` is the module's `count`. Delete the product's `cloudfront_function.tf` and its
-  `cloudfront_functions/` directory in the same commit.
+  `cloudfront_functions/` directory in the same commit. The function's `name` defaults to
+  `<name>-uri-rewrite`, which for a module named `<prefix>-frontend` is the
+  `<prefix>-frontend-uri-rewrite` both products already use; `name` is immutable on a CloudFront
+  Function, so a product whose existing function is called something else passes
+  `viewer_request_function.name` or the `moved` block turns into a replacement.

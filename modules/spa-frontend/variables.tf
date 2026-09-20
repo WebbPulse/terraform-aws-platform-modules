@@ -372,7 +372,7 @@ variable "distribution_tags" {
 }
 
 variable "viewer_request_function" {
-  description = "Build the viewer-request CloudFront Function in this module instead of taking one by ARN. canonical_host picks which hostname wins: apex redirects www.<domain> to <domain>, www redirects <domain> to www.<domain>, and none writes no redirect at all and leaves only the SPA URI rewrite. domain is the registrable domain without a www prefix. Null keeps today's behaviour, where the function is the caller's and arrives through viewer_request_function_arn. Setting both is refused."
+  description = "Build the viewer-request CloudFront Function in this module instead of taking one by ARN. canonical_host picks which hostname wins: apex redirects www.<domain> to <domain>, www redirects <domain> to www.<domain>, and none writes no redirect at all and leaves only the SPA URI rewrite. domain is the registrable domain without a www prefix. Null keeps today's behaviour, where the function is the caller's and arrives through viewer_request_function_arn. Setting both is refused. name defaults to <name>-uri-rewrite, which is what a product whose module name is <prefix>-frontend already calls its function; name is immutable on a CloudFront Function, so an adopter with a different existing name sets it here or gets a replacement."
   type = object({
     domain         = string
     canonical_host = optional(string, "apex")

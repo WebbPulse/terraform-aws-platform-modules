@@ -41,7 +41,7 @@ locals {
 
   viewer_request_function_name = (
     local.viewer_request_function_enabled
-    ? coalesce(var.viewer_request_function.name, "${var.name}-frontend-uri-rewrite")
+    ? coalesce(var.viewer_request_function.name, "${var.name}-uri-rewrite")
     : null
   )
 
