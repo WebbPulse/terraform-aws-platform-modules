@@ -7,9 +7,9 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.28.0
 
-### `identity`: a target index on the share token table **no plan change**
+### `identity`: a target index on the share token table **plan change: share-tokens table, only when enabled**
 
 The `share-tokens` table carried one index, `tenant_id-created_at-index`, which answers "every
 share in this workspace, newest last". Products also ask the narrower question, "every share token
