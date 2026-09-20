@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.27.0
 
 ### `http-api`: a Lambda authorizer mode that admits agent API keys **no plan change**
 
