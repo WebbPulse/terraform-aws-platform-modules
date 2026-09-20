@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## 2.27.0
+## 2.27.1
 
 ### `identity`: an optional table can be named in `additional_table_grants` **no plan change**
 
@@ -21,6 +21,8 @@ plane whose runs function mints run tokens into that table, and it had no way to
 The validation now accepts a key of `tables` or an optional table whose flag is on, matching what
 the resource actually creates. Naming an optional table whose flag is off is still refused, because
 the table does not exist to grant. No behaviour changes for a grant that already planned.
+
+## 2.27.0
 
 ### `http-api`: a Lambda authorizer mode that admits agent API keys **no plan change**
 
