@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.29.0
 
 ### `staging-access-gate` and `spa-frontend`: a refused deep link reaches login instead of a blank shell **plan change: gated distributions, their bucket policy and the login function**
 
