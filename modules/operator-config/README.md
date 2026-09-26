@@ -75,6 +75,13 @@ One of `name_prefix` and `name` is required.
   fix, rather than silently decoding to something a consumer indexes wrongly.
 - No read policy output. Only the Terraform run role reads the parameter, and it already can; an
   application that needs these values at runtime gets them through Terraform outputs or environment.
+- Seeding a key that something already depends on, such as a recipient list that exists today as
+  a variable, means creating the parameter first and importing it, since a Terraform-created
+  parameter starts as `{}` and a consumer falling back to `[]` would destroy what the list drove.
+  Put the parameter with this module's description and the provider `default_tags`, so the import
+  plans no update, then add a root `import` block for `module.config.aws_ssm_parameter.this` with id
+  `/<prefix>/config`. An imported parameter keeps its value in the provider's `value` attribute
+  rather than `insecure_value`, and `values` reads whichever is set.
 - Destroying the module deletes the parameter and the operator's value with it.
 - Why a module of its own rather than part of `app-secrets`: it is a different service with a
   different reader. `app-secrets` holds runtime secrets that never enter state and ships a read

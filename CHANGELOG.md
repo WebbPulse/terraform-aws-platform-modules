@@ -7,6 +7,18 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.30.1
+
+### `operator-config`: `values` reads an imported parameter **no plan change**
+
+An operator who creates `/<prefix>/config` first, so the recipient list is in place before
+Terraform reads it, adopts it with a root `import` block. The provider's import stores the live
+value in `value` and leaves `insecure_value` null, and `ignore_changes` then holds it null, so the
+adopting plan failed the `values` precondition with "must hold a JSON object". `values` now reads
+`insecure_value` when it is set and falls back to `value` otherwise. A parameter Terraform created
+reads exactly as before. Checked against CarModPicker staging: the adopting plan imports the
+parameter with no change and `ses-identity` keeps its recipients.
+
 ## 2.30.0
 
 Planned as 2.30.0, a minor release.
