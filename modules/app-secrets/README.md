@@ -43,6 +43,26 @@ string passed in), `json` (a map composed into one JSON object), `placeholder` (
 with `ignore_changes` so an operator overwrites it out of band), or none of them (created empty, with
 no Terraform-managed version at all).
 
+### Operator-owned keys
+
+Set `json_preserve_unmanaged = true` on a `json` shape secret and the blob keeps keys an operator set
+out of band with `put-secret-value`. Every write starts from the secret's current live keys, lays the
+declared `json` entries on top, then the `json_generate` keys, so a `version` bump no longer drops
+what Terraform does not declare. `json` may be empty or omitted, which moves every value out of
+Terraform variables and into the secret itself.
+
+```hcl
+secrets = {
+  "app" = {
+    version                 = 2
+    json_preserve_unmanaged = true
+    json_generate = {
+      mfa_master_key = { format = "bytes32-base64", keep = true }
+    }
+  }
+}
+```
+
 ## Inputs
 
 | Name | Description | Default |
@@ -81,6 +101,19 @@ Each entry in `secrets`:
   json        = optional(map(string))
   placeholder = optional(string)
 
+  json_generate = optional(map(object({
+    format           = optional(string, "password") # password or bytes32-base64
+    keep             = optional(bool, false)        # carry the live value through a version bump
+    length           = optional(number, 32)
+    special          = optional(bool, true)
+    override_special = optional(string)
+    min_special      = optional(number, 0)
+    min_numeric      = optional(number, 0)
+    min_upper        = optional(number, 0)
+    min_lower        = optional(number, 0)
+  })), {})
+  json_preserve_unmanaged = optional(bool, false)   # keep live keys the blob does not declare
+
   recovery_window_in_days = optional(number)          # null takes the module-wide value
   kms_key_id              = optional(string)          # null takes the module-wide value
   tags                    = optional(map(string), {})
@@ -101,9 +134,9 @@ Each entry in `secrets`:
 
 ## Gotchas
 
-- A secret may set at most one of `generate`, `value`, the `json` pair and `placeholder`; setting two
-  fails validation at plan time. `json` and `json_generate` are the one pair that go together, because
-  `json_generate` adds generated keys to the same blob rather than replacing it.
+- A secret may set at most one of `generate`, `value`, the `json` shape and `placeholder`; setting two
+  fails validation at plan time. `json`, `json_generate` and `json_preserve_unmanaged` make up the one
+  shape that goes together, because each adds to the same blob rather than replacing it.
 - An empty string in `value` counts as no value rather than a version holding `""`. Secrets Manager
   has no empty version. Use `create_empty_version` if the version resource must exist regardless.
 - `recovery_window_in_days` defaults to 0 because Secrets Manager refuses to reuse the name of a
@@ -167,3 +200,31 @@ Each entry in `secrets`:
 - A caller whose `.terraform.lock.hcl` pins random below 3.9 cannot reach that floor by bumping the
   module pin alone, and the run stalls in init rather than failing with a constraint error. Run
   `terraform init -upgrade` and commit the refreshed lock in the same change that adopts this version.
+- Moving to `json_preserve_unmanaged` plans no change when `version` is left alone. Delete the `json`
+  entries the operator will own, and the variables that fed them, add `json_preserve_unmanaged = true`,
+  and keep `version` and any `json_generate` block exactly as they are. The version resource keeps its
+  address (a secret without `json_generate` stays on `aws_secretsmanager_secret_version.this`, one with
+  it stays on `.json_generate`), and `secret_id` does not move. The provider plans a write-only version
+  only when `secret_string_wo_version` differs from state, since it never keeps `secret_string_wo` to
+  compare, so the plan reads the two new data sources and changes nothing. The live blob keeps every
+  key, and the next `version` bump writes those same keys back. The one exception is a version whose
+  state still holds a plaintext `secret_string` from before the write-only adoption: the provider
+  compares that against the new blob and replaces the version when they differ. Check first without
+  printing the value, for example `terraform show -json | jq '[.values.root_module.child_modules[].resources[]
+  | select(.type == "aws_secretsmanager_secret_version") | {address, legacy: ((.values.secret_string // "") != "")}]'`.
+- An operator owns an undeclared key end to end. Set or change one with `put-secret-value` carrying
+  the whole blob, every key included, because a put replaces the secret string rather than merging
+  into it. Delete one the same way, by putting the blob without it. Terraform never removes a key it
+  does not declare, and a declared `json` key wins over the live value of the same name on every write.
+- The live value must be a JSON object. A blob an operator broke into anything else fails the next
+  write at plan with a decode error rather than overwriting it.
+- Preserving secrets need no fresh account switch. At plan the module lists the secret by name and
+  its version ids, through `aws_secretsmanager_secrets` and `aws_secretsmanager_secret_versions`, and
+  reads the live blob only when an `AWSCURRENT` version exists. A first apply writes the declared keys
+  alone, and kept `json_generate` entries follow the same check, overriding
+  `json_generate_carry_enabled`. The run role needs `secretsmanager:ListSecrets` and
+  `secretsmanager:ListSecretVersionIds` on top of what it already has. A `depends_on` on the module
+  call defers those lookups to apply and the first write then misses existing keys, so leave it off.
+- Adding the first `json_generate` entry to a secret that only had `json` moves its version from
+  `.this` to `.json_generate`, which replaces the version and rewrites the blob. With
+  `json_preserve_unmanaged` on, the rewrite starts from the live keys, so nothing is lost.

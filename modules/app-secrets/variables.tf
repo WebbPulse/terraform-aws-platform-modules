@@ -71,6 +71,13 @@ variable "secrets" {
                      through again, leaving it alone while other keys change. That read fails if the
                      secret has no version yet, so a first apply in a fresh account passes
                      json_generate_carry_enabled = false rather than editing `keep`.
+    - `json_preserve_unmanaged`: set on a `json` shape secret, with or without `json` and
+                     `json_generate`, so the blob keeps keys an operator set out of band. Every write
+                     starts from the secret's current live keys, read through an ephemeral
+                     aws_secretsmanager_secret_version, and lays the `json` entries and then the
+                     `json_generate` keys on top. `json` may be empty or omitted. A secret that does
+                     not exist yet, or has no current version, is written from the declared keys
+                     alone. Terraform never deletes an undeclared key; an operator unsets it.
     - `placeholder`: a literal seeded once, with `ignore_changes` on the value, so an operator can set
                      the real value out of band with `aws secretsmanager put-secret-value` and Terraform
                      will not revert it. This is the shape for a value Terraform must never learn.
@@ -113,8 +120,9 @@ variable "secrets" {
     generate_min_upper        = optional(number, 0)
     generate_min_lower        = optional(number, 0)
 
-    value = optional(string)
-    json  = optional(map(string))
+    value                   = optional(string)
+    json                    = optional(map(string))
+    json_preserve_unmanaged = optional(bool, false)
     json_generate = optional(map(object({
       format = optional(string, "password")
       keep   = optional(bool, false)
@@ -137,9 +145,9 @@ variable "secrets" {
   validation {
     condition = alltrue([
       for k, s in var.secrets :
-      length([for present in [s.generate, s.value != null, s.json != null || length(s.json_generate) > 0, s.placeholder != null] : present if present]) <= 1
+      length([for present in [s.generate, s.value != null, s.json != null || length(s.json_generate) > 0 || s.json_preserve_unmanaged, s.placeholder != null] : present if present]) <= 1
     ])
-    error_message = "Each secret sets at most one of generate, value, the json pair and placeholder. json and json_generate go together, because json_generate adds generated keys to the same blob. A secret that sets none is created empty and Terraform manages no version for it."
+    error_message = "Each secret sets at most one of generate, value, the json shape and placeholder. json, json_generate and json_preserve_unmanaged go together, because they all build the same blob. A secret that sets none is created empty and Terraform manages no version for it."
   }
 
   validation {
@@ -209,9 +217,9 @@ variable "secrets" {
   validation {
     condition = alltrue([
       for k, s in var.secrets :
-      s.json == null || length(s.json) > 0
+      s.json == null || length(s.json) > 0 || s.json_preserve_unmanaged
     ])
-    error_message = "A secret's json map must hold at least one key. Omit json entirely for a secret with no Terraform-managed value."
+    error_message = "A secret's json map must hold at least one key unless json_preserve_unmanaged is set. Omit json entirely for a secret with no Terraform-managed value."
   }
 
   validation {
@@ -241,6 +249,9 @@ variable "json_generate_carry_enabled" {
     False mints every kept entry fresh, exactly as keep = false does, does not declare the ephemeral
     read at all, and still writes the version. Pass true from the second apply onwards and the kept
     entries are carried forward again.
+
+    A secret with json_preserve_unmanaged ignores this switch: it checks at plan time whether the
+    secret has a current version, and carries kept entries only when it does.
   EOT
 
   type    = bool
