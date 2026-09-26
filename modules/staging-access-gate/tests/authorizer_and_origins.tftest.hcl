@@ -217,6 +217,11 @@ run "the_path_prefixes_reach_the_outputs_as_cache_behavior_patterns" {
     condition     = output.api_path_pattern == "/api/*"
     error_message = "api_path_pattern is the behavior that carries the origin verification header to the API, so a wrong pattern means API requests take the default behavior and arrive at the API without the header the authorizer requires."
   }
+
+  assert {
+    condition     = output.session_required_path == "/_auth/session-required"
+    error_message = "session_required_path is the 403 custom error page, and it must sit under the auth prefix so CloudFront fetches it from the login origin through the unsigned auth behavior rather than from S3 through a signed one."
+  }
 }
 
 run "custom_path_prefixes_reach_the_outputs_and_the_viewer_request_function" {
@@ -228,7 +233,7 @@ run "custom_path_prefixes_reach_the_outputs_and_the_viewer_request_function" {
   }
 
   assert {
-    condition     = output.auth_path_pattern == "/_gate/*" && output.api_path_pattern == "/backend/*"
+    condition     = output.auth_path_pattern == "/_gate/*" && output.api_path_pattern == "/backend/*" && output.session_required_path == "/_gate/session-required"
     error_message = "Both prefixes must be overridable together, because a site whose own routes already claim /_auth/ or /api/ has to move the gate out of the way rather than fork the module."
   }
 

@@ -36,6 +36,15 @@ function ev(uri, opts={}) {
   assert.strictEqual(r.headers['x-forwarded-host'].value, 'www.staging.example.com');
   r = await gate.handler(ev('/about', {cookies:{...cookies,'CloudFront-Policy':{value:'!!!'}}}));
   assert.strictEqual(r.statusCode, 302);
+  r = await gate.handler(ev('/assets/index-abc123.js'));
+  assert.strictEqual(r.statusCode, 302, 'an asset without a session redirects rather than passing through');
+  assert.strictEqual(r.headers.location.value, '/_auth/login?next=' + encodeURIComponent('/assets/index-abc123.js'));
+  r = await gate.handler(ev('/assets/index-abc123.js', {cookies}));
+  assert.strictEqual(r.uri, '/assets/index-abc123.js', 'an asset with a session passes through untouched');
+  r = await gate.handler(ev('/workspaces', {qs:{tab:{value:'runs'}}}));
+  assert.strictEqual(r.headers.location.value, '/_auth/login?next=' + encodeURIComponent('/workspaces?tab=runs'));
+  r = await gate.handler(ev('/_auth/session-required'));
+  assert.strictEqual(r.uri, '/_auth/session-required', 'the sign-in-required page stays reachable without a session');
   console.log('gate function tests passed');
 
   const key = crypto.generateKeyPairSync('rsa', {modulusLength: 2048});
@@ -62,7 +71,7 @@ function ev(uri, opts={}) {
   assert(stateCookie.includes('Path=/_auth/'));
   r = await login.handler(mk('/_auth/login', {}, [], {'x-forwarded-host':'evil.com'}));
   assert.strictEqual(new URL(r.headers.location).searchParams.get('redirect_uri'), 'https://www.staging.example.com/_auth/callback');
-  for (const bad of ['//evil.com', 'https://evil.com', '/\\evil.com', '/_auth/login']) {
+  for (const bad of ['//evil.com', 'https://evil.com', '/\\evil.com', '/_auth/login', 'javascript:alert(1)', '/%5Cevil.com\\x', 'evil.com/x', '/_auth/session-required']) {
     r = await login.handler(mk('/_auth/login', {next: bad}));
     const sc = r.cookies[0].split(';')[0].split('=')[1];
     assert.strictEqual(Buffer.from(sc.split('.')[1], 'base64url').toString(), '/', 'bad next '+bad);
@@ -97,10 +106,12 @@ function ev(uri, opts={}) {
   r = await login.handler(mk('/_auth/login', {next:'/'}));
   const st2 = new URL(r.headers.location).searchParams.get('state'); const sc2 = r.cookies[0].split(';')[0];
   r = await login.handler(mk('/_auth/callback', {code:'c', state: st2}, [sc2]));
-  assert.strictEqual(r.statusCode, 403);
+  assert.strictEqual(r.statusCode, 401, 'a refusal is 401 so the distribution does not swap it for the 403 page');
+  assert(r.body.includes('Not allowed'));
   r = await login.handler(mk('/_auth/logout')); assert.strictEqual(r.statusCode, 302); assert(r.headers.location.includes('/logout?client_id=cid&logout_uri=https%3A%2F%2Fwww.staging.example.com%2F_auth%2Flogged-out')); assert.strictEqual(r.cookies.length, 3);
   r = await login.handler(mk('/_auth/logged-out')); assert.strictEqual(r.statusCode, 200);
   r = await login.handler(mk('/_auth/nope')); assert.strictEqual(r.statusCode, 404);
+  await require('./session_required.js')(login, mk);
   r = await login.handler({...mk('/_auth/login'), requestContext:{http:{method:'POST'}}}); assert.strictEqual(r.statusCode, 405);
   console.log('login lambda tests passed');
 

@@ -20,24 +20,45 @@ resource "aws_cloudfront_origin_access_control" "this" {
   signing_protocol                  = "sigv4"
 }
 
+locals {
+  cloudfront_read_statement = {
+    Sid    = var.bucket_policy_sid
+    Effect = "Allow"
+    Principal = {
+      Service = "cloudfront.amazonaws.com"
+    }
+    Action   = "s3:GetObject"
+    Resource = "${aws_s3_bucket.this.arn}/*"
+    Condition = {
+      StringEquals = {
+        "AWS:SourceArn" = aws_cloudfront_distribution.this.arn
+      }
+    }
+  }
+
+  cloudfront_list_statement = {
+    Sid    = "AllowCloudFrontListForMissingKeys"
+    Effect = "Allow"
+    Principal = {
+      Service = "cloudfront.amazonaws.com"
+    }
+    Action   = "s3:ListBucket"
+    Resource = aws_s3_bucket.this.arn
+    Condition = {
+      StringEquals = {
+        "AWS:SourceArn" = aws_cloudfront_distribution.this.arn
+      }
+    }
+  }
+
+  bucket_policy_statements = local.gate_enabled ? [local.cloudfront_read_statement, local.cloudfront_list_statement] : [local.cloudfront_read_statement]
+}
+
 resource "aws_s3_bucket_policy" "this" {
   bucket = aws_s3_bucket.this.id
 
   policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid    = var.bucket_policy_sid
-      Effect = "Allow"
-      Principal = {
-        Service = "cloudfront.amazonaws.com"
-      }
-      Action   = "s3:GetObject"
-      Resource = "${aws_s3_bucket.this.arn}/*"
-      Condition = {
-        StringEquals = {
-          "AWS:SourceArn" = aws_cloudfront_distribution.this.arn
-        }
-      }
-    }]
+    Version   = "2012-10-17"
+    Statement = local.bucket_policy_statements
   })
 }

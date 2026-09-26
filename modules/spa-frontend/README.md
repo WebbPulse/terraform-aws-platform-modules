@@ -3,7 +3,7 @@
 A single-page application served from a private S3 bucket through CloudFront: the bucket, its public
 access block and policy, an origin access control, the distribution, and optionally the Route 53
 alias records. Client-side routes work because 403 and 404 from S3 come back as the SPA shell with a
-200.
+200. With `access_gate` set, only 404 does: 403 goes to the gate's sign-in-required page instead.
 
 Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend`.
 
@@ -51,7 +51,7 @@ module "frontend" {
 | `origin_request_policy_id` | Origin request policy in `policies` mode | `null` |
 | `response_headers_policy_id` | Response headers policy in `policies` mode | `null` |
 | `forwarded_values` | Legacy cache settings used only in `forwarded_values` mode | `{}` |
-| `spa_fallback_error_codes` | Origin error codes turned into a 200 carrying the SPA shell | `[403, 404]` |
+| `spa_fallback_error_codes` | Origin error codes turned into a 200 carrying the SPA shell; 403 is dropped when `access_gate` is set | `[403, 404]` |
 | `error_caching_min_ttl` | Seconds the fallback response is cached | `0` |
 | `viewer_request_function_arn` | Existing CloudFront Function for the default behavior | `null` |
 | `viewer_request_function` | Build the viewer-request function here from a `canonical_host`; see Gotchas | `null` |
@@ -122,7 +122,18 @@ access_gate = {
   header comes from the deploy pipeline's sync.
 - `access_gate` is the module's biggest footgun: one object silently adds the login origin, the auth
   ordered behavior, an unsigned SPA shell behavior, `trusted_key_groups` on the default behavior and
-  the gate's viewer-request function on every behavior.
+  the gate's viewer-request function on every behavior. It also maps 403 to the gate's
+  sign-in-required page, drops 403 from the SPA fallback and grants CloudFront `s3:ListBucket`.
+- **With `access_gate` set, 403 never becomes the SPA shell.** CloudFront checks the signed cookies
+  before the viewer-request function runs, so on the signed default behavior a request without a
+  session is a CloudFront 403 the function never sees. When 403 fell back to the shell, a deep link
+  such as `/workspaces` got a 200 shell whose `/assets/*.js` also came back as HTML, and the browser
+  showed a blank page with no redirect. The 403 now serves `session_required_path` (by default
+  `<auth prefix>session-required`) from the login origin with a 403; that page sends the browser to
+  `<auth prefix>login?next=<the refused path and query>`. The bucket policy gains an
+  `s3:ListBucket` statement so a missing key is a 404, which still falls back to the shell for a
+  signed-in viewer. Without it a signed-in deep link would be a 403 too and bounce through login.
+  A consumer that passes `spa_fallback_error_codes` with a gate must keep 404 in it.
 - `api_origin_domain_name`, `api_path_pattern` and `origin_verify_header_name` go together. Set all
   three for proxy mode or none of them, otherwise the plan fails validation.
 - `access_gate_origin_verify_header_value` is a top-level sensitive input, not a member of
