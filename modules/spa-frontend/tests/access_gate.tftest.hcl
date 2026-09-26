@@ -44,6 +44,88 @@ run "without_a_gate_nothing_of_the_gate_topology_is_rendered" {
     condition     = one(aws_cloudfront_distribution.this.default_cache_behavior[0].function_association).function_arn == "arn:aws:cloudfront::123456789012:function/example-staging-apex-redirect"
     error_message = "Without a gate the consumer's own viewer_request_function_arn must be associated, since that is how both consumers run their apex to www redirect in production."
   }
+
+  assert {
+    condition     = length(aws_cloudfront_distribution.this.custom_error_response) == 2 && alltrue([for r in aws_cloudfront_distribution.this.custom_error_response : r.response_page_path == "/index.html" && r.response_code == 200])
+    error_message = "Without a gate both 403 and 404 must still fall back to the shell, so a production distribution plans no change from the gate's 403 handling."
+  }
+
+  assert {
+    condition     = length(local.bucket_policy_statements) == 1 && local.bucket_policy_statements[0].Action == "s3:GetObject"
+    error_message = "Without a gate the bucket policy must keep its single GetObject statement, so a production bucket policy plans no change."
+  }
+}
+
+run "a_gate_sends_a_refused_request_to_the_sign_in_page_rather_than_the_shell" {
+  command = plan
+
+  assert {
+    condition = length([
+      for r in aws_cloudfront_distribution.this.custom_error_response : r
+      if r.error_code == 403 && r.response_code == 403 && r.response_page_path == "/_auth/session-required" && r.error_caching_min_ttl == 0
+    ]) == 1
+    error_message = "With a gate, 403 must serve the gate's sign-in-required page with a 403. CloudFront answers a missing session with 403 before the viewer-request function runs, and falling back to the shell gives a deep link a 200 whose bundle is also the shell as HTML: a blank page with no redirect."
+  }
+
+  assert {
+    condition = length([
+      for r in aws_cloudfront_distribution.this.custom_error_response : r
+      if r.response_page_path == "/index.html"
+    ]) == 1 && one([for r in aws_cloudfront_distribution.this.custom_error_response : r.error_code if r.response_page_path == "/index.html"]) == 404
+    error_message = "With a gate only 404 may fall back to the shell. A 403 mapped to the shell as well would be a duplicate error code, and it is the very path that dead-ends an unauthenticated deep link."
+  }
+
+  assert {
+    condition     = length(local.bucket_policy_statements) == 2 && local.bucket_policy_statements[1].Action == "s3:ListBucket" && local.bucket_policy_statements[1].Sid == "AllowCloudFrontListForMissingKeys"
+    error_message = "With a gate CloudFront needs s3:ListBucket on the bucket, so a missing key is a 404 that falls back to the shell. Without it a signed-in viewer's deep link is an S3 403, which now goes to the sign-in page and bounces through login."
+  }
+}
+
+run "an_explicit_session_required_path_is_used_for_the_403_page" {
+  command = plan
+
+  variables {
+    spa_fallback_error_codes = [403, 404, 503]
+    access_gate = {
+      key_group_id                                           = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+      viewer_request_function_arn                            = "arn:aws:cloudfront::123456789012:function/example-staging-access-gate"
+      login_origin_domain_name                               = "abcdefghijklmnopqrstuvwxyz012345.lambda-url.us-west-2.on.aws"
+      login_origin_access_control_id                         = "E1EXAMPLEOAC1"
+      auth_path_pattern                                      = "/_gate/*"
+      cache_policy_id_caching_disabled                       = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+      origin_request_policy_id_all_viewer_except_host_header = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+      session_required_path                                  = "/_gate/needed"
+    }
+  }
+
+  assert {
+    condition     = one([for r in aws_cloudfront_distribution.this.custom_error_response : r.response_page_path if r.error_code == 403]) == "/_gate/needed"
+    error_message = "access_gate.session_required_path must reach the 403 custom error response when a consumer sets it."
+  }
+
+  assert {
+    condition     = length(aws_cloudfront_distribution.this.custom_error_response) == 3
+    error_message = "A consumer's explicit fallback codes must survive with 403 taken out and replaced by the sign-in page, not dropped wholesale."
+  }
+}
+
+run "a_session_required_path_outside_the_auth_pattern_is_rejected" {
+  command = plan
+
+  variables {
+    access_gate = {
+      key_group_id                                           = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+      viewer_request_function_arn                            = "arn:aws:cloudfront::123456789012:function/example-staging-access-gate"
+      login_origin_domain_name                               = "abcdefghijklmnopqrstuvwxyz012345.lambda-url.us-west-2.on.aws"
+      login_origin_access_control_id                         = "E1EXAMPLEOAC1"
+      auth_path_pattern                                      = "/_auth/*"
+      cache_policy_id_caching_disabled                       = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+      origin_request_policy_id_all_viewer_except_host_header = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+      session_required_path                                  = "/index.html"
+    }
+  }
+
+  expect_failures = [var.access_gate]
 }
 
 run "no_viewer_request_function_is_associated_when_the_consumer_passes_none" {

@@ -10,6 +10,8 @@ const ALLOWED_HOSTS = new Set((env.ALLOWED_HOSTS || env.SITE_HOST).split(',').ma
 const ALLOWED_EMAILS = new Set((env.ALLOWED_EMAILS || '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean));
 const STATE_COOKIE = '__gate_state';
 const SESSION_COOKIES = ['CloudFront-Policy', 'CloudFront-Signature', 'CloudFront-Key-Pair-Id'];
+const BOUNCE_KEY = '__gate_bounce';
+const BOUNCE_MS = 15000;
 
 const ssm = new SSMClient({});
 let secretsPromise;
@@ -237,13 +239,13 @@ async function callback(event) {
 
   if (claims.iss !== env.COGNITO_ISSUER || claims.aud !== env.CLIENT_ID || claims.token_use !== 'id' || !(claims.exp > now)) {
     console.error('rejected id token claims', { iss: claims.iss, aud: claims.aud, token_use: claims.token_use });
-    return respond(403, page('Sign-in refused', 'The identity token did not belong to this site.'), { cookies: [clearState] });
+    return respond(401, page('Sign-in refused', 'The identity token did not belong to this site.'), { cookies: [clearState] });
   }
 
   const email = String(claims.email || '').toLowerCase();
   if (ALLOWED_EMAILS.size > 0 && !ALLOWED_EMAILS.has(email)) {
     console.warn('email not on the allow list', email);
-    return respond(403, page('Not allowed', `${escapeHtml(email)} is not on the access list for this environment.`), { cookies: [clearState] });
+    return respond(401, page('Not allowed', `${escapeHtml(email)} is not on the access list for this environment.`), { cookies: [clearState] });
   }
 
   console.log('session issued', { email, host, next });
@@ -264,6 +266,25 @@ function loggedOut() {
   return respond(200, page('Signed out', `Your staging session has ended. <a href="/">Sign in again</a>.`), { cookies: clearedSessionCookies() });
 }
 
+/**
+ * Renders the page CloudFront serves, through a 403 custom error response, when a
+ * signed behavior refuses a request for want of a session. CloudFront checks the
+ * signed cookies before the viewer-request function runs, so the function cannot
+ * redirect there; the browser still shows the refused URL, so the page sends it to
+ * login with that URL as next. It stays put under the auth prefix, and a second
+ * bounce within BOUNCE_MS stops on the page with a link rather than looping when
+ * fresh cookies are still refused. The distribution maps every 403 here, so the
+ * sign-in refusals below answer 401 to keep their own message.
+ */
+function sessionRequired() {
+  const login = JSON.stringify(`${AUTH_PREFIX}login`).replace(/</g, '\\u003c');
+  const prefix = JSON.stringify(AUTH_PREFIX).replace(/</g, '\\u003c');
+  const script = `(function(){var l=${login},n=Date.now(),a=document.getElementById('l'),p=location.pathname,h=l+'?next='+encodeURIComponent(p+location.search);a.href=h;if(p.indexOf(${prefix})===0){return;}try{var t=Number(sessionStorage.getItem('${BOUNCE_KEY}'));if(t&&n-t<${BOUNCE_MS}){sessionStorage.removeItem('${BOUNCE_KEY}');return;}sessionStorage.setItem('${BOUNCE_KEY}',String(n));}catch(e){}location.replace(h);})();`;
+  const body = page('Sign-in required', `This staging site needs a session. <a id="l" href="${AUTH_PREFIX}login">Sign in</a>.`)
+    .replace('</body>', `<script>${script}</script></body>`);
+  return respond(200, body);
+}
+
 /** Escapes HTML special characters for interpolation into a page. */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -276,7 +297,7 @@ function timingSafeEqualStrings(a, b) {
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
 
-/** Access gate login handler, routing the login, callback, logout and logged-out paths. */
+/** Access gate login handler, routing the login, callback, logout, logged-out and session-required paths. */
 exports.handler = async (event) => {
   const method = ((event.requestContext || {}).http || {}).method || 'GET';
   const path = event.rawPath || '/';
@@ -295,6 +316,8 @@ exports.handler = async (event) => {
         return logout(event);
       case `${AUTH_PREFIX}logged-out`:
         return loggedOut();
+      case `${AUTH_PREFIX}session-required`:
+        return sessionRequired();
       default:
         return respond(404, page('Not found', ''));
     }

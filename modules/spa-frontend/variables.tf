@@ -251,7 +251,7 @@ variable "viewer_request_function_arn" {
 }
 
 variable "access_gate" {
-  description = "Outputs of a staging-access-gate module instance, minus the origin verification header value, which is a separate input. When set, the distribution gains the login origin, an ordered behavior for the auth path pattern, an unsigned behavior for the SPA shell, trusted_key_groups on the default behavior, and the gate's viewer-request function on every behavior. The api_origin_domain_name, api_path_pattern and origin_verify_header_name members are optional and null by default: leave them null and the frontend calls the API directly at its own hostname, which is the shape the gate's authorizer is built for. Set all three to also proxy the API through this distribution; see the api_origin_domain_name note below. The secret is kept out of this object on purpose: an object with one sensitive member is sensitive as a whole at the module boundary, which would redact every path pattern, origin id and TTL read out of it and make the distribution plan a spurious in-place update where only the sensitivity marks differ."
+  description = "Outputs of a staging-access-gate module instance, minus the origin verification header value, which is a separate input. When set, the distribution gains the login origin, an ordered behavior for the auth path pattern, an unsigned behavior for the SPA shell, trusted_key_groups on the default behavior, and the gate's viewer-request function on every behavior. It also maps 403 to the gate's sign-in-required page on the login origin instead of the SPA shell, drops 403 from the SPA fallback, and grants CloudFront s3:ListBucket so a missing key is a 404 that still falls back to the shell. session_required_path defaults to <auth_path_pattern without its trailing *>session-required, which is what the gate's session_required_path output holds. The api_origin_domain_name, api_path_pattern and origin_verify_header_name members are optional and null by default: leave them null and the frontend calls the API directly at its own hostname, which is the shape the gate's authorizer is built for. Set all three to also proxy the API through this distribution; see the api_origin_domain_name note below. The secret is kept out of this object on purpose: an object with one sensitive member is sensitive as a whole at the module boundary, which would redact every path pattern, origin id and TTL read out of it and make the distribution plan a spurious in-place update where only the sensitivity marks differ."
   type = object({
     key_group_id                                           = string
     viewer_request_function_arn                            = string
@@ -261,6 +261,7 @@ variable "access_gate" {
     cache_policy_id_caching_disabled                       = string
     origin_request_policy_id_all_viewer_except_host_header = string
     login_origin_id                                        = optional(string, "access-gate-login")
+    session_required_path                                  = optional(string)
 
     api_origin_domain_name    = optional(string)
     api_path_pattern          = optional(string)
@@ -273,6 +274,11 @@ variable "access_gate" {
   validation {
     condition     = var.access_gate == null || can(regex("^/.+\\*$", var.access_gate.auth_path_pattern))
     error_message = "access_gate.auth_path_pattern must be a CloudFront path pattern such as /_auth/*."
+  }
+
+  validation {
+    condition     = var.access_gate == null ? true : var.access_gate.session_required_path == null ? true : startswith(var.access_gate.session_required_path, trimsuffix(var.access_gate.auth_path_pattern, "*"))
+    error_message = "access_gate.session_required_path must sit under auth_path_pattern, so CloudFront fetches the 403 page from the login origin through the unsigned auth behavior."
   }
 
   validation {

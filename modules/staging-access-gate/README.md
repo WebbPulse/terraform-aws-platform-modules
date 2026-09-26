@@ -27,7 +27,10 @@ module "gate" {
 The consuming distribution must add an origin for `login_origin_domain_name` with
 `login_origin_access_control_id`, `trusted_key_groups = [key_group_id]` on the default behavior, the
 viewer-request function on the default, `auth_path_pattern` and `/index.html` behaviors, an ordered
-behavior for `auth_path_pattern`, and an unsigned behavior for exactly `/index.html`. On the API,
+behavior for `auth_path_pattern`, an unsigned behavior for exactly `/index.html`, a 403 custom
+error response serving `session_required_path` with response code 403 in place of any 403 to shell
+fallback, and `s3:ListBucket` for CloudFront on the bucket. The `spa-frontend` module's
+`access_gate` input does all of that. On the API,
 set `disable_execute_api_endpoint = true` and `authorization_type = "CUSTOM"` with
 `authorizer_id = module.gate.http_api_authorizer_id` on every route.
 
@@ -82,6 +85,7 @@ not start with `ey`, which is where a JWT header begins.
 | `login_origin_access_control_id` | Origin access control id to set on the login origin |
 | `auth_path_pattern` | Path pattern for the ordered behavior routing to the login origin |
 | `api_path_pattern` | Path pattern for the ordered behavior routing to the API origin |
+| `session_required_path` | Login origin path for the 403 custom error response; sends the viewer to login with `next` |
 | `origin_verify_header_name` | Custom header name to add to the API origin |
 | `origin_verify_header_value` | Custom header value to add to the API origin (sensitive) |
 | `origin_verify_ssm_parameter_name` | SSM parameter holding the origin verification header value |
@@ -110,10 +114,25 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
 
 ## Gotchas
 
-- CloudFront validates the signed cookie before the viewer-request function runs, so an
-  unauthenticated deep link gets a 403 rather than the function's 302 to the login page.
-- The unsigned `/index.html` behavior is mandatory, not a nicety: without it the 403 fallback
-  cannot fetch the SPA shell and the deep link dead-ends.
+- CloudFront validates the signed cookie before the viewer-request function runs, so on a signed
+  behavior an unauthenticated request is a CloudFront 403 the function never sees; the function's
+  302 to login only happens on the unsigned behaviors, which is how `/` and `/index.html` redirect.
+- **A 403 must never fall back to the SPA shell.** An unsigned `/index.html` does not rescue deep
+  links, because the shell it serves loads a signed `/assets/*.js` that also 403s and also comes
+  back as the shell, as HTML: the module script fails, React never mounts and the viewer sees a
+  blank page with a 200. Map 403 to `session_required_path` on the login origin with a 403
+  response code instead. That page reads the refused path and query from the address bar and
+  replaces itself with `<auth prefix>login?next=<them>`, and `next` goes through the login
+  Lambda's same-site check. A second bounce inside 15 seconds stops on the page with a sign-in
+  link instead of looping, which is what a session CloudFront keeps refusing looks like. The
+  `spa-frontend` module does all of this when `access_gate` is set.
+- A refused asset gets that page as a 403, not a 302: a custom error response cannot redirect, and
+  the function cannot run before the signature check. Only a document load can act on it, which is
+  the case that matters; a script tag or fetch just fails, as it should without a session.
+- Mapping 403 away from the shell means S3 must answer 404 for a missing key, so the bucket policy
+  has to grant CloudFront `s3:ListBucket`. Without it a signed-in viewer's deep link is an S3 403,
+  lands on the sign-in page and bounces through login. The unsigned `/index.html` behavior is still
+  needed, for `/` and for the 404 fallback to fetch the shell.
 - `cookie_domain` must be the bare staging apex, and `site_host` must equal it or be a subdomain,
   otherwise the signed cookies never reach the site. Both are enforced by validation.
 - Leave `cloudfront_distribution_arn` null when the distribution that consumes these outputs is the
@@ -153,9 +172,9 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
   without another trip through the hosted UI. There is no refresh.
 - Non-browser callers (a Chrome extension, a pipeline health check) cannot complete the hosted UI
   flow; they call the API directly with the origin-verify header read from SSM.
-- A gate failure looks like a working site: if CloudFront cannot invoke the login function the 403
-  becomes the SPA shell with status 200. The tell is `/_auth/login` answering with `index.html` and
-  `x-cache: Error from cloudfront`. Both `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` are
+- If CloudFront cannot invoke the login function, `/_auth/login` answers 403 with
+  `x-cache: Error from cloudfront` and CloudFront's own error body, because the sign-in-required
+  page comes from the same function. Both `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` are
   required and the module grants both.
 - The RSA signing key pair is generated by Terraform and therefore lives in state. Acceptable for a
   staging gate, not for production credentials.

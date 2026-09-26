@@ -2,6 +2,8 @@ locals {
   auth_path_pattern = "${var.auth_path_prefix}*"
   api_path_pattern  = "${var.api_path_prefix}*"
 
+  session_required_path = "${var.auth_path_prefix}session-required"
+
   all_hosts = distinct(concat([var.site_host], var.additional_hosts))
 
   callback_urls = [for h in local.all_hosts : "https://${h}${var.auth_path_prefix}callback"]

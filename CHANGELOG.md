@@ -7,6 +7,39 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `staging-access-gate` and `spa-frontend`: a refused deep link reaches login instead of a blank shell **plan change: gated distributions, their bucket policy and the login function**
+
+CloudFront checks the gate's signed cookies before the viewer-request function runs, so on the
+signed default behavior a request with no session is a CloudFront 403 the function never sees.
+`spa-frontend` mapped that 403 to the SPA shell with a 200. A deep link such as `/workspaces` got
+the shell, the shell's `/assets/*.js` got the shell again as `text/html`, the module script failed,
+and the viewer saw a blank page with no redirect. Only `/` and `/index.html`, which ride the
+unsigned shell behavior, reached the function's 302 to login. The gate README claimed the unsigned
+`/index.html` behavior stopped deep links dead-ending; it did not.
+
+With `access_gate` set, `spa-frontend` now maps 403 to the gate's new `session_required_path`
+(`<auth prefix>session-required`) on the login origin, answered with a 403, and drops 403 from the
+SPA fallback. That page is served by the login Lambda; it reads the refused path and query from the
+address bar and replaces itself with `<auth prefix>login?next=<them>`, and the login Lambda's
+existing same-site check on `next` still decides where the viewer lands. A second bounce inside 15
+seconds stops on the page with a sign-in link rather than looping, and a 403 under the auth prefix
+never redirects. The bucket policy gains an `s3:ListBucket` statement for the distribution so a
+missing key is a 404, which still falls back to the shell for a signed-in viewer. The login
+Lambda's two sign-in refusals answer 401 instead of 403 so the new mapping does not hide their
+message.
+
+A refused asset gets the page as a 403, not a 302: a custom error response cannot redirect and the
+function cannot run before the signature check. Signature enforcement is unchanged, and a
+signed-in viewer sees the same responses as before.
+
+`access_gate` takes an optional `session_required_path`, defaulting to the path the gate uses, so
+no consumer has to change its wiring. A distribution without `access_gate` plans no change. A gated
+one plans, in place: the distribution's `custom_error_response` set (403 to the sign-in page with a
+403, 404 to the shell), the bucket policy (one added statement) and the gate's login function code.
+Nothing is replaced and no `moved` block is needed.
+
 ## 2.28.0
 
 ### `identity`: a target index on the share token table **plan change: share-tokens table, only when enabled**

@@ -23,6 +23,11 @@ output "auth_path_pattern" {
   value       = local.auth_path_pattern
 }
 
+output "session_required_path" {
+  description = "Login origin path serving the sign-in-required page; the consuming distribution maps its 403 custom error response here so a refused deep link or asset reaches login instead of the SPA shell."
+  value       = local.session_required_path
+}
+
 output "api_path_pattern" {
   description = "Path pattern for the ordered cache behavior that routes to the API origin."
   value       = local.api_path_pattern

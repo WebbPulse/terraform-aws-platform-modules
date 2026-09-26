@@ -29,6 +29,13 @@ locals {
 
   spa_shell_path = "/${var.default_root_object}"
 
+  gate_session_required_path = local.gate_enabled ? coalesce(
+    var.access_gate.session_required_path,
+    "${trimsuffix(var.access_gate.auth_path_pattern, "*")}session-required",
+  ) : null
+
+  spa_fallback_error_codes = local.gate_enabled ? [for c in var.spa_fallback_error_codes : c if c != 403] : var.spa_fallback_error_codes
+
   frontend_url = local.custom_domain ? "https://${var.aliases[0]}" : "https://${aws_cloudfront_distribution.this.domain_name}"
 
   dns_records_a    = var.create_dns_records ? var.dns_records : {}

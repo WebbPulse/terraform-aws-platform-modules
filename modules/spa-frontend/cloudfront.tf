@@ -169,13 +169,24 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   dynamic "custom_error_response" {
-    for_each = toset(var.spa_fallback_error_codes)
+    for_each = toset(local.spa_fallback_error_codes)
 
     content {
       error_code            = custom_error_response.value
       response_code         = 200
       response_page_path    = local.spa_shell_path
       error_caching_min_ttl = var.error_caching_min_ttl
+    }
+  }
+
+  dynamic "custom_error_response" {
+    for_each = local.gate_enabled ? [local.gate_session_required_path] : []
+
+    content {
+      error_code            = 403
+      response_code         = 403
+      response_page_path    = custom_error_response.value
+      error_caching_min_ttl = 0
     }
   }
 
