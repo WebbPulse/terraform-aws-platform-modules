@@ -7,6 +7,36 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+Planned as 2.30.0, a minor release.
+
+### `app-secrets`: operator-owned keys in a JSON blob, opt in **no plan change**
+
+A `json` shape secret takes `json_preserve_unmanaged = true`. Every write then starts from the
+secret's current live keys, read through an ephemeral `aws_secretsmanager_secret_version`, and lays
+the declared `json` entries and then the `json_generate` keys on top, so a `version` bump keeps keys
+an operator put out of band. `json` may be empty or omitted. Whether the secret exists and has an
+`AWSCURRENT` version is checked at plan through the `aws_secretsmanager_secrets` and
+`aws_secretsmanager_secret_versions` data sources, so a first write falls back to the declared keys
+with no fresh account switch, and kept `json_generate` entries on such a secret follow that check
+instead of `json_generate_carry_enabled`. No value reaches state or plan output.
+
+Moving a secret over plans no change: delete the `json` entries the operator will own, add
+`json_preserve_unmanaged = true`, and leave `version` alone. The version resource keeps its address
+and `secret_id`, and the provider plans a write-only version only when `secret_string_wo_version`
+moves. The README Gotchas carry the recipe, the one legacy state exception and how an operator
+deletes a key. The shared ephemeral read is renamed from `json_generate` to `current`; ephemeral
+resources hold no state, so the rename is not a change. A consumer without the flag plans nothing new.
+
+### `operator-config`: private non-secret config an operator owns **new module**
+
+One Standard SSM `String` parameter, `/<name_prefix>/config` by default, seeded with `{}` under
+`ignore_changes` and exposed as the decoded `values` map. Refresh still copies the live value into
+state, so a plan follows the operator's latest `put-parameter` while the resource plans no change,
+checked against a real parameter. The first use is
+`verified_recipients = try(module.config.values.ses_verified_recipients, [])`.
+
 ## 2.29.0
 
 ### `staging-access-gate` and `spa-frontend`: a refused deep link reaches login instead of a blank shell **plan change: gated distributions, their bucket policy and the login function**

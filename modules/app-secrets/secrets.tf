@@ -28,6 +28,7 @@ resource "aws_secretsmanager_secret_version" "this" {
 
   secret_string_wo = (
     var.secrets[each.key].generate ? ephemeral.random_password.this[each.key].result :
+    contains(local.preserve_keys, each.key) ? jsonencode(merge(lookup(local.preserved_json, each.key, {}), local.static_json_maps[each.key])) :
     local.static_version_strings[each.key]
   )
   secret_string_wo_version = var.secrets[each.key].version

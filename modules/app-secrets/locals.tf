@@ -27,9 +27,24 @@ locals {
     )
   }
 
+  preserve_keys = toset([for k, s in var.secrets : k if s.json_preserve_unmanaged])
+
+  preserve_existing_keys = toset([
+    for k in local.preserve_keys :
+    k if contains(data.aws_secretsmanager_secrets.preserve[k].names, local.secret_names[k])
+  ])
+
+  preserve_current_keys = toset([
+    for k in local.preserve_existing_keys :
+    k if anytrue([for v in data.aws_secretsmanager_secret_versions.preserve[k].versions : contains(v.version_stages, "AWSCURRENT")])
+  ])
+
   json_generate_carry = {
     for k in local.json_generate_keys :
-    k => { for jk, g in var.secrets[k].json_generate : jk => g.keep && var.json_generate_carry_enabled }
+    k => {
+      for jk, g in var.secrets[k].json_generate :
+      jk => g.keep && (contains(local.preserve_keys, k) ? contains(local.preserve_current_keys, k) : var.json_generate_carry_enabled)
+    }
   }
 
   json_generate_carry_keys = toset([
@@ -37,9 +52,18 @@ locals {
     k if anytrue(values(local.json_generate_carry[k]))
   ])
 
+  current_read_keys = setunion(local.json_generate_carry_keys, local.preserve_current_keys)
+
+  current_json = {
+    for k in local.current_read_keys :
+    k => jsondecode(ephemeral.aws_secretsmanager_secret_version.current[k].secret_string)
+  }
+
+  preserved_json = { for k in local.preserve_current_keys : k => local.current_json[k] }
+
   has_version = {
     for k, s in var.secrets :
-    k => nonsensitive(s.generate || (s.value != null && s.value != "") || s.json != null || length(s.json_generate) > 0 || s.placeholder != null || var.create_empty_version)
+    k => nonsensitive(s.generate || (s.value != null && s.value != "") || s.json != null || length(s.json_generate) > 0 || s.placeholder != null || s.json_preserve_unmanaged || var.create_empty_version)
   }
 
   static_json_maps = {
@@ -51,7 +75,7 @@ locals {
     for k, s in var.secrets :
     k => (
       s.value != null ? s.value :
-      s.json != null ? jsonencode(local.static_json_maps[k]) :
+      s.json != null || s.json_preserve_unmanaged ? jsonencode(local.static_json_maps[k]) :
       s.placeholder != null ? s.placeholder :
       ""
     )
