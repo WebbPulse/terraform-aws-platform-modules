@@ -57,6 +57,7 @@ module "frontend" {
 | `viewer_request_function` | Build the viewer-request function here from a `canonical_host`; see Gotchas | `null` |
 | `access_gate` | staging-access-gate outputs; wires the gate into this distribution | `null` |
 | `access_gate_origin_verify_header_value` | The gate's origin verification header value, sensitive | `null` |
+| `public_paths` | Path patterns served anonymously past the access gate; see Gotchas | `[]` |
 | `create_dns_records` | Create alias records for `dns_records` in `zone_id` | `false` |
 | `zone_id` | Route 53 hosted zone receiving the alias records | `null` |
 | `dns_records` | `{ label = hostname }`; every hostname must also be in `aliases` | `{}` |
@@ -134,6 +135,14 @@ access_gate = {
   `s3:ListBucket` statement so a missing key is a 404, which still falls back to the shell for a
   signed-in viewer. Without it a signed-in deep link would be a 403 too and bounce through login.
   A consumer that passes `spa_fallback_error_codes` with a gate must keep 404 in it.
+- **`public_paths` takes named S3 paths out from behind the gate.** Each pattern becomes an ordered
+  behavior ahead of the gate's own, on the S3 origin with the default behavior's cache settings,
+  no `trusted_key_groups` and no viewer-request function. A viewer-request exemption cannot do
+  this, because CloudFront refuses an unsigned request on a signed behavior before the function
+  runs. Use it for documents a machine fetches with no session, such as a Terraform registry's
+  `/.well-known/terraform.json`. Without a gate the default behavior already serves them, so
+  nothing is rendered and a production distribution plans no change. A missing object is still a
+  404 that falls back to the SPA shell.
 - `api_origin_domain_name`, `api_path_pattern` and `origin_verify_header_name` go together. Set all
   three for proxy mode or none of them, otherwise the plan fails validation.
 - `access_gate_origin_verify_header_value` is a top-level sensitive input, not a member of

@@ -520,3 +520,60 @@ run "index_cache_policies_without_a_cache_policy_is_rejected" {
 
   expect_failures = [var.index_cache_policies]
 }
+
+run "public_paths_are_unsigned_ungated_behaviors_ahead_of_the_gate" {
+  command = plan
+
+  variables {
+    public_paths = ["/.well-known/terraform.json"]
+  }
+
+  assert {
+    condition     = aws_cloudfront_distribution.this.ordered_cache_behavior[0].path_pattern == "/.well-known/terraform.json"
+    error_message = "A public path must be the first ordered behavior, so no gate behavior can claim it first."
+  }
+
+  assert {
+    condition     = aws_cloudfront_distribution.this.ordered_cache_behavior[0].target_origin_id == aws_cloudfront_distribution.this.default_cache_behavior[0].target_origin_id
+    error_message = "A public path must be served from the S3 origin."
+  }
+
+  assert {
+    condition     = length(coalesce(aws_cloudfront_distribution.this.ordered_cache_behavior[0].trusted_key_groups, [])) == 0
+    error_message = "A public path must carry no trusted_key_groups: CloudFront refuses an unsigned request on a signed behavior before any function runs."
+  }
+
+  assert {
+    condition     = length(aws_cloudfront_distribution.this.ordered_cache_behavior[0].function_association) == 0
+    error_message = "A public path must carry no viewer-request function, since the gate's function would redirect a request without a session."
+  }
+
+  assert {
+    condition     = length(aws_cloudfront_distribution.this.ordered_cache_behavior) == 3
+    error_message = "A public path adds exactly one behavior beside the gate's auth and SPA shell behaviors."
+  }
+}
+
+run "public_paths_render_nothing_without_a_gate" {
+  command = plan
+
+  variables {
+    access_gate  = null
+    public_paths = ["/.well-known/terraform.json"]
+  }
+
+  assert {
+    condition     = length(aws_cloudfront_distribution.this.ordered_cache_behavior) == 0
+    error_message = "Without a gate the default behavior already serves public paths, so no ordered behavior may be added."
+  }
+}
+
+run "public_paths_refuse_the_whole_site" {
+  command = plan
+
+  variables {
+    public_paths = ["/*"]
+  }
+
+  expect_failures = [var.public_paths]
+}
