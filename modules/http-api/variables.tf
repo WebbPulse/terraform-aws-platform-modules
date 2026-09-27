@@ -490,9 +490,10 @@ variable "identity_jwt" {
                          default, denies any non-JWT bearer. lambda mode only: native mode cannot
                          honour it, and the module refuses the combination rather than accepting a
                          setting that would silently do nothing
-      result_ttl_seconds optional, how long API Gateway caches an authorizer result, keyed by the
-                         identity sources, so repeated calls with one token cost one invocation.
-                         Default 300, 0 disables the cache. lambda mode only
+      result_ttl_seconds optional, must be 0 or null. The lambda authorizer declares no identity
+                         source, because API Gateway answers 401 without invoking it whenever a
+                         listed source is missing, and a CORS preflight never carries a token.
+                         API Gateway only accepts an uncached authorizer without identity sources
       jwks_url              optional override of the derived JWKS URL. lambda mode only
       jwks_ttl_seconds      optional, how long a fetched key set is reused. Default 300. lambda only
       clock_skew_seconds    optional leeway on exp and nbf. Default 60. lambda mode only
@@ -519,7 +520,7 @@ variable "identity_jwt" {
     mode = optional(string)
 
     api_key_prefixes   = optional(list(string), [])
-    result_ttl_seconds = optional(number, 300)
+    result_ttl_seconds = optional(number, 0)
 
     jwks_url              = optional(string)
     jwks_ttl_seconds      = optional(number)
@@ -554,6 +555,11 @@ variable "identity_jwt" {
   validation {
     condition     = var.identity_jwt == null || length(coalesce(try(var.identity_jwt.identity_sources, null), ["x"])) > 0
     error_message = "identity_jwt.identity_sources must be null or a non-empty list; an empty list makes the authorizer accept a request carrying no token at all."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.mode, null), "native") != "lambda" || (try(var.identity_jwt.identity_sources, null) == null && coalesce(try(var.identity_jwt.result_ttl_seconds, null), 0) == 0)
+    error_message = "identity_jwt in lambda mode takes no identity_sources and a result_ttl_seconds of 0. A listed identity source makes API Gateway answer 401 to every CORS preflight without invoking the function, and an authorizer with no identity source cannot cache."
   }
 
   validation {

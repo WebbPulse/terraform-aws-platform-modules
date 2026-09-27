@@ -25,7 +25,7 @@ locals {
 
   identity_jwt_audiences = local.identity_jwt_create ? coalesce(var.identity_jwt.audiences, [var.identity_jwt.audience]) : null
 
-  identity_jwt_identity_sources = local.identity_jwt_any_create ? coalesce(var.identity_jwt.identity_sources, ["$request.header.Authorization"]) : null
+  identity_jwt_identity_sources = local.identity_jwt_create ? coalesce(var.identity_jwt.identity_sources, ["$request.header.Authorization"]) : null
 
   identity_lambda_name = local.identity_lambda_create ? coalesce(var.identity_jwt.lambda_function_name, "${var.name}-identity-authorizer") : null
 
@@ -33,7 +33,7 @@ locals {
 
   identity_lambda_timeout_seconds = 10
 
-  identity_lambda_result_ttl_seconds = local.identity_lambda_create ? var.identity_jwt.result_ttl_seconds : null
+  identity_lambda_result_ttl_seconds = local.identity_lambda_create ? 0 : null
 
   identity_jwks_fetch_timeout_ms = local.identity_jwt_enabled ? coalesce(var.identity_jwt.jwks_fetch_timeout_ms, 4000) : 4000
 

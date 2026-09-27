@@ -71,13 +71,13 @@ run "lambda_mode_builds_a_request_authorizer_and_no_native_one" {
   }
 
   assert {
-    condition     = aws_apigatewayv2_authorizer.identity_lambda[0].identity_sources == toset(["$request.header.Authorization"])
-    error_message = "The authorizer must key its result cache on the Authorization header, or one caller's verdict would be served to another."
+    condition     = try(length(aws_apigatewayv2_authorizer.identity_lambda[0].identity_sources), 0) == 0
+    error_message = "The authorizer must declare no identity source, or API Gateway answers 401 to every CORS preflight without invoking it."
   }
 
   assert {
-    condition     = aws_apigatewayv2_authorizer.identity_lambda[0].authorizer_result_ttl_in_seconds == 300
-    error_message = "The result cache must default to 300 seconds; without it every request pays a Lambda invocation."
+    condition     = aws_apigatewayv2_authorizer.identity_lambda[0].authorizer_result_ttl_in_seconds == 0
+    error_message = "An authorizer with no identity source must not cache; API Gateway refuses a non-zero TTL without one."
   }
 
   assert {
@@ -202,7 +202,7 @@ run "native_mode_stays_the_default_and_builds_nothing_new" {
   }
 }
 
-run "a_result_cache_can_be_turned_off" {
+run "a_result_cache_in_lambda_mode_is_refused" {
   command = plan
 
   variables {
@@ -210,14 +210,26 @@ run "a_result_cache_can_be_turned_off" {
       issuer             = "https://api.example.com/api/auth"
       audience           = "example-production-api"
       mode               = "lambda"
-      result_ttl_seconds = 0
+      result_ttl_seconds = 300
     }
   }
 
-  assert {
-    condition     = aws_apigatewayv2_authorizer.identity_lambda[0].authorizer_result_ttl_in_seconds == 0
-    error_message = "result_ttl_seconds = 0 must disable the cache."
+  expect_failures = [var.identity_jwt]
+}
+
+run "identity_sources_in_lambda_mode_are_refused" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer           = "https://api.example.com/api/auth"
+      audience         = "example-production-api"
+      mode             = "lambda"
+      identity_sources = ["$request.header.Authorization"]
+    }
   }
+
+  expect_failures = [var.identity_jwt]
 }
 
 run "api_key_prefixes_without_lambda_mode_are_refused" {
