@@ -307,6 +307,33 @@ variable "access_gate" {
   }
 }
 
+variable "public_paths" {
+  description = "CloudFront path patterns served from the S3 origin without the access gate, for documents that have to answer anonymously such as /.well-known/terraform.json. With access_gate set, each becomes an ordered behavior ahead of every other, with the default behavior's cache settings but no trusted_key_groups and no viewer-request function. Without a gate the default behavior already serves them anonymously, so nothing is rendered. Only public content belongs here: every object matching a pattern is readable by anyone."
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for p in var.public_paths : startswith(p, "/") && length(p) > 1])
+    error_message = "Every public_paths entry must be a CloudFront path pattern starting with a slash, such as /.well-known/terraform.json."
+  }
+
+  validation {
+    condition     = alltrue([for p in var.public_paths : !contains(["/*", "/**", "/*.*"], p)])
+    error_message = "public_paths must not match the whole site: that would take the entire distribution out from behind the access gate."
+  }
+
+  validation {
+    condition     = length(distinct(var.public_paths)) == length(var.public_paths)
+    error_message = "public_paths contains the same pattern twice."
+  }
+
+  validation {
+    condition     = var.access_gate == null || !contains(var.public_paths, try(var.access_gate.auth_path_pattern, ""))
+    error_message = "public_paths must not repeat access_gate.auth_path_pattern; that path belongs to the gate's login origin."
+  }
+}
+
 variable "access_gate_origin_verify_header_value" {
   description = "Value of the origin verification header CloudFront sends to the API origin, normally module.gate.origin_verify_header_value. Required only in proxy mode, that is when access_gate sets api_origin_domain_name; ignored otherwise. It is a top-level input rather than a member of access_gate so that its sensitive mark stays on this one value instead of spreading to every attribute of the object."
   type        = string

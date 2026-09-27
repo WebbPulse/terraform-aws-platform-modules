@@ -91,6 +91,40 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   dynamic "ordered_cache_behavior" {
+    for_each = local.gate_enabled ? var.public_paths : []
+
+    content {
+      path_pattern           = ordered_cache_behavior.value
+      target_origin_id       = var.origin_id
+      viewer_protocol_policy = "redirect-to-https"
+      allowed_methods        = ["GET", "HEAD"]
+      cached_methods         = ["GET", "HEAD"]
+      compress               = true
+
+      cache_policy_id            = local.use_policies ? var.cache_policy_id : null
+      origin_request_policy_id   = local.use_policies ? var.origin_request_policy_id : null
+      response_headers_policy_id = local.use_policies ? var.response_headers_policy_id : null
+
+      dynamic "forwarded_values" {
+        for_each = local.use_policies ? [] : [var.forwarded_values]
+
+        content {
+          query_string = forwarded_values.value.query_string
+          headers      = forwarded_values.value.headers
+
+          cookies {
+            forward = forwarded_values.value.cookies_forward
+          }
+        }
+      }
+
+      min_ttl     = local.use_policies ? null : var.forwarded_values.min_ttl
+      default_ttl = local.use_policies ? null : var.forwarded_values.default_ttl
+      max_ttl     = local.use_policies ? null : var.forwarded_values.max_ttl
+    }
+  }
+
+  dynamic "ordered_cache_behavior" {
     for_each = local.gate_enabled ? [1] : []
 
     content {

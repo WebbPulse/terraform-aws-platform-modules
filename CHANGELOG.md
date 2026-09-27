@@ -7,6 +7,17 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `spa-frontend`: `public_paths` serves named paths past the access gate **no plan change**
+
+A new optional `public_paths` input lists CloudFront path patterns that answer anonymously on a
+gated distribution. Each becomes an ordered behavior on the S3 origin, placed ahead of the gate's
+behaviors, with the default behavior's cache settings but no `trusted_key_groups` and no
+viewer-request function. It exists for machine-fetched discovery documents such as a Terraform
+registry's `/.well-known/terraform.json`, which `terraform init` fetches with no gate session.
+Without a gate nothing is rendered. The default is `[]`, so no consumer sees a plan change.
+
 ## 2.30.1
 
 ### `operator-config`: `values` reads an imported parameter **no plan change**
