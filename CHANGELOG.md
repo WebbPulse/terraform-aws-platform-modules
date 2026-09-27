@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.31.0
 
 ### `spa-frontend`: `public_paths` serves named paths past the access gate **no plan change**
 
