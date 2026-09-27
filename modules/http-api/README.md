@@ -133,7 +133,7 @@ identity_jwt = object({
 
   # lambda mode only
   api_key_prefixes          = optional(list(string), [])
-  result_ttl_seconds        = optional(number, 300)
+  result_ttl_seconds        = optional(number, 0) # lambda mode refuses anything but 0
   jwks_url                  = optional(string) # defaults to "<issuer>/.well-known/jwks.json"
   jwks_ttl_seconds          = optional(number, 300)
   jwks_fetch_timeout_ms     = optional(number, 4000)
@@ -232,16 +232,13 @@ identity_jwt = object({
   map with the same keys, so a backend verifying in process cannot tell them apart. The one
   difference is that lambda mode also admits a bearer matching `api_key_prefixes` without claims,
   leaving the backend to verify the key as it already does.
-- Lambda mode costs an authorizer invocation and its duration. `result_ttl_seconds` defaults to 300
-  with `identity_sources = ["$request.header.Authorization"]`, so repeated calls carrying one token
-  cost one invocation per five minutes per token, and the cache key is the token itself, never a
-  path, so a cached allow cannot leak across routes. Set `result_ttl_seconds = 0` to disable the
-  cache and pay per request. Native mode has no per request charge at all, so stay on native
-  wherever API keys are not needed.
-- Because the result cache is keyed on the token, revoking an API key or a session still leaves it
-  admitted at the gateway for up to `result_ttl_seconds`. The backend's own verification is what
-  makes a revocation immediate, so a product that needs instant revocation at the edge sets
-  `result_ttl_seconds = 0`.
+- Lambda mode declares no identity source and does not cache. API Gateway answers 401 without
+  invoking a REQUEST authorizer whenever a listed identity source is missing, and a CORS preflight
+  never carries a token, so an `Authorization` source 401s every preflight on a protected `ANY`
+  route and the browser reports it as a CORS error. The function admits `OPTIONS` itself and denies
+  a missing token. API Gateway accepts no cache without an identity source, so every request pays
+  one invocation; stay on native wherever API keys are not needed. Revocation is immediate at the
+  edge as a result.
 - The module creates the authorizer's `aws_lambda_permission` itself. A consumer does not add one.
 - `jwks_fetch_timeout_ms` must leave the authorizer time to answer: the function's timeout is 10
   seconds and a precondition rejects anything above `(10 - 4) * 1000`. The default 4000 ms allows one

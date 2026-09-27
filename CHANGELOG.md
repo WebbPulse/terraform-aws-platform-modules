@@ -7,6 +7,20 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.31.1
+
+### `http-api`: lambda mode admits CORS preflights **plan change for lambda mode consumers**
+
+The lambda authorizer inherited the native authorizer's `identity_sources =
+["$request.header.Authorization"]`. API Gateway answers 401 without invoking a REQUEST authorizer
+when a listed source is missing, so every CORS preflight on a protected `ANY` route failed before
+reaching the function, which admits `OPTIONS` itself. Lambda mode now declares no identity source
+and a result TTL of 0, which API Gateway requires without one, and refuses `identity_sources` or a
+non-zero `result_ttl_seconds`. Native mode is unchanged.
+
+Consumers on lambda mode see one in-place update to `aws_apigatewayv2_authorizer.identity_lambda`
+on their next plan: Standupless production is the only one.
+
 ## 2.31.0
 
 ### `spa-frontend`: `public_paths` serves named paths past the access gate **no plan change**

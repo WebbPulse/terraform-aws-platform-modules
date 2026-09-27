@@ -102,7 +102,7 @@ resource "aws_apigatewayv2_authorizer" "identity_lambda" {
   authorizer_uri                    = aws_lambda_function.identity_lambda[0].invoke_arn
   authorizer_payload_format_version = "2.0"
   enable_simple_responses           = true
-  identity_sources                  = local.identity_jwt_identity_sources
+  identity_sources                  = []
   authorizer_result_ttl_in_seconds  = local.identity_lambda_result_ttl_seconds
 
   depends_on = [
