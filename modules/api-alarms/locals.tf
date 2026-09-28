@@ -3,10 +3,16 @@ locals {
 
   subscriptions = { for e in var.notification_emails : e => e }
 
-  lambda_count = var.lambda_function_name == null ? 0 : 1
+  http_api_alarms = var.http_api_alarms_enabled != null ? var.http_api_alarms_enabled : var.http_api_id != null
 
-  api_5xx_count     = var.http_api_id != null && var.alarms.api_5xx ? 1 : 0
-  api_latency_count = var.http_api_id != null && var.alarms.api_integration_latency ? 1 : 0
+  lambda_alarms = var.lambda_alarms_enabled != null ? var.lambda_alarms_enabled : var.lambda_function_name != null
+
+  lambda_errors_alarm = var.lambda_errors_alarm_enabled != null ? var.lambda_errors_alarm_enabled : var.lambda_errors_alarm_function_name != null
+
+  lambda_count = local.lambda_alarms ? 1 : 0
+
+  api_5xx_count     = local.http_api_alarms && var.alarms.api_5xx ? 1 : 0
+  api_latency_count = local.http_api_alarms && var.alarms.api_integration_latency ? 1 : 0
 
   dynamodb_table_alarms = var.alarms.dynamodb_throttles ? var.dynamodb_tables : {}
 
@@ -44,7 +50,7 @@ locals {
 
   telemetry_alarm_count = length(local.telemetry_log_groups) > 0 ? 1 : 0
 
-  standalone_lambda_errors_count = var.lambda_errors_alarm_function_name != null && var.lambda_function_name == null ? 1 : 0
+  standalone_lambda_errors_count = local.lambda_errors_alarm && !local.lambda_alarms ? 1 : 0
 
   rate_limit_fail_open_log_groups = (
     var.alarms.rate_limit_failed_open && var.rate_limit_fail_open_alarm

@@ -31,12 +31,12 @@ locals {
 
   preserve_existing_keys = toset([
     for k in local.preserve_keys :
-    k if contains(data.aws_secretsmanager_secrets.preserve[k].names, local.secret_names[k])
+    k if contains(coalesce(data.aws_secretsmanager_secrets.preserve[k].names, []), local.secret_names[k])
   ])
 
   preserve_current_keys = toset([
     for k in local.preserve_existing_keys :
-    k if anytrue([for v in data.aws_secretsmanager_secret_versions.preserve[k].versions : contains(v.version_stages, "AWSCURRENT")])
+    k if anytrue([for v in coalesce(data.aws_secretsmanager_secret_versions.preserve[k].versions, []) : contains(v.version_stages, "AWSCURRENT")])
   ])
 
   json_generate_carry = {

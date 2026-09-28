@@ -68,7 +68,7 @@ output "lambda_alarm_names" {
 
 
 output "api_alarm_names" {
-  description = "Names of the two HTTP API alarms, empty when http_api_id is null."
+  description = "Names of the two HTTP API alarms, empty when http_api_id is null or http_api_alarms_enabled is false."
   value = concat(
     [for a in aws_cloudwatch_metric_alarm.api_5xx : a.alarm_name],
     [for a in aws_cloudwatch_metric_alarm.api_integration_latency : a.alarm_name],

@@ -58,12 +58,15 @@ variable "alarms" {
   default = {}
 
   validation {
-    condition     = !var.alarms.lambda_account_errors || (var.lambda_function_name == null && var.lambda_errors_alarm_function_name == null)
+    condition = !var.alarms.lambda_account_errors || (
+      !(var.lambda_alarms_enabled != null ? var.lambda_alarms_enabled : var.lambda_function_name != null) &&
+      !(var.lambda_errors_alarm_enabled != null ? var.lambda_errors_alarm_enabled : var.lambda_errors_alarm_function_name != null)
+    )
     error_message = "alarms.lambda_account_errors names its alarm <name_prefix>-lambda-errors, which is the same name lambda_function_name and lambda_errors_alarm_function_name give their per function alarm. Two alarms cannot share one name: set the account wide toggle false to keep the per function alarm, or drop the per function input."
   }
 
   validation {
-    condition     = !var.alarms.lambda_account_throttles || var.lambda_function_name == null
+    condition     = !var.alarms.lambda_account_throttles || !(var.lambda_alarms_enabled != null ? var.lambda_alarms_enabled : var.lambda_function_name != null)
     error_message = "alarms.lambda_account_throttles names its alarm <name_prefix>-lambda-throttles, which is the same name lambda_function_name gives its per function alarm. Set the account wide toggle false to keep the per function alarm, or drop lambda_function_name."
   }
 }
@@ -136,6 +139,17 @@ variable "lambda_function_name" {
   }
 }
 
+variable "lambda_alarms_enabled" {
+  description = "Plan time known override for whether the per function errors and throttles pair is created. null, the default, derives it from lambda_function_name being non null, so an existing consumer sees no plan change. Set a literal bool when lambda_function_name is unknown at plan time, which otherwise fails the plan with Invalid count argument."
+  type        = bool
+  default     = null
+
+  validation {
+    condition     = var.lambda_alarms_enabled != true || var.lambda_function_name != null
+    error_message = "lambda_alarms_enabled is true but lambda_function_name is null. The alarms need a FunctionName dimension; set lambda_function_name or leave lambda_alarms_enabled null."
+  }
+}
+
 variable "lambda_errors_threshold" {
   description = "Sum of AWS/Lambda Errors over one period that must be exceeded for the errors alarm to fire. The default of 0 with GreaterThanThreshold means any single error alarms."
   type        = number
@@ -197,6 +211,17 @@ variable "http_api_id" {
   type        = string
   default     = null
   nullable    = true
+}
+
+variable "http_api_alarms_enabled" {
+  description = "Plan time known override for whether the 5xx and integration latency alarms are created, still subject to their alarms toggles. null, the default, derives it from http_api_id being non null, so an existing consumer sees no plan change. Set a literal bool when http_api_id is unknown at plan time, as module.api.api_id is on a fresh account, which otherwise fails the plan with Invalid count argument."
+  type        = bool
+  default     = null
+
+  validation {
+    condition     = var.http_api_alarms_enabled != true || var.http_api_id != null
+    error_message = "http_api_alarms_enabled is true but http_api_id is null. The alarms need an ApiId dimension; set http_api_id or leave http_api_alarms_enabled null."
+  }
 }
 
 variable "api_5xx_threshold" {
@@ -499,6 +524,17 @@ variable "lambda_errors_alarm_function_name" {
   type        = string
   default     = null
   nullable    = true
+}
+
+variable "lambda_errors_alarm_enabled" {
+  description = "Plan time known override for whether the standalone errors alarm on lambda_errors_alarm_function_name is created. It is still skipped when the per function pair is on. null, the default, derives it from lambda_errors_alarm_function_name being non null, so an existing consumer sees no plan change. Set a literal bool when the function name is unknown at plan time."
+  type        = bool
+  default     = null
+
+  validation {
+    condition     = var.lambda_errors_alarm_enabled != true || var.lambda_errors_alarm_function_name != null
+    error_message = "lambda_errors_alarm_enabled is true but lambda_errors_alarm_function_name is null. The alarm needs a FunctionName dimension; set the function name or leave lambda_errors_alarm_enabled null."
+  }
 }
 
 variable "comparison_operator" {
