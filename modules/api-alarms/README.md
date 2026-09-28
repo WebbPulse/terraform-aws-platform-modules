@@ -144,6 +144,10 @@ module "alarms" {
 - Every email subscription needs an out of band confirmation click; until then it stays
   `PendingConfirmation` and delivers nothing. Changing an address destroys and recreates the
   subscription, which sends a fresh confirmation email.
+- Link scanners in mail systems follow the unsubscribe link in SNS messages, so a confirmed
+  email subscription can drop to unsubscribed minutes later. Confirm with
+  `aws sns confirm-subscription --topic-arn <arn> --token <token> --authenticate-on-unsubscribe true`,
+  taking the token from the confirmation link, so unsubscribing needs AWS credentials.
 - Changing `sns_topic_name` on an existing topic replaces the topic and every subscription.
 - `lambda_errors_alarm_function_name` is ignored when `lambda_function_name` is set, because that
   input already creates an alarm of exactly that name and two alarms cannot share one.
