@@ -7,9 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
-
-Planned as 2.32.0: `api-alarms` gains inputs.
+## 2.32.0
 
 ### `api-alarms`: plan time known switches for the id driven alarms **no plan change**
 
