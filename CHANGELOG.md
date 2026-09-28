@@ -7,6 +7,14 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.32.1
+
+### Licence and `api-alarms` docs **no plan change**
+
+The repository is relicensed under PolyForm Strict 1.0.0. The `api-alarms` README gains a gotcha:
+mail link scanners follow the SNS unsubscribe link and drop confirmed email subscriptions, so
+confirm with `--authenticate-on-unsubscribe true`.
+
 ## 2.32.0
 
 ### `api-alarms`: plan time known switches for the id driven alarms **no plan change**
