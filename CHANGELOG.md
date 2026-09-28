@@ -7,6 +7,28 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+Planned as 2.32.0: `api-alarms` gains inputs.
+
+### `api-alarms`: plan time known switches for the id driven alarms **no plan change**
+
+The API alarms, the per function Lambda pair and the standalone Lambda errors alarm took their count
+from a null test on `http_api_id`, `lambda_function_name` or `lambda_errors_alarm_function_name`.
+On a fresh account `module.api.api_id` is unknown at plan, so the first plan failed with `Invalid
+count argument`. Three new nullable bool inputs, `http_api_alarms_enabled`, `lambda_alarms_enabled`
+and `lambda_errors_alarm_enabled`, decide those counts when set; left null they derive from the id
+as before, so a consumer whose id is known sees no plan change. A consumer passing an id that can be
+unknown at plan sets the matching switch to `true`. The account wide alarm name validations honour
+the switches, so `lambda_alarms_enabled = false` beside a set `lambda_function_name` is accepted.
+
+### `app-secrets`: a secret with no version no longer fails the plan **no plan change**
+
+With `json_preserve_unmanaged`, a secret that existed with zero versions, as a cancelled apply
+leaves it, failed the plan with `Iteration over null value` because the versions lookup returns
+null. The lookup now counts null as no versions and the module writes the declared keys. Secrets
+that have versions behave exactly as before.
+
 ## 2.31.1
 
 ### `http-api`: lambda mode admits CORS preflights **plan change for lambda mode consumers**

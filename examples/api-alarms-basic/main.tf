@@ -94,7 +94,8 @@ module "alarms" {
   name_prefix         = local.name
   notification_emails = ["alerts@example.com"]
 
-  http_api_id = module.api.api_id
+  http_api_id             = module.api.api_id
+  http_api_alarms_enabled = true
 
   dynamodb_aggregate_alarm = true
   dynamodb_tables          = {}

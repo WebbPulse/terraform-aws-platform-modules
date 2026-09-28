@@ -225,6 +225,9 @@ Each entry in `secrets`:
   `json_generate_carry_enabled`. The run role needs `secretsmanager:ListSecrets` and
   `secretsmanager:ListSecretVersionIds` on top of what it already has. A `depends_on` on the module
   call defers those lookups to apply and the first write then misses existing keys, so leave it off.
+- A secret that exists with no version at all, which a cancelled first apply leaves behind, lists
+  its versions as null. The module treats that as no `AWSCURRENT` version and writes the declared
+  keys, so the next apply recovers without a manual `put-secret-value`.
 - Adding the first `json_generate` entry to a secret that only had `json` moves its version from
   `.this` to `.json_generate`, which replaces the version and rewrites the blob. With
   `json_preserve_unmanaged` on, the rewrite starts from the live keys, so nothing is lost.

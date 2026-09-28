@@ -14,12 +14,13 @@ Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms
 ```hcl
 module "alarms" {
   source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
-  version = "~> 2.20"
+  version = "~> 2.32"
 
   name_prefix         = local.prefix
   notification_emails = ["alerts@example.com"]
 
-  http_api_id = module.api.api_id
+  http_api_id             = module.api.api_id
+  http_api_alarms_enabled = true
 }
 ```
 
@@ -34,6 +35,7 @@ module "alarms" {
 | `tags` | Tags on the topic and every alarm | `{}` |
 | `alarms` | Which alarms exist; every key defaults to the lean set | `{}` |
 | `lambda_function_name` | `FunctionName` of an optional per function alarm pair; null skips both | `null` |
+| `lambda_alarms_enabled` | Plan time known switch for the per function pair; null derives it from `lambda_function_name` | `null` |
 | `lambda_errors_threshold` | Sum of `Errors` per period that must be exceeded | `0` |
 | `lambda_errors_period` | Period in seconds | `300` |
 | `lambda_errors_evaluation_periods` | Periods evaluated | `1` |
@@ -47,6 +49,7 @@ module "alarms" {
 | `lambda_account_throttles_period` | Period in seconds | `300` |
 | `lambda_account_throttles_evaluation_periods` | Periods evaluated | `1` |
 | `http_api_id` | `ApiId` dimension of the API alarms; null skips both | `null` |
+| `http_api_alarms_enabled` | Plan time known switch for the API alarms; null derives it from `http_api_id` | `null` |
 | `api_5xx_threshold` | Sum of `5xx` per period that must be exceeded | `0` |
 | `api_5xx_period` | Period in seconds | `300` |
 | `api_5xx_evaluation_periods` | Periods evaluated | `1` |
@@ -76,6 +79,7 @@ module "alarms" {
 | `error_alarm_period` | Period in seconds | `300` |
 | `error_alarm_evaluation_periods` | Periods evaluated | `1` |
 | `lambda_errors_alarm_function_name` | Create only the `-lambda-errors` alarm on this function | `null` |
+| `lambda_errors_alarm_enabled` | Plan time known switch for that alarm; null derives it from the function name | `null` |
 | `comparison_operator` | Comparison on every alarm | `"GreaterThanThreshold"` |
 | `treat_missing_data` | Missing data handling on every alarm | `"notBreaching"` |
 | `notify_on_ok` | Put the topic in `ok_actions` as well as `alarm_actions` | `true` |
@@ -116,6 +120,11 @@ module "alarms" {
 
 ## Gotchas
 
+- A null test on an id that is unknown at plan time fails the plan with `Invalid count argument`.
+  `module.api.api_id` is unknown on a fresh account, so a consumer passing it sets
+  `http_api_alarms_enabled = true`; `lambda_alarms_enabled` and `lambda_errors_alarm_enabled` do
+  the same for a function name that is unknown at plan. Left null they derive from the id as
+  before, so a plan with a known id does not change.
 - Application errors from the logs and telemetry export failures are counted as two separate
   metrics: the loggers in `error_excluded_loggers` are cut out of the application errors pattern and
   land on the `-telemetry-export-errors` alarm instead, so a dropped trace never pages as a fault.
