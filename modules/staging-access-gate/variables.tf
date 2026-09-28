@@ -143,6 +143,49 @@ variable "invite_login_url" {
   default     = null
 }
 
+variable "invite_email_subject" {
+  description = "Subject of the Cognito invitation email. Null, the default, is \"Your access for <cookie_domain>\"."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.invite_email_subject == null ? true : length(trimspace(var.invite_email_subject)) >= 1 && length(var.invite_email_subject) <= 140
+    error_message = "invite_email_subject must be 1 to 140 characters and not blank, the range Cognito accepts."
+  }
+}
+
+variable "invite_email_message" {
+  description = "Body of the Cognito invitation email. It must contain {username} and {####}, which Cognito replaces with the username and the temporary password. Null, the default, names the site at invite_login_url and neither says staging nor production."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.invite_email_message == null ? true : strcontains(var.invite_email_message, "{username}") && strcontains(var.invite_email_message, "{####}")
+    error_message = "invite_email_message must contain {username} and {####}: without them the invited user never learns how to sign in, and Cognito rejects the template."
+  }
+
+  validation {
+    condition     = var.invite_email_message == null ? true : length(var.invite_email_message) <= 20000
+    error_message = "invite_email_message must be at most 20000 characters, the limit Cognito accepts."
+  }
+}
+
+variable "invite_sms_message" {
+  description = "Text of the Cognito invitation SMS. It must contain {username} and {####}. Null, the default, is \"Access for <cookie_domain>. Username {username}, temporary password {####}\"."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.invite_sms_message == null ? true : strcontains(var.invite_sms_message, "{username}") && strcontains(var.invite_sms_message, "{####}")
+    error_message = "invite_sms_message must contain {username} and {####}, which Cognito requires in an invitation template."
+  }
+
+  validation {
+    condition     = var.invite_sms_message == null ? true : length(var.invite_sms_message) <= 140
+    error_message = "invite_sms_message must be at most 140 characters, the limit Cognito accepts."
+  }
+}
+
 variable "mfa_configuration" {
   description = "Cognito MFA setting for the gate's user pool: OFF, OPTIONAL or ON. Software token MFA is what gets enabled."
   type        = string

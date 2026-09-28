@@ -282,6 +282,106 @@ run "an_explicit_invite_login_url_replaces_the_derived_one" {
   }
 }
 
+run "the_default_invite_copy_names_the_domain_without_calling_it_staging" {
+  command = plan
+
+  variables {
+    cookie_domain = "app.example.com"
+    site_host     = "app.example.com"
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].email_subject == "Your access for app.example.com"
+    error_message = "The default subject must be neutral, \"Your access for <cookie_domain>\", so a production gate does not invite people to a staging site."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].sms_message == "Access for app.example.com. Username {username}, temporary password {####}"
+    error_message = "The default SMS must be neutral and keep both Cognito placeholders."
+  }
+
+  assert {
+    condition     = startswith(aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].email_message, "You have been given access to the site at https://app.example.com/\n")
+    error_message = "The default email body must name the site at invite_login_url without calling it staging."
+  }
+
+  assert {
+    condition = alltrue([
+      for m in [
+        aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].email_subject,
+        aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].email_message,
+        aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].sms_message,
+      ] : !strcontains(lower(m), "staging")
+    ])
+    error_message = "No default invite copy may say staging: the same module gates production."
+  }
+}
+
+run "explicit_invite_copy_replaces_the_defaults" {
+  command = plan
+
+  variables {
+    invite_email_subject = "Welcome to Example"
+    invite_email_message = "Sign in at https://www.staging.example.com/ as {username} with {####}."
+    invite_sms_message   = "Example: {username} / {####}"
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].email_subject == "Welcome to Example"
+    error_message = "invite_email_subject must replace the default subject."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].email_message == "Sign in at https://www.staging.example.com/ as {username} with {####}."
+    error_message = "invite_email_message must replace the default body verbatim."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.this.admin_create_user_config[0].invite_message_template[0].sms_message == "Example: {username} / {####}"
+    error_message = "invite_sms_message must replace the default SMS verbatim."
+  }
+}
+
+run "an_invite_email_without_the_password_placeholder_is_rejected" {
+  command = plan
+
+  variables {
+    invite_email_message = "Sign in as {username}."
+  }
+
+  expect_failures = [var.invite_email_message]
+}
+
+run "an_invite_sms_without_the_username_placeholder_is_rejected" {
+  command = plan
+
+  variables {
+    invite_sms_message = "Temporary password {####}"
+  }
+
+  expect_failures = [var.invite_sms_message]
+}
+
+run "an_invite_sms_over_140_characters_is_rejected" {
+  command = plan
+
+  variables {
+    invite_sms_message = "${join("", [for i in range(130) : "x"])} {username} {####}"
+  }
+
+  expect_failures = [var.invite_sms_message]
+}
+
+run "a_blank_invite_email_subject_is_rejected" {
+  command = plan
+
+  variables {
+    invite_email_subject = "   "
+  }
+
+  expect_failures = [var.invite_email_subject]
+}
+
 run "a_name_containing_cognito_is_rejected" {
   command = plan
 
