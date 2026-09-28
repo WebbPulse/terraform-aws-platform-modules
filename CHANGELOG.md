@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.33.0
 
 ### `staging-access-gate`: nested environments and configurable invite copy **plan change: in-place updates only**
 
