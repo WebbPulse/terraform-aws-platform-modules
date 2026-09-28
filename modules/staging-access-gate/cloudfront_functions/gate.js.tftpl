@@ -30,11 +30,25 @@ function decodePolicy(s) {
   return out;
 }
 
-/** True when the CloudFront-Policy cookie is present and not about to expire. */
+/** True when the cookie arrived more than once, which is what a second gate on a parent domain causes. */
+function duplicated(cookie) {
+  return !!(cookie && cookie.multiValue && cookie.multiValue.length > 1);
+}
+
+/**
+ * True when exactly one set of session cookies is present and its policy is not
+ * about to expire. CloudFront refuses any request carrying two sets, so a
+ * duplicate goes to login, which expires the parent domain set.
+ */
 function sessionLooksLive(request) {
   var cookies = request.cookies || {};
   var policy = cookies['CloudFront-Policy'];
-  if (!policy || !cookies['CloudFront-Signature'] || !cookies['CloudFront-Key-Pair-Id']) {
+  var signature = cookies['CloudFront-Signature'];
+  var keyPairId = cookies['CloudFront-Key-Pair-Id'];
+  if (!policy || !signature || !keyPairId) {
+    return false;
+  }
+  if (duplicated(policy) || duplicated(signature) || duplicated(keyPairId)) {
     return false;
   }
   var match = decodePolicy(policy.value).match(/"AWS:EpochTime":\s*(\d+)/);

@@ -7,6 +7,27 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `staging-access-gate`: nested environments and configurable invite copy **plan change: in-place updates only**
+
+A gate whose `cookie_domain` sits under another gate's, such as `staging.terraform.webbpulse.com`
+under `terraform.webbpulse.com`, received the outer gate's `CloudFront-*` cookies beside its own,
+and CloudFront answers 403 to any request carrying two sets. The login Lambda now expires the three
+cookie names on every parent domain at `/login` and `/callback` when it sees a foreign set, the
+viewer function treats a doubled cookie as no session so the browser reaches login, and the
+authorizer accepts a request when any policy and signature pair under its own key pair id verifies.
+Signing in to the inner gate signs the browser out of the outer one.
+
+Three new optional inputs, `invite_email_subject`, `invite_email_message` and
+`invite_sms_message`, replace the invitation copy, with validation that the Cognito placeholders
+are kept. Their null defaults change the existing copy in place: it no longer calls the site
+staging and names `cookie_domain` instead.
+
+A consumer bumping without input changes sees in-place updates only: the user pool's
+`admin_create_user_config` invite template, the login and authorizer Lambda code, and the gate
+CloudFront function code. Nothing is replaced.
+
 ## 2.32.1
 
 ### Licence and `api-alarms` docs **no plan change**

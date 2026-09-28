@@ -116,6 +116,67 @@ function clearedSessionCookies() {
   return SESSION_COOKIES.map((name) => cookie(name, '', { domain: env.COOKIE_DOMAIN, maxAge: 0 }));
 }
 
+/**
+ * Lists every strict parent of COOKIE_DOMAIN that still has at least two labels,
+ * nearest first: staging.app.example.com gives app.example.com and example.com.
+ * A gate on one of these domains issues cookies the browser also sends here.
+ */
+function parentCookieDomains() {
+  const labels = String(env.COOKIE_DOMAIN || '').toLowerCase().split('.').filter(Boolean);
+  const out = [];
+  for (let i = 1; i <= labels.length - 2; i += 1) {
+    out.push(labels.slice(i).join('.'));
+  }
+  return out;
+}
+
+/** Collects every value the request carries for each cookie name, duplicates included. */
+function cookieValues(event) {
+  const out = {};
+  for (const raw of event.cookies || []) {
+    const i = raw.indexOf('=');
+    if (i > 0) {
+      const name = raw.slice(0, i).trim();
+      (out[name] = out[name] || []).push(raw.slice(i + 1).trim());
+    }
+  }
+  return out;
+}
+
+/**
+ * True when the request carries CloudFront session cookies this gate did not
+ * issue: a Key-Pair-Id other than its own, or a second value for any of the three
+ * names. That is a gate on a parent domain, for example production at
+ * app.example.com seen from staging.app.example.com. CloudFront refuses every
+ * request that carries two sets, so this gate's own cookies cannot work beside them.
+ */
+function foreignSessionPresent(event) {
+  const values = cookieValues(event);
+  if (SESSION_COOKIES.some((name) => (values[name] || []).length > 1)) {
+    return true;
+  }
+  return (values['CloudFront-Key-Pair-Id'] || []).some((kid) => kid !== env.KEY_PAIR_ID);
+}
+
+/**
+ * Returns Set-Cookie values that expire the three session cookies on every parent
+ * domain when a foreign set is present, and nothing otherwise. This signs the
+ * browser out of the parent environment's gate, which is the only way this one can
+ * be used: the browser keeps sending a parent domain cookie to every subdomain.
+ */
+function evictedParentCookies(event) {
+  if (!foreignSessionPresent(event)) {
+    return [];
+  }
+  const out = [];
+  for (const domain of parentCookieDomains()) {
+    for (const name of SESSION_COOKIES) {
+      out.push(cookie(name, '', { domain, maxAge: 0 }));
+    }
+  }
+  return out;
+}
+
 /** Builds a payload 2.0 HTML response with no-store and hardening headers. */
 function respond(statusCode, body, extra = {}) {
   return {
@@ -177,7 +238,7 @@ function login(event) {
   authorize.searchParams.set('state', state);
 
   const stateCookie = cookie(STATE_COOKIE, `${state}.${b64url(next)}`, { path: AUTH_PREFIX, maxAge: 600 });
-  return redirect(authorize.toString(), [stateCookie]);
+  return redirect(authorize.toString(), [stateCookie, ...evictedParentCookies(event)]);
 }
 
 /** Decodes a JWT payload without verifying it. */
@@ -249,7 +310,7 @@ async function callback(event) {
   }
 
   console.log('session issued', { email, host, next });
-  return redirect(`https://${host}${next}`, [clearState, ...signedCookies(signingKey)]);
+  return redirect(`https://${host}${next}`, [clearState, ...evictedParentCookies(event), ...signedCookies(signingKey)]);
 }
 
 /** Clears the session cookies and redirects to the Cognito logout endpoint. */

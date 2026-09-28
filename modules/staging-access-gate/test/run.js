@@ -2,6 +2,7 @@ const assert = require('node:assert');
 const crypto = require('node:crypto');
 const gate = require('./gate.rendered.js');
 const { loadAuthorizer, loadAuthorizerWithoutConfig } = require('./package.js');
+const collision = require('./cookie_collision.js');
 
 /** Encodes a buffer in CloudFront's URL-safe base64 alphabet. */
 function cfsafe(b){return b.toString('base64').replace(/\+/g,'-').replace(/=/g,'_').replace(/\//g,'~');}
@@ -45,6 +46,7 @@ function ev(uri, opts={}) {
   assert.strictEqual(r.headers.location.value, '/_auth/login?next=' + encodeURIComponent('/workspaces?tab=runs'));
   r = await gate.handler(ev('/_auth/session-required'));
   assert.strictEqual(r.uri, '/_auth/session-required', 'the sign-in-required page stays reachable without a session');
+  await collision.gateTests(gate, ev, policyCookie);
   console.log('gate function tests passed');
 
   const key = crypto.generateKeyPairSync('rsa', {modulusLength: 2048});
@@ -112,6 +114,7 @@ function ev(uri, opts={}) {
   r = await login.handler(mk('/_auth/logged-out')); assert.strictEqual(r.statusCode, 200);
   r = await login.handler(mk('/_auth/nope')); assert.strictEqual(r.statusCode, 404);
   await require('./session_required.js')(login, mk);
+  await collision.loginTests(login, mk);
   r = await login.handler({...mk('/_auth/login'), requestContext:{http:{method:'POST'}}}); assert.strictEqual(r.statusCode, 405);
   console.log('login lambda tests passed');
 
@@ -184,6 +187,7 @@ function ev(uri, opts={}) {
   assert.deepStrictEqual(await broken.handler(areq({cookies: gateCookies(good)})), {isAuthorized:false}, 'a package with no config file refuses signed cookies');
   assert.deepStrictEqual(await broken.handler(areq({headers:{'x-origin-verify':'S3CRET'}})), {isAuthorized:true}, 'the origin header is unaffected by a missing config file');
 
+  await collision.authorizerTests(auth, gateCookies, signPolicy);
   console.log('authorizer tests passed');
 
   await require('./identity_jwt.js')({

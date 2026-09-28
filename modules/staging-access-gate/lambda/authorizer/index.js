@@ -109,7 +109,14 @@ function fromCloudFrontBase64(value) {
   return Buffer.from(String(value).replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/'), 'base64');
 }
 
-/** Collects cookies from the payload 2.0 array and from a raw cookie header. */
+const MAX_VALUES_PER_COOKIE = 4;
+
+/**
+ * Collects every value per cookie name from the payload 2.0 array and from a raw
+ * cookie header. Duplicates are kept: a gate on a parent domain, for example
+ * production at app.example.com seen from staging.app.example.com, puts a second
+ * set of the same three names on the request.
+ */
 function parseCookies(event) {
   const out = {};
   const raw = [];
@@ -124,38 +131,21 @@ function parseCookies(event) {
     const i = pair.indexOf('=');
     if (i > 0) {
       const name = pair.slice(0, i).trim();
-      if (!(name in out)) {
-        out[name] = pair.slice(i + 1).trim();
+      const value = pair.slice(i + 1).trim();
+      const list = (out[name] = out[name] || []);
+      if (!list.includes(value) && list.length < MAX_VALUES_PER_COOKIE) {
+        list.push(value);
       }
     }
   }
   return out;
 }
 
-/**
- * Verifies the gate's CloudFront signed cookies against this key pair.
- * The policy must be unexpired and scoped to this gate's cookie domain.
- */
-function signedCookiesValid(event) {
-  if (!KEY_PAIR_ID || !PUBLIC_KEY_PEM || !COOKIE_DOMAIN) {
-    return false;
-  }
-
-  const cookies = parseCookies(event);
-  const keyPairId = cookies['CloudFront-Key-Pair-Id'];
-  const policyCookie = cookies['CloudFront-Policy'];
-  const signatureCookie = cookies['CloudFront-Signature'];
-  if (!keyPairId || !policyCookie || !signatureCookie) {
-    return false;
-  }
-  if (!equal(keyPairId, KEY_PAIR_ID)) {
-    return false;
-  }
-
-  let policyJson;
+/** True when this policy and signature pair was signed by this gate's key, is scoped to its cookie domain and is unexpired. */
+function signedPairValid(policyCookie, signatureCookie) {
   let statement;
   try {
-    policyJson = fromCloudFrontBase64(policyCookie).toString('utf8');
+    const policyJson = fromCloudFrontBase64(policyCookie).toString('utf8');
     const signature = fromCloudFrontBase64(signatureCookie);
     if (!createVerify('RSA-SHA1').update(policyJson, 'utf8').verify(PUBLIC_KEY_PEM, signature)) {
       return false;
@@ -171,6 +161,34 @@ function signedCookiesValid(event) {
   }
   const expires = ((statement.Condition || {}).DateLessThan || {})['AWS:EpochTime'];
   return typeof expires === 'number' && expires > Math.floor(Date.now() / 1000);
+}
+
+/**
+ * Verifies the gate's CloudFront signed cookies against this key pair. One of the
+ * Key-Pair-Id values must be this gate's, and one policy and signature pair among
+ * the values presented must verify with its key, so a second set from another
+ * gate on a parent domain neither admits nor refuses the request.
+ */
+function signedCookiesValid(event) {
+  if (!KEY_PAIR_ID || !PUBLIC_KEY_PEM || !COOKIE_DOMAIN) {
+    return false;
+  }
+
+  const cookies = parseCookies(event);
+  const keyPairIds = cookies['CloudFront-Key-Pair-Id'] || [];
+  const policies = cookies['CloudFront-Policy'] || [];
+  const signatures = cookies['CloudFront-Signature'] || [];
+  if (!keyPairIds.some((kid) => equal(kid, KEY_PAIR_ID))) {
+    return false;
+  }
+  for (const policyCookie of policies) {
+    for (const signatureCookie of signatures) {
+      if (signedPairValid(policyCookie, signatureCookie)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

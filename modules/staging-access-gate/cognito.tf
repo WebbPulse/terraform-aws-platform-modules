@@ -19,9 +19,9 @@ resource "aws_cognito_user_pool" "this" {
     allow_admin_create_user_only = true
 
     invite_message_template {
-      email_subject = "Your staging access for ${var.cookie_domain}"
-      email_message = "You have been given access to the staging site at ${local.invite_login_url}\n\nUsername: {username}\nTemporary password: {####}\n\nOpen the site, sign in with these, and choose a new password when prompted."
-      sms_message   = "Staging access for ${var.cookie_domain}. Username {username}, temporary password {####}"
+      email_subject = local.invite_email_subject
+      email_message = local.invite_email_message
+      sms_message   = local.invite_sms_message
     }
   }
 

@@ -19,6 +19,10 @@ locals {
 
   invite_login_url = coalesce(var.invite_login_url, "https://${var.site_host}/")
 
+  invite_email_subject = coalesce(var.invite_email_subject, "Your access for ${var.cookie_domain}")
+  invite_email_message = coalesce(var.invite_email_message, "You have been given access to the site at ${local.invite_login_url}\n\nUsername: {username}\nTemporary password: {####}\n\nOpen the site, sign in with these, and choose a new password when prompted.")
+  invite_sms_message   = coalesce(var.invite_sms_message, "Access for ${var.cookie_domain}. Username {username}, temporary password {####}")
+
   login_origin_domain_name = trimsuffix(trimprefix(aws_lambda_function_url.login.function_url, "https://"), "/")
 
   cache_policy_caching_disabled                = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"

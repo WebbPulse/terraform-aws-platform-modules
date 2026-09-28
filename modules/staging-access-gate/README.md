@@ -52,6 +52,9 @@ set `disable_execute_api_endpoint = true` and `authorization_type = "CUSTOM"` wi
 | `http_api_attached` | Plan time known override for whether that authorizer is created; null derives it from `http_api_id` | `null` |
 | `origin_verify_header_name` | Header CloudFront adds to API origin requests and the authorizer checks | `"x-origin-verify"` |
 | `invite_login_url` | URL placed in the Cognito invitation email | `null` |
+| `invite_email_subject` | Invitation email subject; null is `Your access for <cookie_domain>` | `null` |
+| `invite_email_message` | Invitation email body; must contain `{username}` and `{####}`; null is a neutral message linking `invite_login_url` | `null` |
+| `invite_sms_message` | Invitation SMS, at most 140 characters; must contain `{username}` and `{####}`; null names `cookie_domain` | `null` |
 | `mfa_configuration` | Cognito MFA setting: `OFF`, `OPTIONAL` or `ON` (software token) | `"OFF"` |
 | `log_retention_days` | CloudWatch Logs retention for the two Lambdas; 0 never expires | `7` |
 | `identity_jwt` | Object turning on identity access token verification in the authorizer; see below | `null` |
@@ -135,6 +138,22 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
   needed, for `/` and for the 404 fallback to fetch the shell.
 - `cookie_domain` must be the bare staging apex, and `site_host` must equal it or be a subdomain,
   otherwise the signed cookies never reach the site. Both are enforced by validation.
+- **Nested environments share cookies.** A gate at `example.com` sets its session cookies with
+  `Domain=example.com`, so the browser also sends them to a gate at `staging.example.com`, next to
+  that gate's own set. CloudFront answers 403 to any request that carries two sets of
+  `CloudFront-*` cookies, whichever comes first, so the inner gate cannot simply skip the foreign
+  set. Instead the login Lambda expires the three `CloudFront-*` names on every parent of
+  `cookie_domain` at `/login` and `/callback`, but only when it sees a set that is not its own (a
+  different key pair id, or a name sent twice). The viewer function treats a doubled cookie as no
+  session, so the unsigned paths go to login and evict, and a refused signed path reaches it
+  through the sign-in-required page. The authorizer admits a request when any policy and signature
+  under its own key pair id verifies, so the API host works while both sets are present. The cost:
+  signing in to the inner gate signs the browser out of the outer one, and moving back is one
+  silent hosted UI round trip each way. The gate's other names need no scoping: `__gate_state` is
+  host-only on the auth path, and the bounce marker is per-origin session storage.
+- The invitation copy defaults are neutral and name `cookie_domain`; they do not say staging, so
+  one module serves a production gate as well. Overrides must keep `{username}` and `{####}`, which
+  Cognito substitutes, and an SMS must fit 140 characters.
 - Leave `cloudfront_distribution_arn` null when the distribution that consumes these outputs is the
   one fronting the login Lambda; referencing it there is a dependency cycle.
 - Setting `identity_jwt` alone enforces nothing. A route key must also appear in
