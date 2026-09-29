@@ -119,6 +119,14 @@ locals {
     }
   }
 
+  resolved_route_settings = {
+    for k, s in var.route_settings : k => {
+      throttling_burst_limit   = s.throttling_burst_limit != null ? s.throttling_burst_limit : var.throttling_burst_limit
+      throttling_rate_limit    = s.throttling_rate_limit != null ? s.throttling_rate_limit : var.throttling_rate_limit
+      detailed_metrics_enabled = s.detailed_metrics_enabled != null ? s.detailed_metrics_enabled : var.detailed_metrics_enabled
+    }
+  }
+
   unknown_route_settings = [
     for k, _ in var.route_settings : k
     if !contains(keys(local.all_routes), k)

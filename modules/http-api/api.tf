@@ -72,9 +72,9 @@ resource "aws_apigatewayv2_stage" "default" {
 
     content {
       route_key                = route_settings.key
-      throttling_burst_limit   = route_settings.value.throttling_burst_limit
-      throttling_rate_limit    = route_settings.value.throttling_rate_limit
-      detailed_metrics_enabled = route_settings.value.detailed_metrics_enabled
+      throttling_burst_limit   = local.resolved_route_settings[route_settings.key].throttling_burst_limit
+      throttling_rate_limit    = local.resolved_route_settings[route_settings.key].throttling_rate_limit
+      detailed_metrics_enabled = local.resolved_route_settings[route_settings.key].detailed_metrics_enabled
     }
   }
 

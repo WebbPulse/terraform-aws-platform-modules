@@ -39,6 +39,7 @@ module "app_baseline" {
 | `resource_group_tag_filters` | Tag key to accepted values, rendered into `TagFilters` | `{}` |
 | `resource_group_resource_type_filters` | `ResourceTypeFilters` in the group's query | `["AWS::AllSupported"]` |
 | `anomaly_detection_enabled` | Create the anomaly monitor and its subscription | `true` |
+| `anomaly_monitor_arn` | Existing monitor for the subscription to watch; set, no monitor is created | `null` |
 | `anomaly_monitor_dimension` | `SERVICE` or `LINKED_ACCOUNT` | `"SERVICE"` |
 | `anomaly_threshold` | Dollars of total absolute impact at or above which an anomaly is reported | `10` |
 | `anomaly_frequency` | `DAILY`, `IMMEDIATE` or `WEEKLY` | `"DAILY"` |
@@ -70,7 +71,8 @@ Each `budgets` entry is an object:
 | --- | --- |
 | `resource_group_arn` | ARN of the resource group, null when disabled |
 | `resource_group_name` | Name of the group, which is also its id, null when disabled |
-| `anomaly_monitor_arn` | ARN of the monitor; pass it to a second subscription for another audience |
+| `anomaly_monitor_arn` | ARN of the monitor the subscription watches, created or passed in; null when disabled |
+| `anomaly_monitor_created` | Whether this module created the monitor |
 | `anomaly_subscription_arn` | ARN of the anomaly subscription, null when disabled |
 | `budget_names` | Budget key to the full stored budget name |
 | `budget_arns` | Budget key to ARN |
@@ -91,3 +93,10 @@ Each `budgets` entry is an object:
 - Only the resource group takes tags, and it is regional, surfacing the provider region's
   resources. Cost Explorer and Budgets resources are global and untaggable.
 - The first two budgets in an account are free; each one after that is billed per day.
+- AWS allows one AWS services anomaly monitor per account, so a second `SERVICE` monitor fails the
+  apply. When the account already has one, from the console or from another stack, pass it as
+  `anomaly_monitor_arn` and the module creates the subscription only. The ARN must be known at
+  plan time because it decides the monitor count.
+- One budget can carry both an actual and a forecast alert, which keeps an account inside the two
+  free budgets: `thresholds = [{ threshold = 100 }, { threshold = 100, notification_type = "FORECASTED" }]`.
+  A forecast needs about five weeks of usage history before AWS evaluates it.

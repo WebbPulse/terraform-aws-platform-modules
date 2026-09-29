@@ -70,8 +70,20 @@ variable "anomaly_detection_enabled" {
   default     = true
 }
 
+variable "anomaly_monitor_arn" {
+  description = "ARN of an existing Cost Explorer anomaly monitor for the subscription to watch, instead of creating one. AWS allows one AWS services monitor per account, and an account may already have one from the console or from another stack, in which case creating a second fails the apply. Setting it creates the subscription only; null, the default, creates the monitor as before. It must be known at plan time because it decides the monitor count."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.anomaly_monitor_arn == null || can(regex("^arn:aws[a-z-]*:ce::[0-9]{12}:anomalymonitor/[A-Za-z0-9-]+$", coalesce(var.anomaly_monitor_arn, "x")))
+    error_message = "anomaly_monitor_arn must be a Cost Explorer anomaly monitor ARN, for example arn:aws:ce::123456789012:anomalymonitor/abcdef12-1234-4ea0-84cc-918a97d736ef."
+  }
+}
+
 variable "anomaly_monitor_dimension" {
-  description = "Dimension a DIMENSIONAL monitor watches. SERVICE is the only value Cost Explorer accepts today and it is what both estates use."
+  description = "Dimension a DIMENSIONAL monitor watches, ignored when anomaly_monitor_arn is set. SERVICE is the only value Cost Explorer accepts today and it is what both estates use."
   type        = string
   default     = "SERVICE"
 

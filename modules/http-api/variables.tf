@@ -221,10 +221,17 @@ variable "route_settings" {
     which is how an expensive path gets a tighter limit than the rest of the API without lowering
     the whole stage.
 
-    Per entry, every field optional:
-      throttling_burst_limit   burst for this route only
-      throttling_rate_limit    requests per second for this route only
-      detailed_metrics_enabled per-route CloudWatch metrics for this route only
+    Use it to cap a webhook, MCP or other bursty route on its own and raise the stage default
+    for everything else, so one caller cannot exhaust the limit every route shares.
+
+    Per entry, every field optional, and an omitted field inherits the stage value:
+      throttling_burst_limit   burst for this route only, else throttling_burst_limit
+      throttling_rate_limit    requests per second for this route only, else throttling_rate_limit
+      detailed_metrics_enabled per-route CloudWatch metrics for this route only, else
+                               detailed_metrics_enabled
+
+    The provider writes an omitted per-route throttle as 0, which throttles the route shut, so
+    the module fills it from the stage value instead. An explicit 0 still blocks the route.
 
     A key that names no route is rejected: API Gateway accepts the setting and then silently
     applies it to nothing.

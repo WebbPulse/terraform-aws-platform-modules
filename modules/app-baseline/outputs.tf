@@ -9,8 +9,13 @@ output "resource_group_name" {
 }
 
 output "anomaly_monitor_arn" {
-  description = "ARN of the Cost Explorer anomaly monitor, null when anomaly_detection_enabled is false. Pass it to another subscription to have a second audience watch the same monitor."
-  value       = one(aws_ce_anomaly_monitor.this[*].arn)
+  description = "ARN of the anomaly monitor the subscription watches, whether this module created it or it came in as anomaly_monitor_arn; null when anomaly_detection_enabled is false. Pass it to another subscription to have a second audience watch the same monitor."
+  value       = var.anomaly_detection_enabled ? local.anomaly_monitor_arn : null
+}
+
+output "anomaly_monitor_created" {
+  description = "Whether this module created the anomaly monitor. false when detection is off or an existing monitor was passed as anomaly_monitor_arn."
+  value       = local.anomaly_monitor_count == 1
 }
 
 output "anomaly_subscription_arn" {

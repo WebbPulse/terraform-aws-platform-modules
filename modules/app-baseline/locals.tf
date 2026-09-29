@@ -1,6 +1,9 @@
 locals {
   resource_group_count    = var.resource_group_enabled ? 1 : 0
   anomaly_detection_count = var.anomaly_detection_enabled ? 1 : 0
+  anomaly_monitor_count   = var.anomaly_detection_enabled && var.anomaly_monitor_arn == null ? 1 : 0
+
+  anomaly_monitor_arn = var.anomaly_monitor_arn != null ? var.anomaly_monitor_arn : one(aws_ce_anomaly_monitor.this[*].arn)
 
   resource_group_tags = length(var.tags) > 0 ? var.tags : null
 

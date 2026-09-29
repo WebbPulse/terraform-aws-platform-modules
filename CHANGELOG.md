@@ -7,6 +7,26 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `http-api`: per-route throttles inherit the stage default **no plan change**
+
+`route_settings` already capped a route on its own, so a product can hold `POST /api/github/webhooks`
+or `ANY /api/mcp` to its own limit and raise `throttling_rate_limit` and `throttling_burst_limit`
+for the rest. A field left out of an entry was written by the AWS provider as 0, which throttles the
+route shut. An omitted `throttling_burst_limit`, `throttling_rate_limit` or
+`detailed_metrics_enabled` now inherits the stage value; an explicit 0 still blocks the route. No
+consumer sets `route_settings` today, and an empty map writes no per-route block, so the stage plans
+unchanged.
+
+### `app-baseline`: subscribe to an existing anomaly monitor **no plan change**
+
+AWS allows one AWS services anomaly monitor per account, so an account that already has one could
+not take the module's monitor. The new optional `anomaly_monitor_arn` points the subscription at an
+existing monitor and skips creating one. The new output `anomaly_monitor_created` says which path
+ran, and `anomaly_monitor_arn` now reports the monitor in use either way. Left null, the monitor and
+subscription plan exactly as before.
+
 ## 2.33.0
 
 ### `staging-access-gate`: nested environments and configurable invite copy **plan change: in-place updates only**
