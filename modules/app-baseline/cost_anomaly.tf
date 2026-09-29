@@ -1,5 +1,5 @@
 resource "aws_ce_anomaly_monitor" "this" {
-  count = local.anomaly_detection_count
+  count = local.anomaly_monitor_count
 
   name              = var.name
   monitor_type      = "DIMENSIONAL"
@@ -12,7 +12,7 @@ resource "aws_ce_anomaly_subscription" "this" {
   name      = var.name
   frequency = var.anomaly_frequency
 
-  monitor_arn_list = [aws_ce_anomaly_monitor.this[0].arn]
+  monitor_arn_list = [local.anomaly_monitor_arn]
 
   dynamic "subscriber" {
     for_each = var.notification_emails

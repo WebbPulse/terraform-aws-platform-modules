@@ -270,3 +270,65 @@ run "a_negative_threshold_is_rejected" {
 
   expect_failures = [var.anomaly_threshold]
 }
+
+run "an_existing_monitor_arn_creates_the_subscription_only" {
+  command = plan
+
+  variables {
+    anomaly_monitor_arn = "arn:aws:ce::123456789012:anomalymonitor/abcdef12-1234-4ea0-84cc-918a97d736ef"
+  }
+
+  assert {
+    condition     = length(aws_ce_anomaly_monitor.this) == 0
+    error_message = "A passed monitor ARN must stop the module creating a second AWS services monitor, which AWS allows only one of per account."
+  }
+
+  assert {
+    condition     = length(aws_ce_anomaly_subscription.this) == 1
+    error_message = "The subscription must still be created against the passed monitor."
+  }
+
+  assert {
+    condition     = one(aws_ce_anomaly_subscription.this[*].monitor_arn_list) == tolist(["arn:aws:ce::123456789012:anomalymonitor/abcdef12-1234-4ea0-84cc-918a97d736ef"])
+    error_message = "The subscription must watch exactly the passed monitor."
+  }
+
+  assert {
+    condition     = output.anomaly_monitor_arn == "arn:aws:ce::123456789012:anomalymonitor/abcdef12-1234-4ea0-84cc-918a97d736ef"
+    error_message = "anomaly_monitor_arn must report the monitor the subscription watches, including a passed one."
+  }
+
+  assert {
+    condition     = output.anomaly_monitor_created == false
+    error_message = "anomaly_monitor_created must be false when the monitor was passed in."
+  }
+}
+
+run "a_passed_monitor_with_detection_off_creates_nothing" {
+  command = plan
+
+  variables {
+    anomaly_detection_enabled = false
+    anomaly_monitor_arn       = "arn:aws:ce::123456789012:anomalymonitor/abcdef12-1234-4ea0-84cc-918a97d736ef"
+  }
+
+  assert {
+    condition     = length(aws_ce_anomaly_monitor.this) == 0 && length(aws_ce_anomaly_subscription.this) == 0
+    error_message = "anomaly_detection_enabled = false must win over a passed monitor ARN."
+  }
+
+  assert {
+    condition     = output.anomaly_monitor_arn == null
+    error_message = "anomaly_monitor_arn must be null when detection is off."
+  }
+}
+
+run "a_malformed_monitor_arn_is_rejected" {
+  command = plan
+
+  variables {
+    anomaly_monitor_arn = "arn:aws:sns:us-west-2:123456789012:not-a-monitor"
+  }
+
+  expect_failures = [var.anomaly_monitor_arn]
+}

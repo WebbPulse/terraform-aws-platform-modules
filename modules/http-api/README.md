@@ -34,6 +34,26 @@ module "api" {
 }
 ```
 
+## Per-route throttles
+
+The stage default applies to every route without an override, so one caller on one route can use
+up the limit the whole API shares. Give the bursty routes their own caps in `route_settings` and
+raise the stage default for everything else. Each capped route needs an explicit `routes` entry;
+traffic that falls through to `$default` shares the `$default` limit.
+
+```hcl
+throttling_rate_limit  = 500
+throttling_burst_limit = 1000
+
+route_settings = {
+  "POST /api/github/webhooks" = { throttling_rate_limit = 20, throttling_burst_limit = 40 }
+  "ANY /api/mcp"              = { throttling_rate_limit = 50 }
+}
+```
+
+A field left out of an entry inherits the stage value, so `ANY /api/mcp` above keeps a burst of
+1000.
+
 ## Admitting agent API keys
 
 Products issue agent keys with their own prefix, for example `wpk_`, and verify them in process.
@@ -67,7 +87,7 @@ prefix arrives with no claims, which is the backend's signal to verify the key i
 | `payload_format_version` | Default proxy payload format for integrations that set none, `1.0` or `2.0` | `"2.0"` |
 | `throttling_burst_limit` | Stage default route burst limit | `50` |
 | `throttling_rate_limit` | Stage default route requests per second | `25` |
-| `route_settings` | Per-route stage overrides keyed by route key or `"$default"` | `{}` |
+| `route_settings` | Per-route throttle and metrics overrides keyed by route key or `"$default"`; omitted fields inherit the stage value | `{}` |
 | `detailed_metrics_enabled` | Per-route CloudWatch metrics for the whole stage | `false` |
 | `access_log_group_name` | Access log group name, null for `/aws/apigateway/<name>` | `null` |
 | `access_log_retention_days` | Access log retention in days, 0 keeps logs forever | `14` |
@@ -208,6 +228,9 @@ identity_jwt = object({
   would attach to nothing.
 - A `route_settings` key naming no route is rejected at plan time. API Gateway would accept it and
   apply it to nothing.
+- The AWS provider writes an omitted per-route `throttling_burst_limit` or `throttling_rate_limit`
+  as 0, which throttles that route shut with 429s while the plan looks harmless. The module fills
+  an omitted field from the stage value instead; an explicit 0 is still written and still blocks.
 - Pass `aws_acm_certificate_validation.<name>.certificate_arn`, not the certificate's own `arn`, so
   the custom domain waits for validation.
 - `zone_id` writes the alias record with the module's own `aws` provider, so the zone must be in the
