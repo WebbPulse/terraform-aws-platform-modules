@@ -593,6 +593,7 @@ variable "additional_table_grants" {
             var.oauth_server_enabled ? keys(var.oauth_server_tables) : [],
             var.api_keys_table_enabled ? [var.api_keys_table_key] : [],
             var.share_tokens_table_enabled ? [var.share_tokens_table_key] : [],
+            var.device_grant_enabled ? keys(var.device_grant_tables) : [],
           ),
           table,
         )
@@ -1189,5 +1190,140 @@ variable "share_tokens_table_key" {
   validation {
     condition     = can(regex("^[A-Za-z0-9_.-]{1,255}$", var.share_tokens_table_key))
     error_message = "share_tokens_table_key may hold only letters, digits, underscores, hyphens and dots."
+  }
+}
+
+variable "device_grant_enabled" {
+  description = <<-EOT
+    Create the two tables the OAuth 2.0 device authorization grant (RFC 8628) in
+    `webbpulse.identity.device_grant_storage` reads and writes: `device-codes` and
+    `device-grants`. Off by default, so an existing consumer's plan is empty until it turns the
+    grant on.
+
+    It is independent of `oauth_server_enabled`, `api_keys_table_enabled` and
+    `share_tokens_table_enabled`. Turning it on creates the tables and extends the identity role's
+    table grant. No `IDENTITY_*` variable follows it: the package also needs `device_clients` and
+    `device_scopes_supported` before it boots with `device_grant_enabled` on, and this module
+    knows neither, so the product sets the package flag itself and passes
+    `dynamo_device_grant_stores` to the router.
+  EOT
+
+  type     = bool
+  default  = false
+  nullable = false
+}
+
+variable "device_grant_tables" {
+  description = <<-EOT
+    The device authorization grant tables, keyed by the logical name the package knows them by,
+    in the same object shape as `tables`. Created only when `device_grant_enabled` is true.
+
+    The default is `webbpulse.identity.device_grant_storage.DEVICE_GRANT_TABLES` written out:
+    `device-codes` keyed by `device_code_hash` with a KEYS_ONLY `user_code_hash-index` GSI, and
+    `device-grants` keyed by `grant_id` with a `user_id-index` GSI projecting every attribute.
+    Both carry a TTL on `expires_at`. The key schemas are the package's contract: a hash key that
+    does not match what the store writes fails at request time rather than at apply time.
+  EOT
+
+  type = map(object({
+    attributes = list(object({
+      name = string
+      type = string
+    }))
+    hash_key  = string
+    range_key = optional(string)
+    global_secondary_indexes = optional(list(object({
+      name               = string
+      hash_key           = string
+      range_key          = optional(string)
+      projection_type    = optional(string, "ALL")
+      non_key_attributes = optional(list(string))
+    })), [])
+    ttl_attribute          = optional(string)
+    point_in_time_recovery = optional(bool)
+    deletion_protection    = optional(bool)
+    tags                   = optional(map(string), {})
+  }))
+
+  default = {
+    "device-codes" = {
+      attributes = [
+        { name = "device_code_hash", type = "S" },
+        { name = "user_code_hash", type = "S" },
+      ]
+      hash_key = "device_code_hash"
+      global_secondary_indexes = [
+        {
+          name            = "user_code_hash-index"
+          hash_key        = "user_code_hash"
+          projection_type = "KEYS_ONLY"
+        },
+      ]
+      ttl_attribute = "expires_at"
+    }
+
+    "device-grants" = {
+      attributes = [
+        { name = "grant_id", type = "S" },
+        { name = "user_id", type = "S" },
+      ]
+      hash_key = "grant_id"
+      global_secondary_indexes = [
+        {
+          name     = "user_id-index"
+          hash_key = "user_id"
+        },
+      ]
+      ttl_attribute = "expires_at"
+    }
+  }
+
+  nullable = false
+
+  validation {
+    condition = alltrue([
+      for t in var.device_grant_tables : alltrue([for a in t.attributes : contains(["S", "N", "B"], a.type)])
+    ])
+    error_message = "Every attribute type must be S (string), N (number) or B (binary)."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.device_grant_tables : contains([for a in t.attributes : a.name], t.hash_key)
+    ])
+    error_message = "Each device_grant_tables hash_key must name one of that table's attributes."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.device_grant_tables : t.range_key == null || contains([for a in t.attributes : a.name], t.range_key)
+    ])
+    error_message = "A device_grant_tables range_key, when set, must name one of that table's attributes."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.device_grant_tables : alltrue([
+        for g in t.global_secondary_indexes : contains([for a in t.attributes : a.name], g.hash_key)
+        && (g.range_key == null || contains([for a in t.attributes : a.name], g.range_key))
+      ])
+    ])
+    error_message = "Every device_grant_tables global secondary index hash_key and range_key must name one of the same table's attributes. DynamoDB rejects an index key that has no attribute definition."
+  }
+
+  validation {
+    condition = alltrue([
+      for t in var.device_grant_tables : alltrue([
+        for g in t.global_secondary_indexes : contains(["ALL", "KEYS_ONLY", "INCLUDE"], g.projection_type)
+      ])
+    ])
+    error_message = "Every global secondary index projection_type must be ALL, KEYS_ONLY or INCLUDE."
+  }
+
+  validation {
+    condition = alltrue([
+      for k in keys(var.device_grant_tables) : can(regex("^[A-Za-z0-9_.-]{1,255}$", k))
+    ])
+    error_message = "Table keys may hold only letters, digits, underscores, hyphens and dots, which is what DynamoDB allows in a table name."
   }
 }

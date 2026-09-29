@@ -7,6 +7,22 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `identity`: the device authorization grant tables, opt in **no plan change**
+
+`device_grant_enabled`, default `false`, adds the two tables `webbpulse.identity.device_grant_storage`
+reads and writes for the RFC 8628 device authorization grant: `device-codes` keyed by
+`device_code_hash` with a `KEYS_ONLY` `user_code_hash-index` GSI, and `device-grants` keyed by
+`grant_id` with a `user_id-index` GSI projecting every attribute. Both carry a TTL on `expires_at`.
+The key schemas are `DEVICE_GRANT_TABLES` written out, and the names follow the `<prefix>-<logical>`
+rule `dynamo_device_grant_stores` resolves. The tables join the one table grant on the identity
+role, so no new IAM resource appears, and `additional_table_grants` may name them while the flag is
+on. No `IDENTITY_*` variable follows them.
+
+New inputs: `device_grant_enabled` and `device_grant_tables`. New outputs: `device_grant_enabled`,
+`device_grant_table_names`, `device_code_user_code_index_name` and `device_grant_user_index_name`.
+
 ## 2.34.0
 
 ### `http-api`: per-route throttles inherit the stage default **no plan change**

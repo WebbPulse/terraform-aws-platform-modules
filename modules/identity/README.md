@@ -2,7 +2,7 @@
 
 A product's identity layer as one module block: the KMS RSA signing keys access tokens are signed
 with, the symmetric KMS key TOTP seeds are sealed under, the ten identity DynamoDB tables plus the
-opt in OAuth 2.1 authorization server, API key and share token tables, the IAM grants that reach
+opt in OAuth 2.1 authorization server, API key, share token and device grant tables, the IAM grants that reach
 them, an
 optional API Gateway JWT authorizer, and the `IDENTITY_*` environment map. It exists so a consumer wires `webbpulse.identity` with one module call instead of rebuilding
 key names, table schemas and grants by hand.
@@ -45,7 +45,7 @@ contract rather than this module's preference:
 | `oauth-states` | `state` | | | `expires_at` |
 | `oauth-links` | `provider_subject` | | `user_id-index` | |
 
-Three further groups of tables are opt in, so an existing consumer's plan stays empty until it
+Four further groups of tables are opt in, so an existing consumer's plan stays empty until it
 asks for them.
 
 `oauth_server_enabled = true` adds the three tables the OAuth 2.1 authorization server in
@@ -82,6 +82,16 @@ tenant index can answer without reading every share in the tenant.
 | Logical key | Hash key | Index | TTL |
 | --- | --- | --- | --- |
 | `share-tokens` | `token_hash` | `tenant_id-created_at-index`, `tenant_id-target_key-index` | `expires_at` |
+
+`device_grant_enabled = true` adds the two tables the OAuth 2.0 device authorization grant
+(RFC 8628) in `webbpulse.identity.device_grant_storage` reads and writes, so a CLI can sign a
+person in through the browser. `dynamo_device_grant_stores(prefix)` resolves both by the same
+`<prefix>-<logical>` rule as every other identity table.
+
+| Logical key | Hash key | Index | TTL |
+| --- | --- | --- | --- |
+| `device-codes` | `device_code_hash` | `user_code_hash-index` (`KEYS_ONLY`) | `expires_at` |
+| `device-grants` | `grant_id` | `user_id-index` | `expires_at` |
 
 Hosting an MCP server is both halves, the tables here and the router in the product:
 
@@ -168,6 +178,8 @@ Land the tables first and add `oauth_server_mcp_resource_url` once the compositi
 | `share_tokens_table_enabled` | Create the `share-tokens` table. Independent of the other two switches. | `false` |
 | `share_tokens_table` | The `share-tokens` table, in the same object shape as one `tables` entry. | the package table with both indexes and a TTL |
 | `share_tokens_table_key` | Logical key the `share-tokens` table is created under. | `"share-tokens"` |
+| `device_grant_enabled` | Create the `device-codes` and `device-grants` tables. Independent of the other switches. | `false` |
+| `device_grant_tables` | The device grant tables, in the same object shape as `tables`. Created only when the switch is on. | the two package tables |
 
 Object shapes for the two map inputs:
 
@@ -236,6 +248,10 @@ additional_table_grants = map(object({
 | `share_tokens_table_name` | Full name of the `share-tokens` table, null when the switch is off. |
 | `share_tokens_tenant_index_name` | Name of the `share-tokens` index keyed by `tenant_id` and ranged on `created_at`, which is `SHARE_TOKEN_TENANT_INDEX`. Null when the switch is off. |
 | `share_tokens_target_index_name` | Name of the `share-tokens` index keyed by `tenant_id` and ranged on `target_key`, which is `SHARE_TOKEN_TARGET_INDEX`. Null when the switch is off. |
+| `device_grant_enabled` | Whether the device grant tables exist, echoed back. |
+| `device_grant_table_names` | Logical key to full table name for the two device grant tables only, empty when the switch is off. |
+| `device_code_user_code_index_name` | Name of the `device-codes` index keyed by `user_code_hash`, which is `DEVICE_CODE_USER_CODE_INDEX`. Null when the switch is off. |
+| `device_grant_user_index_name` | Name of the `device-grants` index keyed by `user_id`, which is `DEVICE_GRANT_USER_INDEX`. Null when the switch is off. |
 
 ## Purging identity rows when a user is deleted
 
@@ -350,7 +366,8 @@ from the same merge it already does.
 - Every key named in an `additional_table_grants` entry's `tables` must be a table this module
   creates, checked at plan time: a key of `tables`, or an optional table whose flag is on
   (`api_keys_table_key` under `api_keys_table_enabled`, `share_tokens_table_key` under
-  `share_tokens_table_enabled`, the `oauth_server_tables` keys under `oauth_server_enabled`).
+  `share_tokens_table_enabled`, the `oauth_server_tables` keys under `oauth_server_enabled`, the
+  `device_grant_tables` keys under `device_grant_enabled`).
   Naming an optional table whose flag is off is refused, since the table would not exist to grant.
 - `oauth-states` and `oauth-links` are not the authorization server's tables. They are the social
   login side, where this package is an OAuth client against Google and GitHub and stores the CSRF
@@ -403,6 +420,13 @@ from the same merge it already does.
   is either, because the package reads no environment variable
   for them. `IDENTITY_REFRESH_USER_INDEX` is the one index whose name the package does look up that
   way, and adding variables the package ignores would read as configuration that does nothing.
+- `device_grant_enabled = true` creates and grants the tables but emits no `IDENTITY_*` variable.
+  The package refuses to boot with its `device_grant_enabled` on unless `device_clients` and
+  `device_scopes_supported` are also set, and this module knows neither, so the product sets all
+  three and passes `dynamo_device_grant_stores` to the router once the tables have landed.
+- No separate purge grant is needed for `device-grants`: the users stream purge runs in the
+  identity function, whose table grant already carries `DeleteItem` on every table and index here.
+  A second role that must delete device grants takes an `additional_table_grants` entry.
 - One authorizer per module instance. A product needing several on the same API creates the extra
   ones itself from `issuer` and `audience`.
 - `users_stream_enabled`, not the stream ARN, is what the counts key off. When the users table's
