@@ -52,7 +52,9 @@ locals {
 
   share_tokens_tables = var.share_tokens_table_enabled ? { (var.share_tokens_table_key) = var.share_tokens_table } : {}
 
-  optional_tables = merge(local.oauth_server_tables, local.api_keys_tables, local.share_tokens_tables)
+  device_grant_tables = var.device_grant_enabled ? var.device_grant_tables : {}
+
+  optional_tables = merge(local.oauth_server_tables, local.api_keys_tables, local.share_tokens_tables, local.device_grant_tables)
 
   all_tables = merge(var.tables, local.optional_tables)
 
@@ -183,6 +185,26 @@ locals {
     one([
       for index in local.share_tokens_tables[var.share_tokens_table_key].global_secondary_indexes :
       index.name if index.hash_key == "tenant_id" && index.range_key == "target_key"
+    ]),
+    null,
+  )
+
+  device_grant_table_names = {
+    for key in sort(keys(local.device_grant_tables)) : key => local.table_names[key]
+  }
+
+  device_code_user_code_index_name = try(
+    one([
+      for index in local.device_grant_tables["device-codes"].global_secondary_indexes :
+      index.name if index.hash_key == "user_code_hash"
+    ]),
+    null,
+  )
+
+  device_grant_user_index_name = try(
+    one([
+      for index in local.device_grant_tables["device-grants"].global_secondary_indexes :
+      index.name if index.hash_key == "user_id"
     ]),
     null,
   )

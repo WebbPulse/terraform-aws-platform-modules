@@ -196,3 +196,23 @@ output "share_tokens_target_index_name" {
   description = "Name of the share-tokens index keyed by tenant_id and ranged on target_key, null when the table is off or carries no such index. This is SHARE_TOKEN_TARGET_INDEX in webbpulse.identity.share_tokens, which answers every share token on one target by that constant rather than through the environment; the tenant index would make that question a scan of the tenant's shares."
   value       = local.share_tokens_target_index_name
 }
+
+output "device_grant_enabled" {
+  description = "Whether the device authorization grant tables exist, echoed back so a consumer branching on the same switch reads it from one place."
+  value       = var.device_grant_enabled
+}
+
+output "device_grant_table_names" {
+  description = "Logical key to full table name for the device-codes and device-grants tables only, empty when device_grant_enabled is false. They are also in table_names; dynamo_device_grant_stores in webbpulse.identity resolves both from the prefix by the same <prefix>-<logical> rule."
+  value       = local.device_grant_table_names
+}
+
+output "device_code_user_code_index_name" {
+  description = "Name of the device-codes index keyed by user_code_hash, null when the grant is off or the table carries no such index. This is DEVICE_CODE_USER_CODE_INDEX in webbpulse.identity.device_grant_storage, which the approval page queries to find the request a typed user code names."
+  value       = local.device_code_user_code_index_name
+}
+
+output "device_grant_user_index_name" {
+  description = "Name of the device-grants index keyed by user_id, null when the grant is off or the table carries no such index. This is DEVICE_GRANT_USER_INDEX, which listing and revoking one user's device sessions queries."
+  value       = local.device_grant_user_index_name
+}
