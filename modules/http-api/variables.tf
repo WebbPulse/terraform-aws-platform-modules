@@ -463,8 +463,8 @@ variable "identity_jwt" {
       audience the aud claim the identity function stamps. A token whose aud is anything else is
                refused
       name     optional authorizer name, defaults to "<var.name>-identity-jwt"
-      audiences        optional, the full list the authorizer accepts when more than one is needed.
-                       Null means exactly [audience]
+      audiences        optional, the full list the authorizer accepts when more than one is needed,
+                       in both modes. Null means exactly [audience]
       identity_sources optional, defaults to ["$request.header.Authorization"], which is where a
                        bearer token belongs. API Gateway requires every listed identity source to be
                        present or it answers 401 without evaluating the token

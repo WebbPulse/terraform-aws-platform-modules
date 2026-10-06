@@ -25,6 +25,7 @@ function loadConfig() {
       signingPublicKeyPem: typeof parsed.signing_public_key_pem === 'string' ? parsed.signing_public_key_pem : '',
       anonymousPathPrefixes: Array.isArray(parsed.anonymous_path_prefixes) ? parsed.anonymous_path_prefixes : [],
       apiKeyPrefixes: Array.isArray(parsed.api_key_prefixes) ? parsed.api_key_prefixes : [],
+      audiences: Array.isArray(parsed.audiences) ? parsed.audiences : [],
       jwksFetchTimeoutMs: Number(parsed.jwks_fetch_timeout_ms) > 0 ? Number(parsed.jwks_fetch_timeout_ms) : DEFAULT_JWKS_FETCH_TIMEOUT_MS,
     };
   } catch (err) {
@@ -34,6 +35,7 @@ function loadConfig() {
       signingPublicKeyPem: '',
       anonymousPathPrefixes: [],
       apiKeyPrefixes: [],
+      audiences: [],
       jwksFetchTimeoutMs: DEFAULT_JWKS_FETCH_TIMEOUT_MS,
     };
   }
@@ -79,6 +81,7 @@ function expected() {
 const identity = createIdentityVerifier({
   issuer: ISSUER,
   audience: AUDIENCE,
+  audiences: CONFIG.audiences,
   jwksUrl: process.env.IDENTITY_JWKS_URL || undefined,
   jwksTtlSeconds: process.env.IDENTITY_JWKS_TTL_SECONDS,
   jwksFetchTimeoutMs: CONFIG.jwksFetchTimeoutMs,

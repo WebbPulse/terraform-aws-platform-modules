@@ -223,6 +223,8 @@ variable "identity_jwt" {
                 otherwise
       audience  the aud claim the identity function stamps. A token whose aud is anything else is
                 refused, which is what stops a production token opening staging
+      audiences optional, the full list of aud claims accepted when more than one is needed, for
+                example adding a device login's "<issuer>/device". Null means exactly [audience]
       jwks_url            optional override of the derived JWKS URL
       jwks_ttl_seconds    optional, how long a fetched key set is reused. Default 300
       clock_skew_seconds  optional leeway on exp and nbf, for skew between the signer and this
@@ -243,6 +245,7 @@ variable "identity_jwt" {
   type = object({
     issuer             = string
     audience           = string
+    audiences          = optional(list(string))
     jwks_url           = optional(string)
     jwks_ttl_seconds   = optional(number)
     clock_skew_seconds = optional(number)
@@ -265,6 +268,11 @@ variable "identity_jwt" {
   validation {
     condition     = var.identity_jwt == null || try(var.identity_jwt.audience, "") != ""
     error_message = "identity_jwt.audience must not be empty: it is what the token's aud claim is matched against."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || (length(coalesce(try(var.identity_jwt.audiences, null), ["x"])) > 0 && alltrue([for a in coalesce(try(var.identity_jwt.audiences, null), ["x"]) : trimspace(a) != ""]))
+    error_message = "identity_jwt.audiences must be null or a non-empty list of non-empty audiences."
   }
 
   validation {

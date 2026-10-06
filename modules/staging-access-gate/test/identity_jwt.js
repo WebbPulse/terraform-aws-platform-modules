@@ -199,6 +199,25 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await auth.handler(req(PROTECTED, sign(claims({ aud: ['something-else', AUDIENCE] }))));
   assert.strictEqual(r.isAuthorized, true, 'an aud array containing the audience is accepted');
 
+  const DEVICE = 'https://staging.example.com/api/auth/device';
+  const multi = loadAuthorizer({ routeKeys: ENFORCED, signingPublicKeyPem: publicPem, audiences: [AUDIENCE, DEVICE] });
+
+  fresh();
+  r = await multi.handler(req(PROTECTED, sign(claims({ aud: DEVICE }))));
+  assert.strictEqual(r.isAuthorized, true, 'a token for a configured extra audience is accepted');
+
+  fresh();
+  r = await multi.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(r.isAuthorized, true, 'the primary audience is still accepted alongside the extras');
+
+  fresh();
+  r = await multi.handler(req(PROTECTED, sign(claims({ aud: 'example-production-api' }))));
+  assert.deepStrictEqual(r, { isAuthorized: false }, 'an audience outside the list is still denied');
+
+  fresh();
+  r = await auth.handler(req(PROTECTED, sign(claims({ aud: DEVICE }))));
+  assert.deepStrictEqual(r, { isAuthorized: false }, 'without the extra audience configured a device token is denied');
+
   fresh();
   r = await auth.handler(req(PROTECTED, sign(claims(), { key: foreign.privateKey })));
   assert.deepStrictEqual(r, { isAuthorized: false }, 'a token signed by a key not in the JWKS is denied');
