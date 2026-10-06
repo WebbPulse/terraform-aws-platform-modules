@@ -41,12 +41,16 @@ locals {
     for p in coalesce(var.identity_jwt.api_key_prefixes, []) : trimspace(p) if trimspace(p) != ""
   ] : []
 
-  identity_lambda_config_json = jsonencode({
-    route_keys            = local.identity_jwt_route_keys
-    api_key_prefixes      = local.identity_api_key_prefixes
-    jwks_fetch_timeout_ms = local.identity_jwks_fetch_timeout_ms
-    audiences             = local.identity_jwt_enabled ? coalesce(var.identity_jwt.audiences, [var.identity_jwt.audience]) : []
-  })
+  identity_lambda_extra_audiences = local.identity_jwt_enabled ? [for a in coalesce(var.identity_jwt.audiences, []) : a if a != var.identity_jwt.audience] : []
+
+  identity_lambda_config_json = jsonencode(merge(
+    {
+      route_keys            = local.identity_jwt_route_keys
+      api_key_prefixes      = local.identity_api_key_prefixes
+      jwks_fetch_timeout_ms = local.identity_jwks_fetch_timeout_ms
+    },
+    length(local.identity_lambda_extra_audiences) > 0 ? { audiences = var.identity_jwt.audiences } : {},
+  ))
 
   identity_lambda_environment = local.identity_lambda_create ? {
     IDENTITY_ISSUER   = var.identity_jwt.issuer

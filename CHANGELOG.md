@@ -9,15 +9,15 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
-### `staging-access-gate`, `http-api`: the identity authorizer accepts a list of audiences **no plan change beyond the authorizer package**
+### `staging-access-gate`, `http-api`: the identity authorizer accepts a list of audiences **no plan change**
 
 `staging-access-gate` `identity_jwt` gains `audiences`, optional, null meaning exactly `[audience]`,
 validated as a non-empty list of non-empty values. The shared `identity.js` verifier accepts a token
 whose `aud` names any configured audience, so a device login token from webbpulse 0.71.0, whose
 `aud` is `<issuer>/device`, passes the gate when that audience is listed. `http-api` Lambda mode
-now honours its existing `audiences` too. The list travels in `identity_jwt_config.json`, so every
-consumer of either authorizer sees one in-place update to the function's package hash and nothing
-else (PLAT-14).
+now honours its existing `audiences` too. The list travels in `identity_jwt_config.json` only when it
+names an audience beyond `audience`, so a consumer that leaves `audiences` unset or equal to
+`[audience]` packages the same config as before and its plan stays empty (PLAT-14).
 
 ## 2.35.0
 
