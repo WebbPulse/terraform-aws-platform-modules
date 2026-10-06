@@ -19,6 +19,7 @@ function renderConfig({
   anonymousPathPrefixes = [],
   apiKeyPrefixes = [],
   jwksFetchTimeoutMs = 4000,
+  audiences = [],
 } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
@@ -26,6 +27,7 @@ function renderConfig({
     anonymous_path_prefixes: anonymousPathPrefixes,
     api_key_prefixes: apiKeyPrefixes,
     jwks_fetch_timeout_ms: jwksFetchTimeoutMs,
+    audiences,
   });
 }
 

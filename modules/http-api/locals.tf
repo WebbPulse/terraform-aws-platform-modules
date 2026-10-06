@@ -45,6 +45,7 @@ locals {
     route_keys            = local.identity_jwt_route_keys
     api_key_prefixes      = local.identity_api_key_prefixes
     jwks_fetch_timeout_ms = local.identity_jwks_fetch_timeout_ms
+    audiences             = local.identity_jwt_enabled ? coalesce(var.identity_jwt.audiences, [var.identity_jwt.audience]) : []
   })
 
   identity_lambda_environment = local.identity_lambda_create ? {

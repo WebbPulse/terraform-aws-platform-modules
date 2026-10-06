@@ -197,6 +197,51 @@ run "an_issuer_with_a_trailing_slash_is_rejected" {
   expect_failures = [var.identity_jwt]
 }
 
+run "an_empty_audiences_list_is_rejected" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer    = "https://www.staging.example.com/api/auth"
+      audience  = "example-staging-api"
+      audiences = []
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
+
+run "a_blank_entry_in_audiences_is_rejected" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer    = "https://www.staging.example.com/api/auth"
+      audience  = "example-staging-api"
+      audiences = ["example-staging-api", " "]
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
+
+run "extra_audiences_travel_in_the_packaged_config" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer    = "https://www.staging.example.com/api/auth"
+      audience  = "example-staging-api"
+      audiences = ["example-staging-api", "https://www.staging.example.com/api/auth/device"]
+    }
+  }
+
+  assert {
+    condition     = jsonencode(local.identity_jwt_audiences) == jsonencode(["example-staging-api", "https://www.staging.example.com/api/auth/device"])
+    error_message = "The accepted audiences must be packaged in identity_jwt_config.json, or a device login token is refused at the gate."
+  }
+}
+
 run "an_empty_audience_is_rejected" {
   command = plan
 

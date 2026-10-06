@@ -22,6 +22,7 @@ function loadConfig() {
     return {
       routeKeys: Array.isArray(parsed.route_keys) ? parsed.route_keys : [],
       apiKeyPrefixes: Array.isArray(parsed.api_key_prefixes) ? parsed.api_key_prefixes : [],
+      audiences: Array.isArray(parsed.audiences) ? parsed.audiences : [],
       jwksFetchTimeoutMs: Number(parsed.jwks_fetch_timeout_ms) > 0 ? Number(parsed.jwks_fetch_timeout_ms) : DEFAULT_JWKS_FETCH_TIMEOUT_MS,
     };
   } catch (err) {
@@ -29,6 +30,7 @@ function loadConfig() {
     return {
       routeKeys: [],
       apiKeyPrefixes: [],
+      audiences: [],
       jwksFetchTimeoutMs: DEFAULT_JWKS_FETCH_TIMEOUT_MS,
     };
   }
@@ -50,6 +52,7 @@ const DENY = { isAuthorized: false };
 const identity = createIdentityVerifier({
   issuer: ISSUER,
   audience: AUDIENCE,
+  audiences: CONFIG.audiences,
   jwksUrl: process.env.IDENTITY_JWKS_URL || undefined,
   jwksTtlSeconds: process.env.IDENTITY_JWKS_TTL_SECONDS,
   jwksFetchTimeoutMs: CONFIG.jwksFetchTimeoutMs,

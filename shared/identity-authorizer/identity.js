@@ -75,7 +75,11 @@ function cleanList(values) {
 }
 
 /**
- * Builds a verifier bound to one issuer, audience and key set.
+ * Builds a verifier bound to one issuer, a set of accepted audiences and a key set.
+ *
+ * `options.audience` is the primary aud claim and `options.audiences` an optional
+ * list of further ones, for example a device login's `<issuer>/device`. A token is
+ * accepted when its aud names any of them.
  *
  * `options.fetchHeaders` is an optional async function returning headers to send
  * on the JWKS fetch. The gate uses it to present its origin verification header,
@@ -84,7 +88,7 @@ function cleanList(values) {
  */
 function createIdentityVerifier(options) {
   const issuer = String(options.issuer || '');
-  const audience = String(options.audience || '');
+  const audiences = [...new Set(cleanList([options.audience, ...(Array.isArray(options.audiences) ? options.audiences : [])].filter((a) => a !== undefined && a !== null)))];
   const jwksUrl = String(options.jwksUrl || (issuer ? `${issuer}/.well-known/jwks.json` : ''));
 
   const jwksTtlMs = Number(options.jwksTtlSeconds || DEFAULT_JWKS_TTL_SECONDS) * 1000;
@@ -262,8 +266,8 @@ function createIdentityVerifier(options) {
       return null;
     }
 
-    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!audiences.includes(audience)) {
+    const presented = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    if (!presented.some((aud) => audiences.includes(aud))) {
       console.warn('access token rejected: wrong audience');
       return null;
     }
@@ -294,7 +298,7 @@ function createIdentityVerifier(options) {
 
   /** True when this request's route key is one of the token-enforced routes. */
   function requiresIdentityJwt(event) {
-    if (routeKeys.size === 0 || !issuer || !audience) {
+    if (routeKeys.size === 0 || !issuer || audiences.length === 0) {
       return false;
     }
     const routeKey = (event.routeKey || (event.requestContext || {}).routeKey || '').trim();

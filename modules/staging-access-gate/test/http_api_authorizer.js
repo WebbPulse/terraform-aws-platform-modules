@@ -28,11 +28,12 @@ const KID = 'key-one';
 let counter = 0;
 
 /** Renders identity_jwt_config.json exactly as the http-api locals do. */
-function renderConfig({ routeKeys = [], apiKeyPrefixes = [], jwksFetchTimeoutMs = 4000 } = {}) {
+function renderConfig({ routeKeys = [], apiKeyPrefixes = [], jwksFetchTimeoutMs = 4000, audiences = [] } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
     api_key_prefixes: apiKeyPrefixes,
     jwks_fetch_timeout_ms: jwksFetchTimeoutMs,
+    audiences,
   });
 }
 
@@ -170,6 +171,18 @@ module.exports = async function run() {
     await auth.handler(req({ token: sign(claims({ aud: 'example-staging-api' })) })),
     { isAuthorized: false },
     'a token for another audience is denied, which is what stops a staging token opening production',
+  );
+  const DEVICE = 'https://api.example.com/api/auth/device';
+  const multi = loadAuthorizer({ routeKeys: [PROTECTED], audiences: [AUDIENCE, DEVICE] });
+  assert.strictEqual(
+    (await multi.handler(req({ token: sign(claims({ aud: DEVICE })) }))).isAuthorized,
+    true,
+    'a token for a configured extra audience is accepted',
+  );
+  assert.deepStrictEqual(
+    await multi.handler(req({ token: sign(claims({ aud: 'example-staging-api' })) })),
+    { isAuthorized: false },
+    'an audience outside the configured list is still denied',
   );
   assert.deepStrictEqual(
     await auth.handler(req({ token: sign(claims({ iss: 'https://evil.example.com' })) })),
