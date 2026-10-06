@@ -9,6 +9,8 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+## 2.36.0
+
 ### `staging-access-gate`, `http-api`: the identity authorizer accepts a list of audiences **no plan change**
 
 `staging-access-gate` `identity_jwt` gains `audiences`, optional, null meaning exactly `[audience]`,
