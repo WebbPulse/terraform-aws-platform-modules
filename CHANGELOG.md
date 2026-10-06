@@ -9,6 +9,8 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+## 2.35.0
+
 ### `identity`: the device authorization grant tables, opt in **no plan change**
 
 `device_grant_enabled`, default `false`, adds the two tables `webbpulse.identity.device_grant_storage`
