@@ -4,13 +4,13 @@ Creates a Step Functions state machine from a caller-supplied Amazon States Lang
 with its IAM execution role, its CloudWatch log group, and a ready-made policy for whoever starts
 the executions.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/step-functions`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/step-functions`.
 
 ## Usage
 
 ```hcl
 module "run" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/step-functions"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/step-functions"
   version = "~> 2.23"
 
   name = "example-staging-run"

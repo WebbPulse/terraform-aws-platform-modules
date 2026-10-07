@@ -5,13 +5,13 @@ shared task execution role, a task role per task, a log group per task, and a re
 whoever calls `RunTask`. No services, no load balancers, no scheduling: something else decides when
 a task runs.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/ecs-fargate`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ecs-fargate`.
 
 ## Usage
 
 ```hcl
 module "tasks" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/ecs-fargate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ecs-fargate"
   version = "~> 2.23"
 
   cluster_name = "example-staging"

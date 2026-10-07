@@ -4,13 +4,13 @@ The account level housekeeping an application stack carries: a tag based resourc
 Explorer anomaly detection, and cost budgets with email or SNS alerts. Each of the three parts is
 independently gated, so an account that gets one of them elsewhere consumes the module for the rest.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/app-baseline`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/app-baseline`.
 
 ## Usage
 
 ```hcl
 module "app_baseline" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-baseline"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/app-baseline"
   version = "~> 1.6"
 
   name                = local.prefix

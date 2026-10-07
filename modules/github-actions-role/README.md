@@ -4,13 +4,13 @@ The IAM role a repository's GitHub Actions workflows assume to deploy, trusted t
 OIDC provider so no long-lived AWS keys live in GitHub. One inline policy carries the deploy
 permissions, and the module can create the account-level OIDC provider or trust one that exists.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/github-actions-role`.
 
 ## Usage
 
 ```hcl
 module "github_actions_role" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/github-actions-role"
   version = "~> 1.4"
 
   role_name = "${local.prefix}-github-actions-deploy"

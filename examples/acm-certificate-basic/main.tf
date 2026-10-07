@@ -20,7 +20,7 @@ provider "aws" {
 }
 
 module "site_certificate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/acm-certificate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/acm-certificate"
   version = "~> 1.6"
 
   providers = {
@@ -34,7 +34,7 @@ module "site_certificate" {
 }
 
 module "api_certificate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/acm-certificate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/acm-certificate"
   version = "~> 1.6"
 
   providers = {

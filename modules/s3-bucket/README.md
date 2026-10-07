@@ -5,13 +5,13 @@ versioning, server-side encryption with SSE-S3 or a KMS key the module takes or 
 TLS-only bucket policy, optional lifecycle rules, optional EventBridge notifications and CORS,
 and ready-made read-only and read-write IAM policy documents scoped to the bucket and its key.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/s3-bucket`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/s3-bucket`.
 
 ## Usage
 
 ```hcl
 module "state" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/s3-bucket"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/s3-bucket"
   version = "~> 2.23"
 
   bucket = "example-production-terraform-state"

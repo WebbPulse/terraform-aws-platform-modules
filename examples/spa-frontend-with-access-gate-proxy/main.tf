@@ -103,7 +103,7 @@ locals {
 }
 
 module "gate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-access-gate"
   version = "~> 1.4"
 
   count = var.staging_access_gate ? 1 : 0
@@ -118,7 +118,7 @@ module "gate" {
 }
 
 module "frontend" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/spa-frontend"
   version = "~> 1.5"
 
   name = local.name

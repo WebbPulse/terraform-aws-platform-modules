@@ -9,7 +9,7 @@ import pathlib
 import re
 import sys
 
-REGISTRY = "app.terraform.io/WebbPulse/platform-modules/aws//modules/"
+REGISTRY = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/"
 
 SOURCE_RE = re.compile(
     r'^(?P<indent>\s*)source(?P<pad>\s*)=\s*"'

@@ -1,5 +1,5 @@
 module "gate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-access-gate"
   version = "~> 1.0"
 
   name           = "example-staging"

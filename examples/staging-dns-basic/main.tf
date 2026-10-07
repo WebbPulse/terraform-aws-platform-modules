@@ -39,7 +39,7 @@ provider "aws" {
 }
 
 module "staging_dns" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-dns"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-dns"
   version = "~> 1.2"
 
   providers = {

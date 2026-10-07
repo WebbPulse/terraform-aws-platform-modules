@@ -4,13 +4,13 @@ A DNS validated ACM certificate, the Route 53 records that prove it, and the val
 that waits for issuance. Use it for any certificate a CloudFront distribution or an API Gateway
 domain needs.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/acm-certificate`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/acm-certificate`.
 
 ## Usage
 
 ```hcl
 module "site_certificate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/acm-certificate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/acm-certificate"
   version = "~> 1.6"
 
   providers = {

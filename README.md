@@ -1,15 +1,15 @@
 # terraform-aws-platform-modules
 
 The shared Terraform modules behind every WebbPulse application estate. One repository, one
-semver tag, many submodules. Published to the WebbPulse HCP Terraform private registry as
-`platform-modules/aws` by [WebbPulse-Platform](https://github.com/WebbPulse/WebbPulse-Platform),
-which also owns this repository.
+semver tag, many submodules. Each semver tag is published as `platform-modules/aws` to the
+WebbPulse module registry at `terraform.webbpulse.com`.
+[WebbPulse-Platform](https://github.com/WebbPulse/WebbPulse-Platform) owns this repository.
 
 ## Consuming a module
 
 ```hcl
 module "gate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-access-gate"
   version = "~> 1.0"
   # ...
 }

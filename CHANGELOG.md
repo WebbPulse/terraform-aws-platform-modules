@@ -9,6 +9,13 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+### Docs, examples and CI: module sources point at `terraform.webbpulse.com` **no plan change**
+
+The examples, the module READMEs and the repository README name
+`terraform.webbpulse.com/WebbPulse/platform-modules/aws` instead of the HCP Terraform registry, and
+`local_module_override.py` rewrites that host so CI still validates the examples against this
+checkout. No module code changed.
+
 ## 2.36.0
 
 ### `staging-access-gate`, `http-api`: the identity authorizer accepts a list of audiences **no plan change**

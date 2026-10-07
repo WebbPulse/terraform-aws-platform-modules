@@ -3,13 +3,13 @@
 Puts a CloudFront-fronted staging site, and the HTTP API behind it, behind a sign-in wall for a
 fixed list of email addresses. Nothing about the application changes; the gate sits in front of it.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-access-gate`.
 
 ## Usage
 
 ```hcl
 module "gate" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-access-gate"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-access-gate"
   version = "~> 1.0"
 
   name             = "example-staging"

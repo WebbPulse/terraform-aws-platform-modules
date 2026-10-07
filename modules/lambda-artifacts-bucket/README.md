@@ -4,13 +4,13 @@ The private, versioned S3 bucket a deploy pipeline uploads Lambda deployment pac
 Lambda function reads its code from, with a public access block, a lifecycle rule, optional
 encryption and an optional placeholder object.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-artifacts-bucket`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/lambda-artifacts-bucket`.
 
 ## Usage
 
 ```hcl
 module "lambda_artifacts" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-artifacts-bucket"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/lambda-artifacts-bucket"
   version = "~> 1.6"
 
   bucket = "example-production-lambda-artifacts"

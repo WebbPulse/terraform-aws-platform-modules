@@ -4,13 +4,13 @@ Creates a map of ECR repositories, one per domain function, with immutable commi
 scan on push, and a two-rule lifecycle policy that keeps storage flat. A repository policy is
 written only when a cross-account principal is named.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/ecr-repository`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ecr-repository`.
 
 ## Usage
 
 ```hcl
 module "registry" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/ecr-repository"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ecr-repository"
   version = "~> 1.8"
 
   name_prefix = "example-production"

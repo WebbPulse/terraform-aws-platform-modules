@@ -8,13 +8,13 @@ the dead letter queue's only source, and an optional queue policy granting a lis
 Built to be consumed by `modules/lambda-function`'s `sqs_event_sources`, which takes `queue_arn`
 from here.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/sqs-queue`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/sqs-queue`.
 
 ## Usage
 
 ```hcl
 module "jobs_queue" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/sqs-queue"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/sqs-queue"
   version = "~> 2.24"
 
   name = "example-staging-jobs"
@@ -27,7 +27,7 @@ module "jobs_queue" {
 }
 
 module "worker_lambda" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-function"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/lambda-function"
   version = "~> 2.24"
 
   function_name = "example-staging-worker"
