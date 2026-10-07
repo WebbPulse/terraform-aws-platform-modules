@@ -7,13 +7,13 @@ them, an
 optional API Gateway JWT authorizer, and the `IDENTITY_*` environment map. It exists so a consumer wires `webbpulse.identity` with one module call instead of rebuilding
 key names, table schemas and grants by hand.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/identity`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/identity`.
 
 ## Usage
 
 ```hcl
 module "identity" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/identity"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/identity"
   version = "~> 2.6"
 
   name_prefix        = local.prefix
@@ -274,7 +274,7 @@ mapping takes `identity_function_name` as a string.
 
 ```hcl
 module "tables" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/dynamodb-tables"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/dynamodb-tables"
   version = "~> 2.17"
 
   name_prefix = local.prefix
@@ -289,7 +289,7 @@ module "tables" {
 }
 
 module "identity" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/identity"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/identity"
   version = "~> 2.17"
 
   name_prefix        = local.prefix

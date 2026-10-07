@@ -5,13 +5,13 @@ access block and policy, an origin access control, the distribution, and optiona
 alias records. Client-side routes work because 403 and 404 from S3 come back as the SPA shell with a
 200. With `access_gate` set, only 404 does: 403 goes to the gate's sign-in-required page instead.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/spa-frontend`.
 
 ## Usage
 
 ```hcl
 module "frontend" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/spa-frontend"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/spa-frontend"
   version = "~> 1.5"
 
   name = "example-production-frontend"

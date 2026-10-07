@@ -4,13 +4,13 @@ Manages one estate's AWS Secrets Manager secrets as a map, each secret taking it
 five shapes. It also renders an IAM policy granting read access to exactly those secrets, so the
 grant cannot drift away from what exists.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/app-secrets`.
 
 ## Usage
 
 ```hcl
 module "app_secrets" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/app-secrets"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/app-secrets"
   version = "~> 2.22"
 
   name_prefix = local.prefix

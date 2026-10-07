@@ -1,5 +1,5 @@
 module "github_actions_role" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/github-actions-role"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/github-actions-role"
   version = "~> 1.4"
 
   role_name = "example-production-github-actions-deploy"

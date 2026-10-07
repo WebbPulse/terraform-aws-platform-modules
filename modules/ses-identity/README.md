@@ -11,13 +11,13 @@ and it has no input that could: those are handled out of band by the account own
 identities are created from `verified_recipients` and from nothing else, so an account cannot grow
 a verified recipient by accident.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/ses-identity`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ses-identity`.
 
 ## Usage
 
 ```hcl
 module "ses" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/ses-identity"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ses-identity"
   version = "~> 2.27"
 
   configuration_set_name = "example-transactional"

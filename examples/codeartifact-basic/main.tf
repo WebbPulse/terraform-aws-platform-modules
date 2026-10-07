@@ -1,5 +1,5 @@
 module "codeartifact" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/codeartifact"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/codeartifact"
   version = "~> 1.8"
 
   domain = "webbpulse"

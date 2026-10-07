@@ -4,13 +4,13 @@ Creates a Lambda function with its IAM execution role and its CloudWatch log gro
 placeholder package whose code attributes are then ignored so a deployment pipeline owns the code.
 The package is a zip by default and can be a container image instead.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-function`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/lambda-function`.
 
 ## Usage
 
 ```hcl
 module "lambda_api" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/lambda-function"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/lambda-function"
   version = "~> 1.6"
 
   function_name = "example-production-api"

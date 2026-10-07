@@ -5,13 +5,13 @@ let CI jobs in other AWS accounts read from it and named principals publish into
 upstream chains are ordered for you, and the endpoint URLs and consumer IAM statements come back as
 outputs.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/codeartifact`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/codeartifact`.
 
 ## Usage
 
 ```hcl
 module "codeartifact" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/codeartifact"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/codeartifact"
   version = "~> 1.8"
 
   domain = "example"

@@ -8,13 +8,13 @@ authorizer.
 The default access log line carries request, response and integration fields, plus `authorizerError`,
 `errorMessage` and `errorType` so an authorizer or gateway rejection explains itself.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/http-api`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/http-api`.
 
 ## Usage
 
 ```hcl
 module "api" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/http-api"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/http-api"
   version = "~> 2.0"
 
   name = "example-production-api"

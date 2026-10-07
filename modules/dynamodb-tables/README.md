@@ -4,13 +4,13 @@ Creates one `aws_dynamodb_table` per entry in a map, keyed by the short name the
 the table by. On-demand billing by default, with continuous backups and deletion protection as
 module-wide switches any single table can override.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/dynamodb-tables`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/dynamodb-tables`.
 
 ## Usage
 
 ```hcl
 module "dynamodb" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/dynamodb-tables"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/dynamodb-tables"
   version = "~> 1.6"
 
   name_prefix = local.prefix

@@ -4,13 +4,13 @@ Creates a Route 53 hosted zone in the calling account and delegates it from a pa
 live in another account, by writing the NS record through a second provider configuration. It is
 the "staging.<domain> is a child zone of <domain>" pattern.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-dns`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-dns`.
 
 ## Usage
 
 ```hcl
 module "staging_dns" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/staging-dns"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/staging-dns"
   version = "~> 1.2"
 
   providers = {

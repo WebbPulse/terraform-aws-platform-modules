@@ -4,13 +4,13 @@ A VPC with public subnets only: an internet gateway, one public route table, DNS
 hostnames on, a locked down default security group, and an egress-only security group for
 on-demand tasks. No NAT gateway, no private subnets, and no VPC endpoints unless asked for.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/vpc-public`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/vpc-public`.
 
 ## Usage
 
 ```hcl
 module "vpc" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/vpc-public"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/vpc-public"
   version = "~> 2.23"
 
   name         = "example-production-runner"

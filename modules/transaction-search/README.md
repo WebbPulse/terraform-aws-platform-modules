@@ -7,13 +7,13 @@ retention is managed rather than infinite.
 
 This is account scoped, not application scoped. One instance per account and region.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/transaction-search`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/transaction-search`.
 
 ## Usage
 
 ```hcl
 module "transaction_search" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/transaction-search"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/transaction-search"
   version = "~> 2.27"
 
   name_prefix = "example-staging"

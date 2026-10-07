@@ -7,13 +7,13 @@ The `alarms` object decides which of them exist. It defaults to a lean set, the 
 the two account wide Lambda alarms, which is three billed metrics; the richer alarms are off until a
 toggle turns one back on. The SNS topic and its subscriptions are never gated.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/api-alarms`.
 
 ## Usage
 
 ```hcl
 module "alarms" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/api-alarms"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/api-alarms"
   version = "~> 2.32"
 
   name_prefix         = local.prefix

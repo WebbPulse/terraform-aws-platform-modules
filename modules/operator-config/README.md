@@ -3,23 +3,23 @@
 One SSM Parameter Store parameter per app and environment holding a JSON object of private,
 non-secret config that an operator owns and Terraform reads. Terraform seeds it with `{}` once and
 never writes it again, and exposes the live value decoded as a map. The first use is
-`ses_verified_recipients`: the addresses stay out of the repository and out of HCP variables, and an
+`ses_verified_recipients`: the addresses stay out of the repository and out of workspace variables, and an
 operator changes them with one CLI call.
 
-Consumed as `app.terraform.io/WebbPulse/platform-modules/aws//modules/operator-config`.
+Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/operator-config`.
 
 ## Usage
 
 ```hcl
 module "config" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/operator-config"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/operator-config"
   version = "~> 2.30"
 
   name_prefix = local.prefix
 }
 
 module "ses" {
-  source  = "app.terraform.io/WebbPulse/platform-modules/aws//modules/ses-identity"
+  source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/ses-identity"
   version = "~> 2.30"
 
   verified_recipients = try(module.config.values.ses_verified_recipients, [])
