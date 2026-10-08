@@ -7,7 +7,7 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.38.0
 
 Targets 2.38.0.
 
