@@ -195,6 +195,8 @@ resource "aws_cloudfront_distribution" "this" {
       default_ttl = local.index_use_policies ? null : var.forwarded_values.default_ttl
       max_ttl     = local.index_use_policies ? null : var.forwarded_values.max_ttl
 
+      trusted_key_groups = var.access_gate.sign_spa_shell ? [var.access_gate.key_group_id] : null
+
       function_association {
         event_type   = "viewer-request"
         function_arn = var.access_gate.viewer_request_function_arn

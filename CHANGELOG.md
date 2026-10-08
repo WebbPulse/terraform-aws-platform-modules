@@ -7,6 +7,50 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+Targets 2.38.0.
+
+### `github-actions-role`: wildcard subjects need an explicit opt-in **no plan change**
+
+`subjects` now rejects `*` and `?`, the `StringLike` wildcards, unless the new input
+`allow_wildcard_subjects` is true. `repo:ORG/REPO:*` trusts every workflow on every branch and pull
+request of a repository, so a deploy role should name `environment:<env>` or
+`ref:refs/heads/<branch>` claims. No adopter on `~> 2.x` passes a wildcard: WebbPulse-Terraform,
+WebbPulse-Portfolio, WebbPulse-Artifacts and Standupless all name environment, branch or
+pull_request claims. CarModPicker's deploy role trusts `repo:WebbPulse/CarModPicker:*` but pins
+`~> 1.1`, so it is unaffected until it moves to 2.x, when it must narrow the subject or set
+`allow_wildcard_subjects = true`; with the opt-in its trust policy is unchanged. A plan that does
+trip the check fails validation and changes nothing (PLAT-34 L2).
+
+### `staging-access-gate`: the user pool defaults to optional TOTP MFA
+
+`mfa_configuration` defaults to `OPTIONAL` instead of `OFF`, with the software token factor
+enabled. Cognito changes both through `SetUserPoolMfaConfig`, and neither attribute forces a new
+pool in the AWS provider, so the pool updates in place and keeps its users. A user with no
+registered authenticator signs in exactly as before; one who registers a TOTP authenticator is
+challenged for it. Plan effect: every gate adopter that leaves `mfa_configuration` unset plans one
+in-place `aws_cognito_user_pool` update (CarModPicker, Standupless, WebbPulse-Terraform,
+WebbPulse-Portfolio). `mfa_configuration = "OFF"` restores the old plan (PLAT-34 L3).
+
+### `spa-frontend`, `staging-access-gate`: opt-in signature check on the SPA shell **no plan change**
+
+The unsigned `/index.html` behavior lets the gate's viewer-request function decide, and a CloudFront
+Function cannot verify an RSA signature, so it only reads the expiry in `CloudFront-Policy`: a forged
+cookie set with a future expiry was served the shell. Only the shell: the bundle sits on the signed
+default behavior and the API verifies the signature itself. `access_gate` gains
+`sign_spa_shell`, optional and false, which sets the gate's existing key group as
+`trusted_key_groups` on the shell behavior so CloudFront verifies the signature there too. It is
+opt-in because it changes what an anonymous viewer sees: `/` becomes a CloudFront 403 that serves the
+sign-in-required page, which sends the viewer to login, instead of a direct 302. Leaving it unset
+plans no change; setting it is an in-place distribution update (PLAT-34 L1).
+
+### CI: actions pinned by commit SHA **no plan change**
+
+`terraform-ci.yml` pins `actions/checkout`, `hashicorp/setup-terraform` and `actions/setup-node`
+by full commit SHA, the way the WebbPulse/.github reusable workflows do. No module code changed
+(PLAT-34 L7).
+
 ## 2.37.0
 
 ### `spa-frontend`: a default security headers policy on every S3 behavior, CSP report-only

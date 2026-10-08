@@ -3,7 +3,7 @@ module "github_actions_role" {
   version = "~> 1.4"
 
   role_name = "example-production-github-actions-deploy"
-  subjects  = ["repo:WebbPulse/example:*"]
+  subjects  = ["repo:WebbPulse/example:environment:production"]
 
   policy_statements = [
     {

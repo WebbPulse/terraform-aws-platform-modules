@@ -11,10 +11,10 @@ Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/git
 ```hcl
 module "github_actions_role" {
   source  = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/github-actions-role"
-  version = "~> 1.4"
+  version = "~> 2.38"
 
   role_name = "${local.prefix}-github-actions-deploy"
-  subjects  = ["repo:WebbPulse/ExampleRepo:*"]
+  subjects  = ["repo:WebbPulse/ExampleRepo:environment:production"]
 
   policy_statements = [
     {
@@ -35,7 +35,8 @@ module "github_actions_role" {
 | `max_session_duration` | Maximum session duration in seconds, 3600 to 43200 | `3600` |
 | `permissions_boundary_arn` | ARN of a permissions boundary policy to set on the role | `null` |
 | `tags` | Tags on the role and, when created here, the OIDC provider | `{}` |
-| `subjects` | GitHub OIDC `sub` claims allowed to assume the role, matched with `StringLike` | required |
+| `subjects` | GitHub OIDC `sub` claims allowed to assume the role, matched with `StringLike`; `*` and `?` rejected unless `allow_wildcard_subjects` | required |
+| `allow_wildcard_subjects` | Accept `*` and `?` in `subjects` | `false` |
 | `audience` | Required `aud` claim and the created provider's client id | `"sts.amazonaws.com"` |
 | `create_oidc_provider` | Create the account's `token.actions.githubusercontent.com` provider | `true` |
 | `oidc_provider_arn` | Existing provider ARN, required when `create_oidc_provider` is false | `null` |
@@ -70,6 +71,10 @@ Each `policy_statements` entry is an object:
 - Newer repositories get immutable OIDC subjects of the form
   `repo:WebbPulse@<org-id>/<repo>@<repo-id>`. Read the org's `sub_claim_prefix` before writing a
   trust policy rather than assuming the `repo:OWNER/NAME` form.
+- Since 2.38.0 `subjects` rejects `*` and `?`. `repo:ORG/REPO:*` trusts every workflow on every
+  branch and pull request, so a deploy role should name `environment:<env>` or
+  `ref:refs/heads/<branch>` claims. A role that already trusts a wildcard keeps its trust policy
+  unchanged by setting `allow_wildcard_subjects = true`.
 - An AWS account holds at most one OIDC provider per URL. The second stack in the same account
   must set `create_oidc_provider = false` and pass `oidc_provider_arn`, or the apply fails with
   EntityAlreadyExists.

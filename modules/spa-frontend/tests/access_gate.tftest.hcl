@@ -590,3 +590,40 @@ run "public_paths_refuse_the_whole_site" {
 
   expect_failures = [var.public_paths]
 }
+
+run "sign_spa_shell_puts_the_key_group_on_the_shell_behavior" {
+  command = plan
+
+  variables {
+    access_gate = {
+      key_group_id                                           = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+      viewer_request_function_arn                            = "arn:aws:cloudfront::123456789012:function/example-staging-access-gate"
+      login_origin_domain_name                               = "abcdefghijklmnopqrstuvwxyz012345.lambda-url.us-west-2.on.aws"
+      login_origin_access_control_id                         = "E1EXAMPLEOAC1"
+      auth_path_pattern                                      = "/_auth/*"
+      cache_policy_id_caching_disabled                       = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+      origin_request_policy_id_all_viewer_except_host_header = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+      sign_spa_shell                                         = true
+    }
+  }
+
+  assert {
+    condition     = aws_cloudfront_distribution.this.ordered_cache_behavior[1].path_pattern == "/index.html"
+    error_message = "The shell behavior must still be the SPA shell path; sign_spa_shell changes only its signing requirement."
+  }
+
+  assert {
+    condition     = tolist(aws_cloudfront_distribution.this.ordered_cache_behavior[1].trusted_key_groups) == tolist(["1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"])
+    error_message = "With sign_spa_shell the shell behavior must trust the gate's key group, so CloudFront verifies the cookie signature and a forged CloudFront-Policy with a future expiry no longer gets the shell."
+  }
+
+  assert {
+    condition     = one(aws_cloudfront_distribution.this.ordered_cache_behavior[1].function_association).function_arn == "arn:aws:cloudfront::123456789012:function/example-staging-access-gate"
+    error_message = "The gate function must still run on the signed shell behavior, where it applies the application handler for viewers with a session."
+  }
+
+  assert {
+    condition     = one([for r in aws_cloudfront_distribution.this.custom_error_response : r.response_page_path if r.error_code == 403]) == "/_auth/session-required"
+    error_message = "A signed shell refuses an anonymous viewer with a CloudFront 403, so the 403 must still serve the gate's sign-in-required page from the unsigned auth behavior, which sends the viewer to login."
+  }
+}

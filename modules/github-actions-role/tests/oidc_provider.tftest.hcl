@@ -1,6 +1,6 @@
 variables {
   role_name = "example-staging-github-actions-deploy"
-  subjects  = ["repo:WebbPulse/ExampleRepo:*"]
+  subjects  = ["repo:WebbPulse/ExampleRepo:environment:production"]
 }
 
 provider "aws" {

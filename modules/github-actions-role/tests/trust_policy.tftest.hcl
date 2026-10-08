@@ -1,6 +1,6 @@
 variables {
   role_name = "example-staging-github-actions-deploy"
-  subjects  = ["repo:WebbPulse/ExampleRepo:*"]
+  subjects  = ["repo:WebbPulse/ExampleRepo:environment:production"]
 
   create_oidc_provider = false
   oidc_provider_arn    = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
@@ -73,7 +73,7 @@ run "a_single_subject_renders_as_a_bare_string_rather_than_a_one_element_list" {
   command = plan
 
   assert {
-    condition     = jsondecode(aws_iam_role.this.assume_role_policy).Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"] == "repo:WebbPulse/ExampleRepo:*"
+    condition     = jsondecode(aws_iam_role.this.assume_role_policy).Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"] == "repo:WebbPulse/ExampleRepo:environment:production"
     error_message = "A single subject must render as a bare JSON string, not a one element array. IAM treats the two identically, but the console and every diff of this role show the bare string, so rendering a list would produce a spurious change on every plan for roles that already exist."
   }
 
@@ -138,8 +138,8 @@ run "both_subject_shapes_can_be_mixed_on_one_role_during_a_migration" {
 
   variables {
     subjects = [
-      "repo:WebbPulse/ExampleRepo:*",
-      "repo:WebbPulse@185014056/ExampleRepo@1029410045:*",
+      "repo:WebbPulse/ExampleRepo:environment:production",
+      "repo:WebbPulse@185014056/ExampleRepo@1029410045:environment:production",
     ]
   }
 
@@ -181,7 +181,7 @@ run "a_subject_that_is_not_a_repo_claim_is_rejected" {
   command = plan
 
   variables {
-    subjects = ["WebbPulse/ExampleRepo:*"]
+    subjects = ["WebbPulse/ExampleRepo:pull_request"]
   }
 
   expect_failures = [var.subjects]
@@ -202,8 +202,8 @@ run "a_duplicated_subject_is_rejected" {
 
   variables {
     subjects = [
-      "repo:WebbPulse/ExampleRepo:*",
-      "repo:WebbPulse/ExampleRepo:*",
+      "repo:WebbPulse/ExampleRepo:pull_request",
+      "repo:WebbPulse/ExampleRepo:pull_request",
     ]
   }
 
@@ -218,4 +218,38 @@ run "an_empty_audience_is_rejected" {
   }
 
   expect_failures = [var.audience]
+}
+
+run "a_wildcard_subject_is_rejected_by_default" {
+  command = plan
+
+  variables {
+    subjects = ["repo:WebbPulse/ExampleRepo:*"]
+  }
+
+  expect_failures = [var.subjects]
+}
+
+run "a_single_character_wildcard_subject_is_rejected_by_default" {
+  command = plan
+
+  variables {
+    subjects = ["repo:WebbPulse/ExampleRepo:environment:prod?ction"]
+  }
+
+  expect_failures = [var.subjects]
+}
+
+run "a_wildcard_subject_is_accepted_verbatim_with_the_explicit_opt_in" {
+  command = plan
+
+  variables {
+    subjects                = ["repo:WebbPulse/ExampleRepo:*"]
+    allow_wildcard_subjects = true
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role.this.assume_role_policy).Statement[0].Condition.StringLike["token.actions.githubusercontent.com:sub"] == "repo:WebbPulse/ExampleRepo:*"
+    error_message = "With allow_wildcard_subjects set, a wildcard subject must reach the trust policy unchanged, so a role that already trusts repo:ORG/REPO:* plans no change once the adopter opts in."
+  }
 }

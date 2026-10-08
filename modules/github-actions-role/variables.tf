@@ -49,7 +49,7 @@ variable "tags" {
 }
 
 variable "subjects" {
-  description = "GitHub OIDC subject claims allowed to assume the role, matched with StringLike, so * and ? are wildcards. Each is a full repo:ORG/REPO:... string: repo:WebbPulse/CarModPicker:* admits every workflow in the repository, repo:WebbPulse/CarModPicker:environment:production only jobs bound to that environment, repo:WebbPulse/CarModPicker:ref:refs/heads/main only pushes to main. GitHub also accepts the rename-proof form repo:ORG@ORG_ID/REPO@REPO_ID:*."
+  description = "GitHub OIDC subject claims allowed to assume the role, matched with StringLike. Each is a full repo:ORG/REPO:<claim> string: repo:WebbPulse/CarModPicker:environment:production admits only jobs bound to that environment, repo:WebbPulse/CarModPicker:ref:refs/heads/main only pushes to main, repo:WebbPulse/CarModPicker:pull_request only pull request runs. GitHub also issues the rename-proof form repo:ORG@ORG_ID/REPO@REPO_ID:<claim>. The wildcards * and ? are rejected unless allow_wildcard_subjects is true, because repo:ORG/REPO:* admits every workflow on every branch, including a pull request branch anyone with write access can push."
   type        = list(string)
 
   validation {
@@ -59,13 +59,24 @@ variable "subjects" {
 
   validation {
     condition     = alltrue([for s in var.subjects : startswith(s, "repo:") && length(split(":", s)) >= 3])
-    error_message = "Every subject must look like repo:ORG/REPO:<claim or *>, for example repo:WebbPulse/CarModPicker:*."
+    error_message = "Every subject must look like repo:ORG/REPO:<claim>, for example repo:WebbPulse/CarModPicker:environment:production."
+  }
+
+  validation {
+    condition     = var.allow_wildcard_subjects || alltrue([for s in var.subjects : !strcontains(s, "*") && !strcontains(s, "?")])
+    error_message = "subjects must not contain the StringLike wildcards * or ?. Name the exact claims instead, for example repo:ORG/REPO:environment:production, or set allow_wildcard_subjects = true to accept a wildcard deliberately."
   }
 
   validation {
     condition     = length(distinct(var.subjects)) == length(var.subjects)
     error_message = "subjects contains a duplicate entry."
   }
+}
+
+variable "allow_wildcard_subjects" {
+  description = "Accept * and ? in subjects. Off by default so a role cannot trust every workflow, branch and pull request of a repository by accident; set it to true only for a role that must, and prefer environment-bound subjects."
+  type        = bool
+  default     = false
 }
 
 variable "audience" {
