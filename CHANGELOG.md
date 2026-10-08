@@ -9,6 +9,32 @@ An entry marked **no plan change** is one an existing consumer can take without 
 
 ## Unreleased
 
+### `spa-frontend`: a default security headers policy on every S3 behavior, CSP report-only
+
+`response_headers_policy_id` was dropped in `forwarded_values` mode and defaulted to null, so an
+adopter that did not pass one shipped with no security headers. The module now builds
+`<name>-security-headers` from the new `security_headers` input and attaches it to the default
+behavior, every `public_paths` behavior and the SPA shell behavior, in both cache modes:
+`Strict-Transport-Security: max-age=31536000; includeSubDomains` (preload opt-in),
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: strict-origin-when-cross-origin`, and an SPA baseline CSP with per-directive
+source lists and `frame-ancestors 'none'`. `response_headers_policy_id` stays as the override and
+now reaches the behaviors in `forwarded_values` mode too. A null
+`index_cache_policies.response_headers_policy_id` now falls back to that policy instead of none.
+
+The CSP goes out as `Content-Security-Policy-Report-Only` by default
+(`security_headers.content_security_policy.mode`, `enforce` or `off` otherwise), because an
+enforcing policy that misses a product's API host, inline bootstrap script or third-party scripts
+blanks the page, and `~> 2.x` adopters take this release unasked. The other headers are on from the
+first apply. A later minor will default to `enforce` once every adopter enforces; the module README
+lists the sources each adopter needs.
+
+Plan effect: a consumer with a null `response_headers_policy_id` plans one new
+`aws_cloudfront_response_headers_policy` and an in-place distribution update (WebbPulse-Terraform,
+the Portfolio company site). CarModPicker and Standupless pass the managed SecurityHeadersPolicy and
+plan no change. `security_headers = { enabled = false }` restores the old plan. New input
+`security_headers`; new outputs `response_headers_policy_id` and `content_security_policy` (PLAT-31).
+
 ### Docs, examples and CI: module sources point at `terraform.webbpulse.com` **no plan change**
 
 The examples, the module READMEs and the repository README name

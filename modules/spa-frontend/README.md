@@ -4,6 +4,9 @@ A single-page application served from a private S3 bucket through CloudFront: th
 access block and policy, an origin access control, the distribution, and optionally the Route 53
 alias records. Client-side routes work because 403 and 404 from S3 come back as the SPA shell with a
 200. With `access_gate` set, only 404 does: 403 goes to the gate's sign-in-required page instead.
+Every S3 behavior carries a response headers policy: HSTS, nosniff, a strict referrer policy,
+`X-Frame-Options: DENY` and a Content-Security-Policy, report-only by default (see
+[Security headers](#security-headers)).
 
 Consumed as `terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/spa-frontend`.
 
@@ -46,10 +49,11 @@ module "frontend" {
 | `comment` | Comment shown in the CloudFront console | `null` |
 | `cache_mode` | `policies` or `forwarded_values` for the S3 behaviors | `"policies"` |
 | `index_cache_mode` | Cache model for the SPA shell behavior alone; null follows `cache_mode` | `null` |
-| `index_cache_policies` | Policy ids for the SPA shell behavior; null reuses the default behavior's | `null` |
+| `index_cache_policies` | Policy ids for the SPA shell behavior; null reuses the default behavior's, and a null `response_headers_policy_id` member always does | `null` |
 | `cache_policy_id` | Cache policy in `policies` mode; the managed CachingOptimized policy | `"658327ea-f89d-4fab-a63d-7e88639e58f6"` |
 | `origin_request_policy_id` | Origin request policy in `policies` mode | `null` |
-| `response_headers_policy_id` | Response headers policy in `policies` mode | `null` |
+| `response_headers_policy_id` | Your own response headers policy for every S3 behavior, in both cache modes; wins over `security_headers` | `null` |
+| `security_headers` | The policy this module builds when `response_headers_policy_id` is null; see [Security headers](#security-headers) | `{}` |
 | `forwarded_values` | Legacy cache settings used only in `forwarded_values` mode | `{}` |
 | `spa_fallback_error_codes` | Origin error codes turned into a 200 carrying the SPA shell; 403 is dropped when `access_gate` is set | `[403, 404]` |
 | `error_caching_min_ttl` | Seconds the fallback response is cached | `0` |
@@ -108,6 +112,8 @@ access_gate = {
 | `origin_access_control_id` | Id of the origin access control |
 | `origin_id` | `origin_id` of the S3 origin |
 | `frontend_url` | `https://` plus the first alias, or the CloudFront hostname |
+| `response_headers_policy_id` | Response headers policy on the S3 behaviors: yours, the module's, or null |
+| `content_security_policy` | `{ mode, header, value }` of the CSP the module sends, or null |
 
 ### Outputs added with `viewer_request_function`
 
@@ -116,8 +122,98 @@ access_gate = {
 | `viewer_request_function_arn` | ARN of the viewer-request function in force on the default behavior |
 | `viewer_request_handler_js` | Rendered `appHandler` JavaScript, for a gate's `viewer_request_handler_js` |
 
+## Security headers
+
+With `response_headers_policy_id` null, the module builds `<name>-security-headers` and attaches it
+to the default behavior, every `public_paths` behavior and the SPA shell behavior, in both cache
+modes. The gate's login and API behaviors keep no policy: the login Lambda and the API set their
+own headers.
+
+| Header | Value |
+| --- | --- |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains`; `preload` only with `hsts_preload` |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Content-Security-Policy-Report-Only` | the SPA baseline below plus your sources; `Content-Security-Policy` once `mode = "enforce"` |
+
+The baseline is `default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self';
+style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self';
+form-action 'self'; frame-ancestors 'none'`. Each list adds sources to its own directive;
+`frame_src`, `media_src` and `worker_src` add that directive only when non-empty.
+
+```hcl
+security_headers = {
+  hsts_max_age_seconds    = optional(number, 31536000)
+  hsts_include_subdomains = optional(bool, true)
+  hsts_preload            = optional(bool, false)
+  enabled                 = optional(bool, true)
+  name                    = optional(string)
+
+  content_security_policy = optional(object({
+    mode        = optional(string, "report_only")
+    connect_src = optional(list(string), [])
+    img_src     = optional(list(string), [])
+    script_src  = optional(list(string), [])
+    style_src   = optional(list(string), [])
+    font_src    = optional(list(string), [])
+    frame_src   = optional(list(string), [])
+    media_src   = optional(list(string), [])
+    worker_src  = optional(list(string), [])
+    form_action = optional(list(string), [])
+    report_uri  = optional(string)
+  }), {})
+}
+```
+
+**Why CSP starts in report-only.** The policy arrived in 2.37, a minor release that adopters on
+`~> 2.x` pick up without touching their code. An enforcing CSP that does not list a product's API
+host, its inline bootstrap script or its third-party scripts blanks the page, so the default sends
+`Content-Security-Policy-Report-Only`: browsers log every violation in the console (and to
+`report_uri` when set) and block nothing. The other four headers are safe for a static SPA and are on
+from the first apply. Once a product's console is clean on staging, set
+`content_security_policy.mode = "enforce"`. A later minor will make `enforce` the default once
+every adopter has done so.
+
+### Sources each adopter needs
+
+What the adopters load today, from their `index.html` and frontend source. An inline `<script>` in
+`index.html` needs its `'sha256-...'` hash in `script_src`; the browser console prints the expected
+hash in its report-only violation, and the hash changes whenever the script does. Stripe Checkout,
+the Stripe billing portal and OAuth sign-in are full-page navigations and need no source.
+
+| Adopter | Upgrade effect today | Sources to add before `enforce` |
+| --- | --- | --- |
+| CarModPicker | none: it passes the managed `SecurityHeadersPolicy` as `response_headers_policy_id`, which wins | `script_src`: the Consent Mode inline script hash, `https://accounts.google.com/gsi/client`, `https://pagead2.googlesyndication.com`, `https://*.googlesyndication.com`, `https://*.adtrafficquality.google`, `https://fundingchoicesmessages.google.com`. `connect_src`: the API host (`https://api.carmodpicker.com` in production, `frontend_api_base_url` per env), `https://accounts.google.com/gsi/`, `https://*.google.com`, `https://*.googlesyndication.com`, `https://*.doubleclick.net`, `https://*.adtrafficquality.google`. `frame_src`: `https://accounts.google.com/gsi/`, `https://*.doubleclick.net`, `https://*.googlesyndication.com`, `https://www.google.com`, `https://*.adtrafficquality.google`, `https://fundingchoicesmessages.google.com`. `style_src`: `https://accounts.google.com/gsi/style`. `img_src`: `https:`, because part images come from any retailer host and AdSense creatives from many. |
+| Standupless | none: it passes the managed `SecurityHeadersPolicy`, which wins | `script_src`: the theme and accent inline script hash. `connect_src`: the API host (`https://api.standupless.dev`, `https://api.staging.standupless.dev`) and the uploads bucket host the presigned PUTs go to (`https://<bucket>.s3.<region>.amazonaws.com`). `img_src`: `https://avatars.githubusercontent.com` and the uploads bucket host. `media_src`: the uploads bucket host. |
+| WebbPulse-Terraform | gains the module policy with CSP report-only on every S3 behavior, the shell and `/.well-known/terraform.json` included | `script_src`: the theme inline script hash. `connect_src`: the API host (`https://api.terraform.webbpulse.com`, `https://api.staging.terraform.webbpulse.com`) and the artifact bucket host the configuration upload's presigned PUT goes to. |
+| Portfolio company site | gains the module policy with CSP report-only | none: no inline script and no third-party resource. Check the HSTS gotcha first, because its alias is the `webbpulse.com` apex. |
+| Portfolio frontend | none while it pins `~> 1.1` | `style_src`: `https://fonts.googleapis.com`. `font_src`: `https://fonts.gstatic.com`. `connect_src`: `https://api.portfolio.webbpulse.com`. |
+
+To move CarModPicker or Standupless onto the module policy, drop `response_headers_policy_id`. The
+managed policy they use sends `X-Frame-Options: SAMEORIGIN` and `X-XSS-Protection` and no CSP; the
+module's sends `DENY`, no `X-XSS-Protection` and the CSP.
+
 ## Gotchas
 
+- **Upgrading to 2.37 plans a new `aws_cloudfront_response_headers_policy` and an in-place update of
+  the distribution** for any consumer that leaves `response_headers_policy_id` null. Before 2.37 a
+  `forwarded_values` consumer got no policy even when it set one, and a `policies` consumer got none
+  unless it set one. `security_headers = { enabled = false }` restores the old plan exactly.
+- **`hsts_include_subdomains` defaults to true, so a site on an apex alias such as `webbpulse.com`
+  tells browsers to use HTTPS for every subdomain of it for a year.** Make sure every host under the
+  apex answers HTTPS before the first apply, or set it to false. `hsts_preload` is off and needs an
+  explicit opt-in, because leaving the preload list takes months.
+- `index_cache_policies` with a null `response_headers_policy_id` member falls back to the policy
+  the other S3 behaviors carry; before 2.37 it meant no policy on the shell. The shell is the one
+  document the CSP and `frame-ancestors` protect, so it is never left out.
+- With `access_gate` set, the gate's sign-in-required page is a 403 custom error response on the
+  signed default behavior, so CloudFront may send it with this module's headers. Its inline script
+  only adds `next` to the sign-in link and redirects; under an enforcing CSP without that script's
+  hash the page stays put and the viewer clicks "Sign in" instead. Report-only changes nothing.
+  The login, callback and logout pages travel on the auth behavior, which carries no policy.
+- A CSP over 1783 characters is refused by CloudFront; the module checks the length at plan time.
+  Use a wildcard host such as `https://*.googlesyndication.com` to shorten a long list.
 - SPA `index.html` must not be cached like the hashed bundles; verify a cache-control flip from the
   CloudFront access log, not from the bundle name. This module does not write objects, so the
   header comes from the deploy pipeline's sync.

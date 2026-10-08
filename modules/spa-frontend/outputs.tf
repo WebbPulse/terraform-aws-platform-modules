@@ -57,3 +57,17 @@ output "viewer_request_handler_js" {
   description = "The rendered appHandler JavaScript when viewer_request_function is set, for passing to a staging-access-gate as viewer_request_handler_js so the gate wraps it. Null otherwise."
   value       = local.viewer_request_handler_js
 }
+
+output "response_headers_policy_id" {
+  description = "Id of the response headers policy on the S3 behaviors: response_headers_policy_id when set, otherwise the one this module built from security_headers, or null when security_headers.enabled is false."
+  value       = local.response_headers_policy_id
+}
+
+output "content_security_policy" {
+  description = "The Content-Security-Policy value this module renders from security_headers, and how it is sent: mode is enforce or report_only, and header names the header that carries it. Null when content_security_policy.mode is off, or when the module builds no policy because response_headers_policy_id is set or security_headers.enabled is false."
+  value = local.security_headers_create && local.csp_mode != "off" ? {
+    mode   = local.csp_mode
+    header = local.csp_mode == "enforce" ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only"
+    value  = local.content_security_policy
+  } : null
+}

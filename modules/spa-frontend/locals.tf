@@ -17,9 +17,39 @@ locals {
   index_origin_request_policy_id = (
     var.index_cache_policies != null ? var.index_cache_policies.origin_request_policy_id : var.origin_request_policy_id
   )
-  index_response_headers_policy_id = (
-    var.index_cache_policies != null ? var.index_cache_policies.response_headers_policy_id : var.response_headers_policy_id
+  index_response_headers_policy_id = try(
+    coalesce(try(var.index_cache_policies.response_headers_policy_id, null), local.response_headers_policy_id),
+    null,
   )
+
+  security_headers_create = var.response_headers_policy_id == null && var.security_headers.enabled
+  security_headers_name   = coalesce(var.security_headers.name, "${var.name}-security-headers")
+
+  response_headers_policy_id = (
+    var.response_headers_policy_id != null ? var.response_headers_policy_id :
+    local.security_headers_create ? aws_cloudfront_response_headers_policy.security[0].id :
+    null
+  )
+
+  csp_mode    = var.security_headers.content_security_policy.mode
+  csp_sources = var.security_headers.content_security_policy
+
+  content_security_policy = join("; ", compact([
+    "default-src 'self'",
+    join(" ", concat(["connect-src", "'self'"], local.csp_sources.connect_src)),
+    join(" ", concat(["img-src", "'self'", "data:"], local.csp_sources.img_src)),
+    join(" ", concat(["script-src", "'self'"], local.csp_sources.script_src)),
+    join(" ", concat(["style-src", "'self'", "'unsafe-inline'"], local.csp_sources.style_src)),
+    join(" ", concat(["font-src", "'self'", "data:"], local.csp_sources.font_src)),
+    length(local.csp_sources.frame_src) > 0 ? join(" ", concat(["frame-src", "'self'"], local.csp_sources.frame_src)) : null,
+    length(local.csp_sources.media_src) > 0 ? join(" ", concat(["media-src", "'self'"], local.csp_sources.media_src)) : null,
+    length(local.csp_sources.worker_src) > 0 ? join(" ", concat(["worker-src", "'self'"], local.csp_sources.worker_src)) : null,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action ${join(" ", concat(["'self'"], local.csp_sources.form_action))}",
+    "frame-ancestors 'none'",
+    local.csp_sources.report_uri != null ? "report-uri ${local.csp_sources.report_uri}" : null,
+  ]))
 
   viewer_request_function_arn = (
     local.gate_enabled ? var.access_gate.viewer_request_function_arn :

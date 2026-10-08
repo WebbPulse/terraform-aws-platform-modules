@@ -281,6 +281,14 @@ run "the_shell_behavior_can_use_the_policy_model_while_the_default_behavior_stay
     index_cache_policies = { cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6" }
   }
 
+  override_resource {
+    target          = aws_cloudfront_response_headers_policy.security
+    override_during = plan
+    values = {
+      id = "11111111-2222-3333-4444-555555555555"
+    }
+  }
+
   assert {
     condition     = length(aws_cloudfront_distribution.this.default_cache_behavior[0].forwarded_values) == 1
     error_message = "The default behavior must stay on the legacy model, which is the whole reason index_cache_mode exists: Portfolio's live distribution mixes the two and adopting it must not rewrite the default behavior."
@@ -297,8 +305,13 @@ run "the_shell_behavior_can_use_the_policy_model_while_the_default_behavior_stay
   }
 
   assert {
-    condition     = aws_cloudfront_distribution.this.ordered_cache_behavior[1].origin_request_policy_id == null && aws_cloudfront_distribution.this.ordered_cache_behavior[1].response_headers_policy_id == null
-    error_message = "Setting index_cache_policies must pin the shell behavior on its own, including to no origin request and no response headers policy. Falling back to the top level inputs here would add policies the live behavior does not have."
+    condition     = aws_cloudfront_distribution.this.ordered_cache_behavior[1].origin_request_policy_id == null
+    error_message = "Setting index_cache_policies must pin the shell behavior's origin request policy on its own, including to none. Falling back to the top level input here would add a policy the live behavior does not have."
+  }
+
+  assert {
+    condition     = aws_cloudfront_distribution.this.ordered_cache_behavior[1].response_headers_policy_id == "11111111-2222-3333-4444-555555555555"
+    error_message = "A null index_cache_policies.response_headers_policy_id must fall back to the module's security headers policy: the shell is the document CSP and frame-ancestors protect, so it must never be the one page served without them."
   }
 }
 

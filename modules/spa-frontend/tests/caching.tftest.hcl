@@ -26,8 +26,8 @@ run "the_policy_model_is_the_default_and_leaves_the_legacy_ttls_unset" {
   }
 
   assert {
-    condition     = aws_cloudfront_distribution.this.default_cache_behavior[0].origin_request_policy_id == null && aws_cloudfront_distribution.this.default_cache_behavior[0].response_headers_policy_id == null
-    error_message = "origin_request_policy_id and response_headers_policy_id default to null: they are genuinely optional, and forcing a managed default on them would change the headers every existing consumer's site serves."
+    condition     = aws_cloudfront_distribution.this.default_cache_behavior[0].origin_request_policy_id == null
+    error_message = "origin_request_policy_id defaults to null: it is genuinely optional, and forcing a managed default on it would change what every existing consumer's origin receives."
   }
 
   assert {
