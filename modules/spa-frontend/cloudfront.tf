@@ -59,7 +59,7 @@ resource "aws_cloudfront_distribution" "this" {
 
     cache_policy_id            = local.use_policies ? var.cache_policy_id : null
     origin_request_policy_id   = local.use_policies ? var.origin_request_policy_id : null
-    response_headers_policy_id = local.use_policies ? var.response_headers_policy_id : null
+    response_headers_policy_id = local.response_headers_policy_id
 
     dynamic "forwarded_values" {
       for_each = local.use_policies ? [] : [var.forwarded_values]
@@ -103,7 +103,7 @@ resource "aws_cloudfront_distribution" "this" {
 
       cache_policy_id            = local.use_policies ? var.cache_policy_id : null
       origin_request_policy_id   = local.use_policies ? var.origin_request_policy_id : null
-      response_headers_policy_id = local.use_policies ? var.response_headers_policy_id : null
+      response_headers_policy_id = local.response_headers_policy_id
 
       dynamic "forwarded_values" {
         for_each = local.use_policies ? [] : [var.forwarded_values]
@@ -176,7 +176,7 @@ resource "aws_cloudfront_distribution" "this" {
 
       cache_policy_id            = local.index_use_policies ? local.index_cache_policy_id : null
       origin_request_policy_id   = local.index_use_policies ? local.index_origin_request_policy_id : null
-      response_headers_policy_id = local.index_use_policies ? local.index_response_headers_policy_id : null
+      response_headers_policy_id = local.index_response_headers_policy_id
 
       dynamic "forwarded_values" {
         for_each = local.index_use_policies ? [] : [var.forwarded_values]

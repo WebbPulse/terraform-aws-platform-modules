@@ -157,7 +157,7 @@ variable "index_cache_mode" {
 }
 
 variable "index_cache_policies" {
-  description = "Cache, origin request and response headers policies for the SPA shell behavior when its effective cache mode is policies. Leave it null and the behavior reuses cache_policy_id, origin_request_policy_id and response_headers_policy_id, which is what every consumer written before this input got. Set it to pin the SPA shell behavior on its own, including to none: { cache_policy_id = \"658327ea-f89d-4fab-a63d-7e88639e58f6\" } gives that behavior a cache policy and no origin request or response headers policy, which is the shape a hand-written SPA shell behavior usually has."
+  description = "Cache, origin request and response headers policies for the SPA shell behavior when its effective cache mode is policies. Leave it null and the behavior reuses cache_policy_id, origin_request_policy_id and response_headers_policy_id, which is what every consumer written before this input got. Set it to pin the SPA shell behavior on its own: { cache_policy_id = \"658327ea-f89d-4fab-a63d-7e88639e58f6\" } gives that behavior a cache policy and no origin request policy, which is the shape a hand-written SPA shell behavior usually has. A null response_headers_policy_id member falls back to the policy the other S3 behaviors carry, so the shell is never served without security headers unless security_headers.enabled is false and response_headers_policy_id is null."
   type = object({
     cache_policy_id            = optional(string)
     origin_request_policy_id   = optional(string)
@@ -192,7 +192,7 @@ variable "origin_request_policy_id" {
 }
 
 variable "response_headers_policy_id" {
-  description = "Optional response headers policy for the S3 behaviors when cache_mode is policies, for example the AWS managed SecurityHeadersPolicy 67f7725c-6f97-4210-82d7-5512b31e9d03."
+  description = "Response headers policy for the S3 behaviors, in either cache_mode: the default behavior, every public_paths behavior and the SPA shell behavior. Null, the default, attaches the policy this module builds from security_headers. Set it to use your own policy instead, for example the AWS managed SecurityHeadersPolicy 67f7725c-6f97-4210-82d7-5512b31e9d03; it always wins, and the module then builds no policy of its own."
   type        = string
   default     = null
   nullable    = true
@@ -430,5 +430,69 @@ variable "viewer_request_function" {
   validation {
     condition     = var.viewer_request_function == null || !startswith(var.viewer_request_function.domain, "www.")
     error_message = "viewer_request_function.domain is the registrable domain without a www prefix; canonical_host decides which side of it is canonical."
+  }
+}
+
+variable "security_headers" {
+  description = "The response headers policy this module builds and attaches to every S3 behavior, in both cache modes, when response_headers_policy_id is null. It sends Strict-Transport-Security (max-age hsts_max_age_seconds, includeSubDomains unless hsts_include_subdomains is false, preload only when hsts_preload is true), X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy strict-origin-when-cross-origin, and a Content-Security-Policy built from an SPA baseline: default-src, connect-src, script-src, base-uri and form-action 'self'; img-src and font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src and frame-ancestors 'none'. The lists under content_security_policy add sources to their directive, and frame_src, media_src and worker_src add that directive only when non-empty. content_security_policy.mode is report_only by default, which sends the policy as Content-Security-Policy-Report-Only so browsers log violations without blocking anything; enforce sends it as Content-Security-Policy; off sends neither. report_uri adds a report-uri directive. enabled = false builds no policy, which with a null response_headers_policy_id leaves the S3 behaviors with no response headers policy, as before 2.37. name defaults to <name>-security-headers and must be unique in the account."
+  type = object({
+    enabled                 = optional(bool, true)
+    name                    = optional(string)
+    hsts_max_age_seconds    = optional(number, 31536000)
+    hsts_include_subdomains = optional(bool, true)
+    hsts_preload            = optional(bool, false)
+    content_security_policy = optional(object({
+      mode        = optional(string, "report_only")
+      connect_src = optional(list(string), [])
+      img_src     = optional(list(string), [])
+      script_src  = optional(list(string), [])
+      style_src   = optional(list(string), [])
+      font_src    = optional(list(string), [])
+      frame_src   = optional(list(string), [])
+      media_src   = optional(list(string), [])
+      worker_src  = optional(list(string), [])
+      form_action = optional(list(string), [])
+      report_uri  = optional(string)
+    }), {})
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = contains(["enforce", "report_only", "off"], var.security_headers.content_security_policy.mode)
+    error_message = "security_headers.content_security_policy.mode must be enforce, report_only or off."
+  }
+
+  validation {
+    condition     = var.security_headers.hsts_max_age_seconds >= 0 && floor(var.security_headers.hsts_max_age_seconds) == var.security_headers.hsts_max_age_seconds
+    error_message = "security_headers.hsts_max_age_seconds must be a whole number of seconds, zero or more."
+  }
+
+  validation {
+    condition     = !var.security_headers.hsts_preload || (var.security_headers.hsts_include_subdomains && var.security_headers.hsts_max_age_seconds >= 31536000)
+    error_message = "security_headers.hsts_preload needs hsts_include_subdomains and an hsts_max_age_seconds of at least 31536000; the preload list refuses anything less."
+  }
+
+  validation {
+    condition     = var.security_headers.name == null || can(regex("^[A-Za-z0-9_-]{1,128}$", var.security_headers.name))
+    error_message = "security_headers.name must be 1 to 128 letters, digits, hyphens and underscores."
+  }
+
+  validation {
+    condition = alltrue([
+      for source in flatten([
+        var.security_headers.content_security_policy.connect_src,
+        var.security_headers.content_security_policy.img_src,
+        var.security_headers.content_security_policy.script_src,
+        var.security_headers.content_security_policy.style_src,
+        var.security_headers.content_security_policy.font_src,
+        var.security_headers.content_security_policy.frame_src,
+        var.security_headers.content_security_policy.media_src,
+        var.security_headers.content_security_policy.worker_src,
+        var.security_headers.content_security_policy.form_action,
+        compact([var.security_headers.content_security_policy.report_uri]),
+      ]) : can(regex("^[^\\s;,]+$", source))
+    ])
+    error_message = "Every security_headers.content_security_policy source must be a single non-empty token with no whitespace, semicolon or comma, such as https://api.example.com or 'sha256-...'; a semicolon would start a new directive."
   }
 }
