@@ -181,8 +181,21 @@ run "the_user_pool_is_invite_only_and_cannot_be_signed_up_to" {
   }
 
   assert {
+    condition     = aws_cognito_user_pool.this.mfa_configuration == "OPTIONAL" && one(aws_cognito_user_pool.this.software_token_mfa_configuration).enabled
+    error_message = "mfa_configuration defaults to OPTIONAL with the software token factor enabled, so a user who registers an authenticator is challenged for it, and Cognito rejects OPTIONAL without an enabled factor."
+  }
+}
+
+run "turning_mfa_off_renders_no_software_token_factor" {
+  command = plan
+
+  variables {
+    mfa_configuration = "OFF"
+  }
+
+  assert {
     condition     = aws_cognito_user_pool.this.mfa_configuration == "OFF" && length(aws_cognito_user_pool.this.software_token_mfa_configuration) == 0
-    error_message = "mfa_configuration defaults to OFF, and with it off no software token block may be rendered, because Cognito rejects a pool that configures a factor it does not use."
+    error_message = "With MFA OFF no software token block may be rendered, because Cognito rejects a pool that configures a factor it does not use."
   }
 }
 

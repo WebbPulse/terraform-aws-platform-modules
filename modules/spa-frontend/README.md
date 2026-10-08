@@ -90,6 +90,8 @@ access_gate = {
   cache_policy_id_caching_disabled                       = string
   origin_request_policy_id_all_viewer_except_host_header = string
   login_origin_id                                        = optional(string, "access-gate-login")
+  session_required_path                                  = optional(string)
+  sign_spa_shell                                         = optional(bool, false)
 
   api_origin_domain_name    = optional(string)
   api_path_pattern          = optional(string)
@@ -231,6 +233,17 @@ module's sends `DENY`, no `X-XSS-Protection` and the CSP.
   `s3:ListBucket` statement so a missing key is a 404, which still falls back to the shell for a
   signed-in viewer. Without it a signed-in deep link would be a 403 too and bounce through login.
   A consumer that passes `spa_fallback_error_codes` with a gate must keep 404 in it.
+- **The unsigned SPA shell trusts any well-formed cookie.** CloudFront verifies the session
+  signature only on behaviors with `trusted_key_groups`. On the unsigned `/index.html` behavior the
+  gate function decides, and a CloudFront Function cannot verify an RSA signature, so it only reads
+  the expiry in `CloudFront-Policy`: a forged set of the three cookies with a future expiry gets the
+  shell. Only the shell: its bundle sits on the signed default behavior and the API checks the
+  signature itself. `access_gate.sign_spa_shell = true` closes this by putting the gate's key group
+  on the shell behavior too. The cost is that an anonymous `/` or `/index.html` becomes a CloudFront
+  403 that serves the sign-in-required page, whose script sends the viewer to login, instead of a
+  direct 302, and the 404 fallback to the shell is then fetched through a signed behavior. It is off
+  by default so `~> 2.x` adopters plan no change; turn it on in staging first and check that `/`
+  reaches login and that a signed-in deep link still gets the shell.
 - **`public_paths` takes named S3 paths out from behind the gate.** Each pattern becomes an ordered
   behavior ahead of the gate's own, on the S3 origin with the default behavior's cache settings,
   no `trusted_key_groups` and no viewer-request function. A viewer-request exemption cannot do

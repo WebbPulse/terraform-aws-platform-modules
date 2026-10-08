@@ -55,7 +55,7 @@ set `disable_execute_api_endpoint = true` and `authorization_type = "CUSTOM"` wi
 | `invite_email_subject` | Invitation email subject; null is `Your access for <cookie_domain>` | `null` |
 | `invite_email_message` | Invitation email body; must contain `{username}` and `{####}`; null is a neutral message linking `invite_login_url` | `null` |
 | `invite_sms_message` | Invitation SMS, at most 140 characters; must contain `{username}` and `{####}`; null names `cookie_domain` | `null` |
-| `mfa_configuration` | Cognito MFA setting: `OFF`, `OPTIONAL` or `ON` (software token) | `"OFF"` |
+| `mfa_configuration` | Cognito MFA setting: `OFF`, `OPTIONAL` or `ON` (software token) | `"OPTIONAL"` |
 | `log_retention_days` | CloudWatch Logs retention for the two Lambdas; 0 never expires | `7` |
 | `identity_jwt` | Object turning on identity access token verification in the authorizer; see below | `null` |
 | `identity_jwt_route_keys` | Route keys that must present a valid token; empty means the feature is off | `[]` |
@@ -120,6 +120,10 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
 - CloudFront validates the signed cookie before the viewer-request function runs, so on a signed
   behavior an unauthenticated request is a CloudFront 403 the function never sees; the function's
   302 to login only happens on the unsigned behaviors, which is how `/` and `/index.html` redirect.
+- The viewer-request function cannot verify the RSA signature, only read the expiry in
+  `CloudFront-Policy`, so on an unsigned behavior a forged cookie set with a future expiry passes
+  it. That exposes the SPA shell alone, and the `spa-frontend` module's `access_gate.sign_spa_shell`
+  puts `key_group_id` on the shell behavior so CloudFront verifies the signature there as well.
 - **A 403 must never fall back to the SPA shell.** An unsigned `/index.html` does not rescue deep
   links, because the shell it serves loads a signed `/assets/*.js` that also 403s and also comes
   back as the shell, as HTML: the module script fails, React never mounts and the viewer sees a

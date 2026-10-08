@@ -21,11 +21,11 @@ jobs:
     name: terraform fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
@@ -44,7 +44,7 @@ jobs:
       any: ${{ steps.affected.outputs.any }}
       node: ${{ steps.affected.outputs.node }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -64,7 +64,7 @@ jobs:
     name: resolver tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -86,11 +86,11 @@ jobs:
       matrix:
         dir: ${{ fromJson(needs.resolve.outputs.validate) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
@@ -116,11 +116,11 @@ jobs:
       matrix:
         dir: ${{ fromJson(needs.resolve.outputs.test) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
@@ -139,11 +139,11 @@ jobs:
     if: needs.resolve.outputs.node == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
