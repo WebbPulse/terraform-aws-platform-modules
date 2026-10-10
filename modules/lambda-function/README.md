@@ -53,6 +53,12 @@ module "lambda_api" {
 | `reserved_concurrent_executions` | Reserved concurrency; null or `-1` for no reservation | `null` |
 | `tracing_mode` | `Active`, `PassThrough`, or null to omit the tracing block | `"Active"` |
 | `attach_xray_write_policy` | Attach the inline X-Ray write policy when tracing is `Active` | `true` |
+| `enable_log_write` | Runtime baseline: `logs:CreateLogStream` and `logs:PutLogEvents` on the function's own log group | `false` |
+| `enable_xray` | Runtime baseline: `xray:PutSpans` and `xray:PutSpansForIndexing` for the X-Ray OTLP endpoint | `false` |
+| `app_secret_arns` | Runtime baseline: `secretsmanager:GetSecretValue` on these secrets | `[]` |
+| `kms_key_arns` | Runtime baseline: `kms:Decrypt` on these key ARNs | `[]` |
+| `kms_via_services` | `kms:ViaService` values the decrypt is conditioned on; empty leaves it unconditioned | `[]` |
+| `runtime_baseline_policy_name` | Name of the runtime baseline inline policy | `"runtime-baseline"` |
 | `environment_variables` | Environment variables; an empty map omits the environment block | `{}` |
 | `otel_environment_variables` | Tracing and Web Adapter variables, merged over `environment_variables` | `{}` |
 | `layers` | Layer ARNs to attach in order, at most 5 | `[]` |
@@ -73,7 +79,8 @@ module "lambda_api" {
 | `tags` | Extra tags on the function only | `{}` |
 
 Each `sqs_event_sources` entry takes `queue_arn` (required), and optionally `kms_key_arn`,
-`batch_size` (`10`), `maximum_batching_window_seconds` (`5`), `function_response_types`
+`batch_size` (`10`), `maximum_batching_window_seconds` (`5`, also accepted as
+`maximum_batching_window_in_seconds`, never both), `function_response_types`
 (`["ReportBatchItemFailures"]`), `filter_criteria` (`[]`), `maximum_concurrency` (`null`) and
 `enabled` (`true`). The map key names the mapping in state, so renaming it destroys one mapping and
 creates another.
@@ -81,7 +88,8 @@ creates another.
 Each `dynamodb_stream_event_sources` entry takes `stream_arn` (required), and optionally
 `batch_size` (`100`), `starting_position` (`"LATEST"`), `maximum_batching_window_in_seconds` (`0`),
 `filter_patterns` (`[]`), `bisect_batch_on_function_error` (`true`), `maximum_retry_attempts`
-(`null`), `on_failure_destination_arn` (`null`) and `enabled` (`true`). `stream_arn` is the table's
+(`null`), `maximum_record_age_in_seconds` (`null`), `on_failure_destination_arn` (`null`) and
+`enabled` (`true`). `stream_arn` is the table's
 `stream_arn`, usually `module.tables.stream_arns["issues"]`, not the table ARN. `filter_patterns`
 holds already encoded JSON strings, so `jsonencode({ eventName = ["INSERT", "MODIFY"] })` is one
 entry. The map key names the mapping in state, so renaming it destroys one mapping and creates
@@ -127,11 +135,31 @@ dynamodb_stream_event_sources = {
 | `dynamodb_stream_event_source_mapping_uuids` | UUID of each stream event source mapping, keyed as `dynamodb_stream_event_sources` was |
 | `dynamodb_stream_event_source_policy_json` | Stream read policy per entry, for a consumer attaching it elsewhere |
 | `events_path` | Path the Web Adapter posts a batch to, null when no event source is wired |
+| `runtime_baseline_policy_json` | The runtime baseline policy document, null when no baseline input is set |
 
 ## Gotchas
 
-- The module creates the execution role but grants it nothing. Attach application permissions
-  yourself with `aws_iam_role_policy` against `role_id`, or the function can reach no AWS API.
+- The module creates the execution role but grants it nothing beyond what an input asks for. The
+  runtime baseline covers the statements every product repeated: its own log group, the X-Ray OTLP
+  span endpoint, the app secret and a KMS decrypt. Attach anything else (tables, queues, SES) yourself
+  with `aws_iam_role_policy` against `role_id`.
+- **Adopting the runtime baseline is a delete in the caller, not a move.** The baseline is a new
+  inline policy (`runtime-baseline` by default), so turning it on and deleting the matching
+  `WriteOwnLogs`, `WriteSpansToTheXRayOTLPEndpoint`, `ReadTheAppSecret` and KMS statements from a hand
+  written runtime policy in the same apply plans one policy create and one policy update. Terraform
+  does not order the two, so the update can land a moment before the create; for a zero gap, turn the
+  baseline on in one apply and delete the hand written statements in the next. Do not point
+  `runtime_baseline_policy_name` at the hand written policy's own name while that policy still
+  exists: two `aws_iam_role_policy` resources with one name on one role overwrite each other on every
+  apply.
+- `enable_xray` is not `attach_xray_write_policy`. The latter grants the classic segment API
+  (`xray:PutTraceSegments`, `xray:PutTelemetryRecords`) the runtime uses for Active tracing; the
+  former grants the OTLP span API an OpenTelemetry exporter posts to. A function on ADOT with Active
+  tracing wants both.
+- `kms_key_arns` takes key ARNs, not alias ARNs, because a `kms:Decrypt` grant is evaluated against
+  the key. For an AWS managed key pass `data.aws_kms_alias.<name>.target_key_arn`, and set
+  `kms_via_services` (for example `["ssm.<region>.amazonaws.com"]`) when the decrypt should only work
+  through that service.
 - Active tracing without X-Ray write permission fails silently: the segment publish is denied and
   the traces are simply absent. Leave `attach_xray_write_policy` on unless the application already
   grants `xray:PutTraceSegments` and `xray:PutTelemetryRecords` itself.
@@ -171,6 +199,10 @@ dynamodb_stream_event_sources = {
   message that already succeeded is delivered and processed again.
 - Set `maximum_concurrency` on a queue that can burst. Without it the mapping scales up against the
   account's unreserved concurrency, so one busy queue can starve every other function in the account.
+- The SQS batching window is `maximum_batching_window_seconds`, and since 2.39.0 the resource
+  argument's own name, `maximum_batching_window_in_seconds`, is accepted too. Before 2.39.0 the
+  second name was silently dropped by type conversion and the default of 5 applied, so a caller that
+  passed it sees its intended window in the plan for the first time on upgrade.
 - A `batch_size` above 10 requires `maximum_batching_window_seconds` of at least 1. That is the
   service's rule, and the module validates it so the failure lands at plan rather than on the create
   call.
@@ -194,5 +226,12 @@ dynamodb_stream_event_sources = {
   role can read the stream during the create call, and the mapping is created here. Attach the
   `dynamodb_stream_event_source_policy_json` outputs by hand and build the mappings yourself if the
   grants have to live elsewhere.
+- **Adopting hand written mappings needs `moved` blocks.** A mapping created outside the module moves
+  to `module.<name>.aws_lambda_event_source_mapping.sqs["<key>"]` or
+  `.dynamodb_stream["<key>"]`, keyed by the map key you choose, so the mapping and its stream position
+  survive. The same apply adds one `sqs-event-source-<key>` or `dynamodb-stream-event-source-<key>`
+  inline policy, and `APP_EVENTS_PATH` and `AWS_LWA_PASS_THROUGH_PATH` join the environment, which is
+  an in place function update. Delete the matching grants from the hand written runtime policy in the
+  same change.
 - Terraform cannot express a `depends_on` from inside a module to a resource in the caller. Put the
   `depends_on` on the module block instead when a greenfield apply needs the ordering.

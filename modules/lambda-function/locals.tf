@@ -13,6 +13,8 @@ locals {
 
   attach_xray_write_policy = var.attach_xray_write_policy && var.tracing_mode == "Active"
 
+  runtime_baseline_enabled = var.enable_log_write || var.enable_xray || length(var.app_secret_arns) > 0 || length(var.kms_key_arns) > 0
+
   sqs_consume_actions = [
     "sqs:ReceiveMessage",
     "sqs:DeleteMessage",
@@ -45,6 +47,10 @@ locals {
 
   sqs_event_source_regions = {
     for key, source in var.sqs_event_sources : key => split(":", source.queue_arn)[3]
+  }
+
+  sqs_event_source_batching_windows = {
+    for key, source in var.sqs_event_sources : key => coalesce(source.maximum_batching_window_seconds, source.maximum_batching_window_in_seconds, 5)
   }
 
   dynamodb_stream_read_actions = [

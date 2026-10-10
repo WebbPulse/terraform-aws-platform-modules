@@ -6,7 +6,7 @@ resource "aws_lambda_event_source_mapping" "sqs" {
   enabled          = each.value.enabled
 
   batch_size                         = each.value.batch_size
-  maximum_batching_window_in_seconds = each.value.maximum_batching_window_seconds
+  maximum_batching_window_in_seconds = local.sqs_event_source_batching_windows[each.key]
   function_response_types            = each.value.function_response_types
 
   dynamic "filter_criteria" {

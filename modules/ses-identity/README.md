@@ -56,10 +56,12 @@ resource "aws_iam_role_policy" "api_ses" {
 | `notification_event_types` | Event types sent to that topic | `["BOUNCE", "COMPLAINT", "DELIVERY_DELAY"]` |
 | `event_destination_name` | Name of the created event destination | `"sns-notifications"` |
 | `create_dkim_records` | Write the three Easy DKIM CNAMEs | `false` |
-| `dkim_records_zone_id` | Hosted zone the DKIM and DMARC records go in | `null` |
+| `dkim_records_zone_id` | Hosted zone the DKIM, DMARC and MAIL FROM records go in | `null` |
 | `dkim_record_ttl` | TTL on the DKIM CNAMEs | `1800` |
 | `dmarc_record` | DMARC policy string published at `_dmarc.<domain>`; null writes none | `null` |
 | `dmarc_record_ttl` | TTL on the DMARC TXT record | `1800` |
+| `create_mail_from_records` | Write the MAIL FROM MX and SPF TXT records at `mail_from_domain` | `false` |
+| `mail_from_record_ttl` | TTL on the MAIL FROM MX and SPF TXT records | `300` |
 | `verified_recipients` | Addresses verified as recipient identities, explicit list | `[]` |
 | `recipient_tags` | Tags on each recipient identity, merged over `tags` | `{}` |
 | `tags` | Tags on the configuration set and the sending identity | `{}` |
@@ -92,6 +94,14 @@ resource "aws_iam_role_policy" "api_ses" {
   `dkim_records_zone_id` is set; a product whose zone lives in another account writes them itself
   from the `dkim_tokens` output through its own `aws.dns` provider, because a module cannot take a
   provider alias conditionally.
+- `create_mail_from_records` writes the two records SES checks before it uses a custom MAIL FROM:
+  an MX at `mail_from_domain` pointing at `feedback-smtp.<region>.amazonses.com` for the provider's
+  region, and an SPF TXT of `v=spf1 include:amazonses.com ~all`. Without the MX, SES falls back to
+  its default MAIL FROM (or rejects the send under `REJECT_MESSAGE`). The records go in
+  `dkim_records_zone_id`, so a product that wrote them by hand adopts them with `moved` blocks from
+  its own `aws_route53_record` addresses to `module.ses.aws_route53_record.mail_from_mx[0]` and
+  `module.ses.aws_route53_record.mail_from_spf[0]`. The TTL defaults to 300 to match the hand
+  written records, so the move is a no-op.
 - `manage_account_vdm_attributes` and `aws_sesv2_account_vdm_attributes` are account scoped, not
   configuration set scoped. Exactly one module instance per account and region may set it true, and
   two that do will fight on every plan. It defaults to false for that reason, and

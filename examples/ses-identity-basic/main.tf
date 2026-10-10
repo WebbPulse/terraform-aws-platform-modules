@@ -21,9 +21,17 @@ module "ses" {
   domain           = "example.com"
   mail_from_domain = "bounce.example.com"
 
+  dkim_records_zone_id     = aws_route53_zone.example.zone_id
+  create_dkim_records      = true
+  create_mail_from_records = true
+
   verified_recipients = ["owner@example.com"]
 
   tags = { Name = "example-staging-transactional" }
+}
+
+resource "aws_route53_zone" "example" {
+  name = "example.com"
 }
 
 output "configuration_set_name" {

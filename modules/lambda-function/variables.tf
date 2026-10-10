@@ -388,7 +388,9 @@ variable "sqs_event_sources" {
       queue_arn                          required, the queue the mapping polls
       kms_key_arn                        the queue's CMK, when it has one, so the role can decrypt
       batch_size                         records per invocation, 1 to 10000
-      maximum_batching_window_seconds    how long to wait to fill a batch, 0 to 300
+      maximum_batching_window_seconds    how long to wait to fill a batch, 0 to 300, 5 when unset
+      maximum_batching_window_in_seconds accepted alias for the above, matching the resource argument
+                                         and the stream map; set one or the other, not both
       function_response_types            ["ReportBatchItemFailures"] by default
       filter_criteria                    list of filter pattern objects, encoded with jsonencode
       maximum_concurrency                scaling_config maximum concurrency, 2 to 1000, null to omit
@@ -400,14 +402,15 @@ variable "sqs_event_sources" {
   EOT
 
   type = map(object({
-    queue_arn                       = string
-    kms_key_arn                     = optional(string)
-    batch_size                      = optional(number, 10)
-    maximum_batching_window_seconds = optional(number, 5)
-    function_response_types         = optional(list(string), ["ReportBatchItemFailures"])
-    filter_criteria                 = optional(list(any), [])
-    maximum_concurrency             = optional(number)
-    enabled                         = optional(bool, true)
+    queue_arn                          = string
+    kms_key_arn                        = optional(string)
+    batch_size                         = optional(number, 10)
+    maximum_batching_window_seconds    = optional(number)
+    maximum_batching_window_in_seconds = optional(number)
+    function_response_types            = optional(list(string), ["ReportBatchItemFailures"])
+    filter_criteria                    = optional(list(any), [])
+    maximum_concurrency                = optional(number)
+    enabled                            = optional(bool, true)
   }))
   default = {}
 
@@ -430,7 +433,17 @@ variable "sqs_event_sources" {
   validation {
     condition = alltrue([
       for key, source in var.sqs_event_sources :
-      source.maximum_batching_window_seconds >= 0 && source.maximum_batching_window_seconds <= 300 && floor(source.maximum_batching_window_seconds) == source.maximum_batching_window_seconds
+      source.maximum_batching_window_seconds == null || source.maximum_batching_window_in_seconds == null
+    ])
+    error_message = "An sqs_event_sources entry sets both maximum_batching_window_seconds and maximum_batching_window_in_seconds. They are the same setting under two names; set one."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.sqs_event_sources :
+      coalesce(source.maximum_batching_window_seconds, source.maximum_batching_window_in_seconds, 5) >= 0 &&
+      coalesce(source.maximum_batching_window_seconds, source.maximum_batching_window_in_seconds, 5) <= 300 &&
+      floor(coalesce(source.maximum_batching_window_seconds, source.maximum_batching_window_in_seconds, 5)) == coalesce(source.maximum_batching_window_seconds, source.maximum_batching_window_in_seconds, 5)
     ])
     error_message = "sqs_event_sources maximum_batching_window_seconds must be a whole number from 0 to 300."
   }
@@ -438,7 +451,7 @@ variable "sqs_event_sources" {
   validation {
     condition = alltrue([
       for key, source in var.sqs_event_sources :
-      source.batch_size <= 10 || source.maximum_batching_window_seconds >= 1
+      source.batch_size <= 10 || coalesce(source.maximum_batching_window_seconds, source.maximum_batching_window_in_seconds, 5) >= 1
     ])
     error_message = "An sqs_event_sources entry with batch_size above 10 must set maximum_batching_window_seconds to at least 1. Lambda rejects a larger batch with no batching window, because without a window it has nothing to wait on to fill one."
   }
@@ -496,6 +509,7 @@ variable "dynamodb_stream_event_sources" {
       filter_patterns                    list of JSON filter strings, for example INSERT and MODIFY only
       bisect_batch_on_function_error     split a failing batch in two and retry each half
       maximum_retry_attempts             retries of a failing record, 0 to 10000, -1 for unlimited
+      maximum_record_age_in_seconds      discard a record older than this, 60 to 604800, -1 for unlimited
       on_failure_destination_arn         SQS queue or SNS topic a discarded batch's metadata goes to
       enabled                            whether the mapping reads, true by default
 
@@ -512,6 +526,7 @@ variable "dynamodb_stream_event_sources" {
     filter_patterns                    = optional(list(string), [])
     bisect_batch_on_function_error     = optional(bool, true)
     maximum_retry_attempts             = optional(number)
+    maximum_record_age_in_seconds      = optional(number)
     on_failure_destination_arn         = optional(string)
     enabled                            = optional(bool, true)
   }))
@@ -572,6 +587,21 @@ variable "dynamodb_stream_event_sources" {
   validation {
     condition = alltrue([
       for key, source in var.dynamodb_stream_event_sources :
+      source.maximum_record_age_in_seconds == null || (
+        floor(coalesce(source.maximum_record_age_in_seconds, -1)) == coalesce(source.maximum_record_age_in_seconds, -1) && (
+          coalesce(source.maximum_record_age_in_seconds, -1) == -1 || (
+            coalesce(source.maximum_record_age_in_seconds, -1) >= 60 &&
+            coalesce(source.maximum_record_age_in_seconds, -1) <= 604800
+          )
+        )
+      )
+    ])
+    error_message = "dynamodb_stream_event_sources maximum_record_age_in_seconds must be a whole number from 60 to 604800, or -1 for no limit, or null to leave the argument unset."
+  }
+
+  validation {
+    condition = alltrue([
+      for key, source in var.dynamodb_stream_event_sources :
       source.on_failure_destination_arn == null || can(regex("^arn:aws[a-z-]*:(sqs|sns):[a-z0-9-]+:[0-9]{12}:.+$", coalesce(source.on_failure_destination_arn, "")))
     ])
     error_message = "dynamodb_stream_event_sources on_failure_destination_arn must be an SQS queue ARN or an SNS topic ARN. Those are the only two destinations a stream event source mapping accepts for a discarded batch."
@@ -624,4 +654,55 @@ variable "events_path" {
     condition     = startswith(var.events_path, "/")
     error_message = "events_path must start with a slash: the adapter posts to it as an absolute path."
   }
+}
+
+variable "enable_log_write" {
+  description = "Grant logs:CreateLogStream and logs:PutLogEvents on this function's own log group in the runtime baseline inline policy. Off by default, so an existing caller sees no plan change; turn it on in place of a hand written WriteOwnLogs statement."
+  type        = bool
+  default     = false
+}
+
+variable "enable_xray" {
+  description = "Grant xray:PutSpans and xray:PutSpansForIndexing on * in the runtime baseline inline policy, which is what an OpenTelemetry exporter posting to the X-Ray OTLP endpoint needs. This is separate from attach_xray_write_policy, which covers the classic segment API. Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "app_secret_arns" {
+  description = "Secrets Manager secret ARNs the function reads, granted secretsmanager:GetSecretValue in the runtime baseline inline policy. Usually [module.app_secrets.arns[\"app\"]]. Empty by default, which adds no statement."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.app_secret_arns : can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$", arn))])
+    error_message = "Every app_secret_arns entry must be a Secrets Manager secret ARN of the form arn:aws:secretsmanager:<region>:<account>:secret:<name>."
+  }
+}
+
+variable "kms_key_arns" {
+  description = "KMS key ARNs the function decrypts with, granted kms:Decrypt in the runtime baseline inline policy. Empty by default, which adds no statement."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+$", arn))])
+    error_message = "Every kms_key_arns entry must be a KMS key ARN. An alias ARN does not work in a kms:Decrypt resource, because the grant is evaluated against the key; pass data.aws_kms_alias.<name>.target_key_arn instead."
+  }
+}
+
+variable "kms_via_services" {
+  description = "Service endpoints the kms_key_arns decrypt is limited to, written as a StringEquals kms:ViaService condition, for example [\"ssm.us-east-1.amazonaws.com\"]. Empty by default, which leaves the decrypt unconditioned."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.kms_via_services) == 0 || length(var.kms_key_arns) > 0
+    error_message = "kms_via_services only conditions the kms_key_arns grant, so it needs at least one kms_key_arns entry."
+  }
+}
+
+variable "runtime_baseline_policy_name" {
+  description = "Name of the runtime baseline inline policy on the execution role, created only when enable_log_write, enable_xray, app_secret_arns or kms_key_arns asks for a statement."
+  type        = string
+  default     = "runtime-baseline"
 }
