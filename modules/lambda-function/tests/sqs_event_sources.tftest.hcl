@@ -407,3 +407,53 @@ run "an_events_path_without_a_leading_slash_is_rejected" {
 
   expect_failures = [var.events_path]
 }
+
+run "the_resource_argument_name_is_accepted_for_the_batching_window" {
+  command = plan
+
+  variables {
+    sqs_event_sources = {
+      jobs = {
+        queue_arn                          = "arn:aws:sqs:us-west-2:123456789012:example-staging-jobs"
+        maximum_batching_window_in_seconds = 0
+      }
+    }
+  }
+
+  assert {
+    condition     = aws_lambda_event_source_mapping.sqs["jobs"].maximum_batching_window_in_seconds == 0
+    error_message = "maximum_batching_window_in_seconds is the resource argument's own name and the stream map's, so a caller using it must get the window it asked for rather than having the attribute dropped by type conversion and the default of 5 applied."
+  }
+}
+
+run "both_batching_window_names_together_are_rejected" {
+  command = plan
+
+  variables {
+    sqs_event_sources = {
+      jobs = {
+        queue_arn                          = "arn:aws:sqs:us-west-2:123456789012:example-staging-jobs"
+        maximum_batching_window_seconds    = 5
+        maximum_batching_window_in_seconds = 0
+      }
+    }
+  }
+
+  expect_failures = [var.sqs_event_sources]
+}
+
+run "a_large_batch_with_a_zero_window_under_the_alias_is_rejected" {
+  command = plan
+
+  variables {
+    sqs_event_sources = {
+      jobs = {
+        queue_arn                          = "arn:aws:sqs:us-west-2:123456789012:example-staging-jobs"
+        batch_size                         = 100
+        maximum_batching_window_in_seconds = 0
+      }
+    }
+  }
+
+  expect_failures = [var.sqs_event_sources]
+}

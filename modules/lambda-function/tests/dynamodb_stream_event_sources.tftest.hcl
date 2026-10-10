@@ -422,3 +422,37 @@ run "a_stream_without_the_module_owning_the_grant_is_rejected" {
 
   expect_failures = [var.attach_role_policies]
 }
+
+run "a_maximum_record_age_reaches_the_mapping" {
+  command = plan
+
+  variables {
+    dynamodb_stream_event_sources = {
+      issues = {
+        stream_arn                    = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-issues/stream/2026-09-17T00:00:00.000"
+        maximum_retry_attempts        = 2
+        maximum_record_age_in_seconds = 3600
+      }
+    }
+  }
+
+  assert {
+    condition     = aws_lambda_event_source_mapping.dynamodb_stream["issues"].maximum_record_age_in_seconds == 3600
+    error_message = "maximum_record_age_in_seconds must reach the mapping; it is what stops one stuck record blocking its shard for the whole retention window."
+  }
+}
+
+run "a_maximum_record_age_below_a_minute_is_rejected" {
+  command = plan
+
+  variables {
+    dynamodb_stream_event_sources = {
+      issues = {
+        stream_arn                    = "arn:aws:dynamodb:us-west-2:123456789012:table/example-staging-issues/stream/2026-09-17T00:00:00.000"
+        maximum_record_age_in_seconds = 30
+      }
+    }
+  }
+
+  expect_failures = [var.dynamodb_stream_event_sources]
+}

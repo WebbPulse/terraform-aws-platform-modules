@@ -7,6 +7,52 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.39.0
+
+Targets 2.39.0.
+
+### `lambda-function`: an opt-in runtime baseline policy **no plan change**
+
+Every product hand wrote the same runtime statements next to each function. Four new inputs build
+them into one inline policy, `runtime-baseline` by default (`runtime_baseline_policy_name`):
+`enable_log_write` grants `logs:CreateLogStream` and `logs:PutLogEvents` on the function's own log
+group, `enable_xray` grants `xray:PutSpans` and `xray:PutSpansForIndexing` for the X-Ray OTLP
+endpoint, `app_secret_arns` grants `secretsmanager:GetSecretValue`, and `kms_key_arns` grants
+`kms:Decrypt`, conditioned on `kms:ViaService` when `kms_via_services` is set. The policy exists only
+when one of them asks for a statement, so a caller that sets none plans nothing new. New output:
+`runtime_baseline_policy_json` (PLAT-37).
+
+### `lambda-function`: event source gaps **no plan change** except one bug fix
+
+`dynamodb_stream_event_sources` gains `maximum_record_age_in_seconds`, optional and null, so a
+stream consumer wired by hand (CarModPicker) can move onto the module with its record age cap
+intact. `sqs_event_sources` now also accepts `maximum_batching_window_in_seconds`, the resource
+argument's own name and the one the stream map uses, as an alias for
+`maximum_batching_window_seconds`; setting both fails validation. Before this release the alias was
+silently dropped by object type conversion and the default of 5 applied. Plan effect: none for a
+caller using `maximum_batching_window_seconds` or neither. A caller that passed
+`maximum_batching_window_in_seconds` (Standupless `lambda_domain_sqs_sources`) plans an in-place
+mapping update to the window it asked for (PLAT-37).
+
+### `github-actions-role`: opt-in deploy statement presets **no plan change**
+
+Three new inputs, each null by default, append fixed statements after `policy_statements` in the
+same inline policy: `lambda_image_deploy` (`LambdaImageDeploy`, plus `LambdaSmokeInvoke` on
+`invoke_function_arns` or the deployed functions), `ecr_push` (`EcrAuth`, `EcrPush`, and `EcrPull` on
+`pull_repository_arns`, without `ecr:SetRepositoryPolicy`) and `spa_deploy` (`SpaSync` on each
+bucket and its objects, `SpaInvalidate` on the distributions). A sid shared by a preset and a
+`policy_statements` entry fails the plan. The trust policy, the immutable subject form and the
+wildcard check are untouched. With every preset null the inline policy renders exactly as before
+(PLAT-37).
+
+### `ses-identity`: MAIL FROM records **no plan change**
+
+`create_mail_from_records`, default false, writes the MX record
+(`10 feedback-smtp.<region>.amazonses.com`) and the SPF TXT record (`v=spf1 include:amazonses.com
+~all`) at `mail_from_domain` into `dkim_records_zone_id`, with `mail_from_record_ttl` defaulting to
+300 to match the hand written records it replaces. It needs `domain`, `mail_from_domain` and the
+zone, checked as a precondition (PLAT-37).
+
 ## 2.38.0
 
 Targets 2.38.0.

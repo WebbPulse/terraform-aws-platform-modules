@@ -50,25 +50,15 @@ module "api_lambda" {
   application_log_level = "INFO"
   system_log_level      = "INFO"
 
+  enable_log_write = true
+  enable_xray      = true
+  app_secret_arns  = [aws_secretsmanager_secret.app.arn]
+
   tags = { Name = "example-production-api" }
 }
 
-data "aws_iam_policy_document" "runtime" {
-  statement {
-    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${module.api_lambda.log_group_arn}:*"]
-  }
-
-  statement {
-    actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role_policy" "runtime" {
-  name   = "runtime"
-  role   = module.api_lambda.role_id
-  policy = data.aws_iam_policy_document.runtime.json
+resource "aws_secretsmanager_secret" "app" {
+  name = "example/production/app"
 }
 
 module "api" {

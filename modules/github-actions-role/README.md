@@ -43,6 +43,9 @@ module "github_actions_role" {
 | `oidc_thumbprints` | Thumbprints on the created provider; informational since 2023 | the two GitHub thumbprints |
 | `inline_policy_name` | Name of the single inline policy carrying `policy_statements` | `"deploy-permissions"` |
 | `policy_statements` | Statements of the inline deploy policy; empty creates no inline policy | `[]` |
+| `lambda_image_deploy` | Preset: `{ function_arns, invoke_function_arns }` for image deploys and a smoke invoke | `null` |
+| `ecr_push` | Preset: `{ repository_arns, pull_repository_arns }` for ECR auth, push and base image pull | `null` |
+| `spa_deploy` | Preset: `{ bucket_arns, distribution_arns }` for an S3 sync and CloudFront invalidation | `null` |
 
 Each `policy_statements` entry is an object:
 
@@ -57,6 +60,18 @@ Each `policy_statements` entry is an object:
   condition     = optional(map(map(list(string))))  # operator -> key -> values
 }
 ```
+
+The presets append fixed statements after `policy_statements` in the same inline policy:
+
+| Preset | Sid | Grants |
+| --- | --- | --- |
+| `lambda_image_deploy` | `LambdaImageDeploy` | `lambda:UpdateFunctionCode`, `PublishVersion`, `GetFunction`, `GetFunctionConfiguration`, `GetFunctionCodeSigningConfig` on `function_arns` |
+| `lambda_image_deploy` | `LambdaSmokeInvoke` | `lambda:InvokeFunction` on `invoke_function_arns`; null reuses `function_arns`, `[]` drops the statement |
+| `ecr_push` | `EcrAuth` | `ecr:GetAuthorizationToken` on `*` |
+| `ecr_push` | `EcrPush` | layer upload, `PutImage`, `BatchGetImage`, `DescribeImages`, `GetDownloadUrlForLayer`, `GetRepositoryPolicy` on `repository_arns` |
+| `ecr_push` | `EcrPull` | `BatchCheckLayerAvailability`, `BatchGetImage`, `DescribeImages`, `GetDownloadUrlForLayer` on `pull_repository_arns`, omitted when empty |
+| `spa_deploy` | `SpaSync` | `s3:PutObject`, `GetObject`, `DeleteObject`, `ListBucket` on each bucket and `<bucket>/*` |
+| `spa_deploy` | `SpaInvalidate` | `cloudfront:CreateInvalidation`, `GetInvalidation` on `distribution_arns`, omitted when empty |
 
 ## Outputs
 
@@ -83,6 +98,19 @@ Each `policy_statements` entry is an object:
   resource-level permissions.
 - One-or-many fields render as a bare JSON string when they hold exactly one element and as a list
   otherwise, matching hand-written policy documents.
+- The presets only add permission statements. They never touch `subjects`, the trust policy, or
+  the wildcard check, so a role keeps the immutable `repo:WebbPulse@<org-id>/<repo>@<repo-id>` subject
+  it already trusts.
+- **Adopting a preset rewrites the policy text, not the role.** The preset sids replace the hand
+  written ones (`EcrPushDomainImages` becomes `EcrPush`, `SharedBaseImagePull` becomes `EcrPull`), so
+  the adoption plan is one in place update of `deploy-permissions` and nothing else. A
+  `policy_statements` sid that matches a preset sid fails the plan with a precondition naming both,
+  because IAM requires sids to be unique in a policy.
+- `ecr_push` deliberately leaves out `ecr:SetRepositoryPolicy`: a deploy role that can rewrite the
+  repository policy can grant itself, or anyone, pull and push. Keep it in `policy_statements` only
+  if a workflow really sets the policy.
+- `lambda_image_deploy` takes unqualified function ARNs. A `lambda:InvokeFunction` grant on the
+  unqualified ARN covers `$LATEST` only, which is what a post deploy smoke invoke calls.
 - One inline policy only, subject to the 10240-character inline limit; attach managed policies
   from outside using `role_name`. The GitHub side (`AWS_DEPLOY_ROLE_ARN`, `id-token: write`) is
   the consumer's to set.

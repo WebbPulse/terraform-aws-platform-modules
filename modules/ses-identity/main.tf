@@ -11,6 +11,8 @@ locals {
   dkim_record_count = var.domain != null && var.create_dkim_records ? local.dkim_token_count : 0
   dmarc_count       = var.domain != null && var.dmarc_record != null ? 1 : 0
 
+  mail_from_record_count = local.mail_from_count == 1 && var.create_mail_from_records ? 1 : 0
+
   records_zone_id = coalesce(var.dkim_records_zone_id, "zone-id-unset")
 }
 
@@ -62,6 +64,11 @@ resource "aws_sesv2_configuration_set" "this" {
     precondition {
       condition     = var.dmarc_record == null || var.dkim_records_zone_id != null
       error_message = "dmarc_record needs dkim_records_zone_id."
+    }
+
+    precondition {
+      condition     = !var.create_mail_from_records || (var.domain != null && var.mail_from_domain != null && var.dkim_records_zone_id != null)
+      error_message = "create_mail_from_records needs domain, mail_from_domain and dkim_records_zone_id."
     }
   }
 }

@@ -73,6 +73,11 @@ output "xray_write_policy_attached" {
   value       = local.attach_xray_write_policy
 }
 
+output "runtime_baseline_policy_json" {
+  description = "The runtime baseline policy document built from enable_log_write, enable_xray, app_secret_arns and kms_key_arns, already attached to the execution role. Null when none of those inputs is set."
+  value       = local.runtime_baseline_enabled ? data.aws_iam_policy_document.runtime_baseline[0].json : null
+}
+
 output "sqs_event_source_mapping_uuids" {
   description = "UUID of each SQS event source mapping, keyed as sqs_event_sources was. The UUID is what an UpdateEventSourceMapping call or a console deep link takes, and it is the only stable handle on a mapping, which has no name."
   value       = { for key, mapping in aws_lambda_event_source_mapping.sqs : key => mapping.uuid }

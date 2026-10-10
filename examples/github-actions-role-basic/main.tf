@@ -11,35 +11,16 @@ module "github_actions_role" {
       actions   = ["s3:PutObject", "s3:GetObject"]
       resources = ["${aws_s3_bucket.lambda_artifacts.arn}/*"]
     },
-    {
-      sid = "LambdaCode"
-      actions = [
-        "lambda:UpdateFunctionCode",
-        "lambda:PublishVersion",
-        "lambda:GetFunction",
-        "lambda:GetFunctionConfiguration",
-      ]
-      resources = [aws_lambda_function.api.arn]
-    },
-    {
-      sid = "FrontendSync"
-      actions = [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject",
-        "s3:ListBucket",
-      ]
-      resources = [
-        aws_s3_bucket.frontend.arn,
-        "${aws_s3_bucket.frontend.arn}/*",
-      ]
-    },
-    {
-      sid       = "FrontendInvalidate"
-      actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
-      resources = [aws_cloudfront_distribution.frontend.arn]
-    },
   ]
+
+  lambda_image_deploy = {
+    function_arns = [aws_lambda_function.api.arn]
+  }
+
+  spa_deploy = {
+    bucket_arns       = [aws_s3_bucket.frontend.arn]
+    distribution_arns = [aws_cloudfront_distribution.frontend.arn]
+  }
 }
 
 output "github_actions_role_arn" {

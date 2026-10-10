@@ -175,3 +175,75 @@ variable "policy_statements" {
     error_message = "Statement sids must be unique within the policy. Statements without a sid are ignored by this check; IAM only requires sids to be unique among the statements that have one."
   }
 }
+
+variable "lambda_image_deploy" {
+  description = "Preset for deploying container image Lambda functions. function_arns get lambda:UpdateFunctionCode, PublishVersion, GetFunction, GetFunctionConfiguration and GetFunctionCodeSigningConfig (sid LambdaImageDeploy). invoke_function_arns get lambda:InvokeFunction for a post deploy smoke invoke (sid LambdaSmokeInvoke); null reuses function_arns and an empty list grants no invoke. The statements join policy_statements in the same inline policy. Null, the default, adds nothing."
+  type = object({
+    function_arns        = list(string)
+    invoke_function_arns = optional(list(string))
+  })
+  default = null
+
+  validation {
+    condition     = var.lambda_image_deploy == null || length(try(var.lambda_image_deploy.function_arns, [])) > 0
+    error_message = "lambda_image_deploy needs at least one function_arns entry."
+  }
+
+  validation {
+    condition = var.lambda_image_deploy == null || alltrue([
+      for arn in concat(try(var.lambda_image_deploy.function_arns, []), try(var.lambda_image_deploy.invoke_function_arns, null) == null ? [] : var.lambda_image_deploy.invoke_function_arns) :
+      can(regex("^arn:aws[a-z-]*:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]+$", arn))
+    ])
+    error_message = "Every lambda_image_deploy ARN must be an unqualified Lambda function ARN of the form arn:aws:lambda:<region>:<account>:function:<name>."
+  }
+}
+
+variable "ecr_push" {
+  description = "Preset for pushing images to ECR. Adds ecr:GetAuthorizationToken on * (sid EcrAuth), the layer upload, PutImage and read actions on repository_arns (sid EcrPush), and the four pull actions on pull_repository_arns, for example a shared base image in another account (sid EcrPull). ecr:SetRepositoryPolicy is deliberately left out; grant it through policy_statements if a workflow really sets a repository policy. Null, the default, adds nothing."
+  type = object({
+    repository_arns      = list(string)
+    pull_repository_arns = optional(list(string), [])
+  })
+  default = null
+
+  validation {
+    condition     = var.ecr_push == null || length(try(var.ecr_push.repository_arns, [])) > 0
+    error_message = "ecr_push needs at least one repository_arns entry."
+  }
+
+  validation {
+    condition = var.ecr_push == null || alltrue([
+      for arn in concat(try(var.ecr_push.repository_arns, []), try(var.ecr_push.pull_repository_arns, [])) :
+      can(regex("^arn:aws[a-z-]*:ecr:[a-z0-9-]+:[0-9]{12}:repository/.+$", arn))
+    ])
+    error_message = "Every ecr_push ARN must be an ECR repository ARN of the form arn:aws:ecr:<region>:<account>:repository/<name>. A repository URL is not an ARN."
+  }
+}
+
+variable "spa_deploy" {
+  description = "Preset for syncing a single page app to S3 and invalidating its CloudFront cache. bucket_arns get s3:PutObject, GetObject, DeleteObject and ListBucket on the bucket and every object in it (sid SpaSync); distribution_arns get cloudfront:CreateInvalidation and GetInvalidation (sid SpaInvalidate), and an empty list grants no invalidation. Null, the default, adds nothing."
+  type = object({
+    bucket_arns       = list(string)
+    distribution_arns = optional(list(string), [])
+  })
+  default = null
+
+  validation {
+    condition     = var.spa_deploy == null || length(try(var.spa_deploy.bucket_arns, [])) > 0
+    error_message = "spa_deploy needs at least one bucket_arns entry."
+  }
+
+  validation {
+    condition = var.spa_deploy == null || alltrue([
+      for arn in try(var.spa_deploy.bucket_arns, []) : can(regex("^arn:aws[a-z-]*:s3:::[a-z0-9.-]+$", arn))
+    ])
+    error_message = "Every spa_deploy bucket_arns entry must be a bucket ARN of the form arn:aws:s3:::<bucket>, without a /* suffix; the preset adds the object ARN itself."
+  }
+
+  validation {
+    condition = var.spa_deploy == null || alltrue([
+      for arn in try(var.spa_deploy.distribution_arns, []) : can(regex("^arn:aws[a-z-]*:cloudfront::[0-9]{12}:distribution/[A-Z0-9]+$", arn))
+    ])
+    error_message = "Every spa_deploy distribution_arns entry must be a CloudFront distribution ARN of the form arn:aws:cloudfront::<account>:distribution/<id>."
+  }
+}

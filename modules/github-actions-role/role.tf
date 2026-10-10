@@ -30,13 +30,20 @@ resource "aws_iam_role" "this" {
 }
 
 resource "aws_iam_role_policy" "this" {
-  count = length(var.policy_statements) > 0 ? 1 : 0
+  count = length(local.all_policy_statements) > 0 ? 1 : 0
 
   name = var.inline_policy_name
   role = aws_iam_role.this.id
 
   policy = jsonencode({
     Version   = "2012-10-17"
-    Statement = local.policy_statements
+    Statement = local.all_policy_statements
   })
+
+  lifecycle {
+    precondition {
+      condition     = length(distinct(local.all_statement_sids)) == length(local.all_statement_sids)
+      error_message = "A policy_statements sid collides with a preset statement's sid. The presets use LambdaImageDeploy, LambdaSmokeInvoke, EcrAuth, EcrPush, EcrPull, SpaSync and SpaInvalidate; rename the hand written statement, or drop it when the preset already grants it."
+    }
+  }
 }

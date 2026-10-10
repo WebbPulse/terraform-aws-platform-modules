@@ -150,6 +150,18 @@ variable "dmarc_record_ttl" {
   default     = 1800
 }
 
+variable "create_mail_from_records" {
+  description = "Write the MAIL FROM MX record (10 feedback-smtp.<region>.amazonses.com) and SPF TXT record (v=spf1 include:amazonses.com ~all) at mail_from_domain into dkim_records_zone_id. Needs domain, mail_from_domain and dkim_records_zone_id."
+  type        = bool
+  default     = false
+}
+
+variable "mail_from_record_ttl" {
+  description = "TTL on the MAIL FROM MX and SPF TXT records."
+  type        = number
+  default     = 300
+}
+
 variable "verified_recipients" {
   description = "Email addresses verified as recipient identities so a sandboxed account can send to them. The list is explicit on purpose: sandbox and production access are handled out of band, and this module never requests either. Leave it empty in an account with production access."
   type        = list(string)

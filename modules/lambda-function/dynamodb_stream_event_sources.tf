@@ -10,6 +10,7 @@ resource "aws_lambda_event_source_mapping" "dynamodb_stream" {
   maximum_batching_window_in_seconds = each.value.maximum_batching_window_in_seconds
   bisect_batch_on_function_error     = each.value.bisect_batch_on_function_error
   maximum_retry_attempts             = each.value.maximum_retry_attempts
+  maximum_record_age_in_seconds      = each.value.maximum_record_age_in_seconds
 
   function_response_types = ["ReportBatchItemFailures"]
 
