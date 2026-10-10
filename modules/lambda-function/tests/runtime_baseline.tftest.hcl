@@ -50,30 +50,33 @@ run "secret_xray_and_kms_inputs_build_one_policy" {
   }
 
   assert {
-    condition     = length(jsondecode(output.runtime_baseline_policy_json).Statement) == 3
+    condition     = length(data.aws_iam_policy_document.runtime_baseline[0].statement) == 3
     error_message = "X-Ray, the app secret and the KMS key must each add one statement, and nothing else may be granted."
   }
 
   assert {
     condition = anytrue([
-      for statement in jsondecode(output.runtime_baseline_policy_json).Statement :
-      statement.Sid == "ReadTheAppSecret" && statement.Action == "secretsmanager:GetSecretValue" && statement.Resource == "arn:aws:secretsmanager:us-west-2:123456789012:secret:example/staging/app-AbCdEf"
+      for statement in data.aws_iam_policy_document.runtime_baseline[0].statement :
+      statement.sid == "ReadTheAppSecret" && length(statement.actions) == 1 && contains(statement.actions, "secretsmanager:GetSecretValue") && length(statement.resources) == 1 && contains(statement.resources, "arn:aws:secretsmanager:us-west-2:123456789012:secret:example/staging/app-AbCdEf")
     ])
     error_message = "The app secret statement must grant secretsmanager:GetSecretValue on exactly the given secret."
   }
 
   assert {
     condition = anytrue([
-      for statement in jsondecode(output.runtime_baseline_policy_json).Statement :
-      statement.Sid == "WriteSpansToTheXRayOTLPEndpoint" && toset(statement.Action) == toset(["xray:PutSpans", "xray:PutSpansForIndexing"])
+      for statement in data.aws_iam_policy_document.runtime_baseline[0].statement :
+      statement.sid == "WriteSpansToTheXRayOTLPEndpoint" && length(statement.actions) == 2 && contains(statement.actions, "xray:PutSpans") && contains(statement.actions, "xray:PutSpansForIndexing")
     ])
     error_message = "enable_xray must grant the two OTLP span actions."
   }
 
   assert {
     condition = anytrue([
-      for statement in jsondecode(output.runtime_baseline_policy_json).Statement :
-      statement.Sid == "DecryptWithTheGivenKeys" && statement.Action == "kms:Decrypt" && statement.Condition.StringEquals["kms:ViaService"] == "ssm.us-west-2.amazonaws.com"
+      for statement in data.aws_iam_policy_document.runtime_baseline[0].statement :
+      statement.sid == "DecryptWithTheGivenKeys" && contains(statement.actions, "kms:Decrypt") && anytrue([
+        for condition in statement.condition :
+        condition.test == "StringEquals" && condition.variable == "kms:ViaService" && contains(condition.values, "ssm.us-west-2.amazonaws.com")
+      ])
     ])
     error_message = "kms_key_arns must grant kms:Decrypt, conditioned on kms:ViaService when kms_via_services is set."
   }

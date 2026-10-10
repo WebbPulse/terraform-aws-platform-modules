@@ -126,12 +126,12 @@ run "mail_from_records_point_at_the_regional_feedback_endpoint" {
   }
 
   assert {
-    condition     = tolist(aws_route53_record.mail_from_mx[0].records) == ["10 feedback-smtp.us-west-2.amazonses.com"]
+    condition     = aws_route53_record.mail_from_mx[0].records == toset(["10 feedback-smtp.us-west-2.amazonses.com"])
     error_message = "The MAIL FROM MX record must point at the provider region's feedback-smtp endpoint."
   }
 
   assert {
-    condition     = tolist(aws_route53_record.mail_from_spf[0].records) == ["v=spf1 include:amazonses.com ~all"] && aws_route53_record.mail_from_spf[0].type == "TXT"
+    condition     = aws_route53_record.mail_from_spf[0].records == toset(["v=spf1 include:amazonses.com ~all"]) && aws_route53_record.mail_from_spf[0].type == "TXT"
     error_message = "The MAIL FROM SPF record must include amazonses.com."
   }
 
