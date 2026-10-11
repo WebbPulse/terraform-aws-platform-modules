@@ -77,6 +77,19 @@ function header(event, name) {
 }
 
 /**
+ * The viewer's address from CloudFront-Viewer-Address, which CloudFront writes and a
+ * viewer cannot set, without its port. 'unknown' when the behavior does not forward it.
+ */
+function viewerIp(event) {
+  const raw = String(header(event, 'cloudfront-viewer-address') || '').trim();
+  if (!raw) {
+    return 'unknown';
+  }
+  const colon = raw.lastIndexOf(':');
+  return colon > 0 ? raw.slice(0, colon) : raw;
+}
+
+/**
  * Resolves the host the viewer used from x-forwarded-host, falling back to
  * SITE_HOST so a spoofed header cannot steer a redirect.
  */
@@ -309,7 +322,15 @@ async function callback(event) {
     return respond(401, page('Not allowed', `${escapeHtml(email)} is not on the access list for this environment.`), { cookies: [clearState] });
   }
 
-  console.log('session issued', { email, host, next });
+  console.log(JSON.stringify({
+    message: 'session issued',
+    event: 'gate_sign_in',
+    email,
+    host,
+    next,
+    ip: viewerIp(event),
+    user_agent: String(header(event, 'user-agent') || '').slice(0, 256),
+  }));
   return redirect(`https://${host}${next}`, [clearState, ...evictedParentCookies(event), ...signedCookies(signingKey)]);
 }
 

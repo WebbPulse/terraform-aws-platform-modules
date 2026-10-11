@@ -102,6 +102,8 @@ not start with `ey`, which is where a JWT header begins.
 | `user_pool_client_id` | Cognito app client id used by the login Lambda |
 | `hosted_ui_domain` | Base URL of the Cognito hosted UI |
 | `login_function_name` | Name of the login Lambda function |
+| `login_log_group_name` | The login Lambda's log group, where each sign-in writes one `gate_sign_in` JSON line |
+| `login_log_group_arn` | ARN of the login Lambda's log group |
 | `cache_policy_id_caching_disabled` | AWS managed CachingDisabled cache policy id |
 | `origin_request_policy_id_all_viewer_except_host_header` | AWS managed AllViewerExceptHostHeader policy id |
 | `identity_jwt_enforced` | Whether the authorizer additionally requires an identity access token |
@@ -117,6 +119,11 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
 
 ## Gotchas
 
+- Each successful sign-in logs one JSON line, `{"message":"session issued","event":"gate_sign_in",
+  "email","host","next","ip","user_agent"}`, to `login_log_group_name`. `ip` comes from
+  `CloudFront-Viewer-Address`, which the AllViewerExceptHostHeader origin request policy forwards
+  and a viewer cannot forge; it is `unknown` when a behavior does not forward it. A subscription
+  filter on `"gate_sign_in"` is the cheap way to alert on new devices or addresses.
 - CloudFront validates the signed cookie before the viewer-request function runs, so on a signed
   behavior an unauthenticated request is a CloudFront 403 the function never sees; the function's
   302 to login only happens on the unsigned behaviors, which is how `/` and `/index.html` redirect.

@@ -16,6 +16,14 @@ the only factor, no SMS factor can exist, a user without an authenticator enroll
 UI's `MFA_SETUP` step at their next sign-in, live cookie sessions run to `session_hours`, and
 `identity_jwt` tokens and API keys are unaffected. The default stays `OPTIONAL` (TF-102).
 
+### `staging-access-gate`: structured sign-in log line, log group outputs
+
+The login Lambda's `session issued` line is now one JSON object with `event: "gate_sign_in"`, the
+email, host, next path, the viewer `ip` from `CloudFront-Viewer-Address` and the `user_agent`.
+New outputs `login_log_group_name` and `login_log_group_arn` let a consumer subscribe to it, which
+WebbPulse Terraform does to email the owner on a sign-in from a new device or address (TF-104).
+The plan updates the login function in place, since its code changed. No input changes.
+
 ## 2.39.0
 
 Targets 2.39.0.

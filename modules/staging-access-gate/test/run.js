@@ -83,8 +83,21 @@ function ev(uri, opts={}) {
   const idPayload = Buffer.from(JSON.stringify({iss: process.env.COGNITO_ISSUER, aud:'cid', token_use:'id', exp: Math.floor(Date.now()/1000)+600, email:'me@example.com'})).toString('base64url');
   let capturedBody, capturedAuth;
   global.fetch = async (url, init) => { capturedBody = init.body; capturedAuth = init.headers.authorization; return { ok: true, status: 200, json: async () => ({ id_token: `h.${idPayload}.s` }) }; };
-  r = await login.handler(mk('/_auth/callback', {code:'thecode', state}, [stateCookie.split(';')[0]]));
+  const logged = [];
+  const realLog = console.log;
+  console.log = (...args) => { logged.push(args.join(' ')); };
+  try {
+    r = await login.handler(mk('/_auth/callback', {code:'thecode', state}, [stateCookie.split(';')[0]], {'cloudfront-viewer-address':'203.0.113.7:4431', 'user-agent':'curl/8'}));
+  } finally {
+    console.log = realLog;
+  }
   assert.strictEqual(r.statusCode, 302, JSON.stringify(r));
+  const signIn = JSON.parse(logged.find(line => line.includes('gate_sign_in')));
+  assert.deepStrictEqual(
+    {message: signIn.message, email: signIn.email, ip: signIn.ip, user_agent: signIn.user_agent},
+    {message: 'session issued', email: 'me@example.com', ip: '203.0.113.7', user_agent: 'curl/8'},
+    'a sign-in logs one JSON line with the viewer address and user agent',
+  );
   assert.strictEqual(r.headers.location, 'https://www.staging.example.com/cars/12?x=1');
   assert.strictEqual(capturedAuth, 'Basic ' + Buffer.from('cid:secret').toString('base64'));
   assert(capturedBody.includes('redirect_uri=https%3A%2F%2Fwww.staging.example.com%2F_auth%2Fcallback'));
