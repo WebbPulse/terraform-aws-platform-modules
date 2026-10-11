@@ -79,6 +79,16 @@ output "login_function_name" {
   value       = aws_lambda_function.login.function_name
 }
 
+output "login_log_group_name" {
+  description = "The login Lambda's log group. Each sign-in writes one JSON line with event gate_sign_in, the email, host, viewer ip and user agent, for a subscription filter to alert on."
+  value       = aws_cloudwatch_log_group.login.name
+}
+
+output "login_log_group_arn" {
+  description = "ARN of the login Lambda's log group."
+  value       = aws_cloudwatch_log_group.login.arn
+}
+
 output "cache_policy_id_caching_disabled" {
   description = "AWS managed CachingDisabled cache policy id, for the login and API behaviors."
   value       = local.cache_policy_caching_disabled
