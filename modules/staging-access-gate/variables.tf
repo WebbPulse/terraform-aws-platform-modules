@@ -187,7 +187,7 @@ variable "invite_sms_message" {
 }
 
 variable "mfa_configuration" {
-  description = "Cognito MFA setting for the gate's user pool: OFF, OPTIONAL or ON. Software token (TOTP) MFA is what gets enabled. OPTIONAL, the default, challenges every user who has registered an authenticator and leaves the others signing in with a password alone; the change from OFF is an in-place update of the pool."
+  description = "Cognito MFA setting for the gate's user pool: OFF, OPTIONAL or ON. Software token (TOTP) MFA is what gets enabled. OPTIONAL, the default, challenges every user who has registered an authenticator and leaves the others signing in with a password alone; ON requires every user to enroll a TOTP authenticator, which the hosted UI offers at their next sign-in. No SMS factor is ever configured. Every change is an in-place update of the pool."
   type        = string
   default     = "OPTIONAL"
 
