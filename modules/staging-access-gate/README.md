@@ -55,7 +55,7 @@ set `disable_execute_api_endpoint = true` and `authorization_type = "CUSTOM"` wi
 | `invite_email_subject` | Invitation email subject; null is `Your access for <cookie_domain>` | `null` |
 | `invite_email_message` | Invitation email body; must contain `{username}` and `{####}`; null is a neutral message linking `invite_login_url` | `null` |
 | `invite_sms_message` | Invitation SMS, at most 140 characters; must contain `{username}` and `{####}`; null names `cookie_domain` | `null` |
-| `mfa_configuration` | Cognito MFA setting: `OFF`, `OPTIONAL` or `ON` (software token) | `"OPTIONAL"` |
+| `mfa_configuration` | Cognito MFA setting: `OFF`, `OPTIONAL` or `ON`; software token (TOTP) only, never SMS | `"OPTIONAL"` |
 | `log_retention_days` | CloudWatch Logs retention for the two Lambdas; 0 never expires | `7` |
 | `identity_jwt` | Object turning on identity access token verification in the authorizer; see below | `null` |
 | `identity_jwt_route_keys` | Route keys that must present a valid token; empty means the feature is off | `[]` |
@@ -155,6 +155,15 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
   signing in to the inner gate signs the browser out of the outer one, and moving back is one
   silent hosted UI round trip each way. The gate's other names need no scoping: `__gate_state` is
   host-only on the auth path, and the bounce marker is per-origin session storage.
+- `mfa_configuration = "ON"` requires the software token (TOTP) factor and nothing else. The pool
+  has no SMS configuration, so no SMS factor exists and the invitation SMS template never becomes
+  one. A user with no authenticator gets Cognito's `MFA_SETUP` step in the hosted UI at their next
+  sign-in, after any forced password change, and scans a QR code there, so switching an existing
+  pool to `ON` prompts enrollment instead of locking anyone out. A session already signed into the
+  CloudFront cookies is not cut short: the requirement lands when that session expires after
+  `session_hours` or the user signs out. Identity tokens and API keys admitted through
+  `identity_jwt` never touch the pool and are unaffected. Passkeys are not offered: they need
+  managed login version 2 and choice-based sign-in, and the pool stays on password plus TOTP.
 - The invitation copy defaults are neutral and name `cookie_domain`; they do not say staging, so
   one module serves a production gate as well. Overrides must keep `{username}` and `{####}`, which
   Cognito substitutes, and an SMS must fit 140 characters.

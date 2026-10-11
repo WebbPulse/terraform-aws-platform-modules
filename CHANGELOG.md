@@ -7,6 +7,15 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `staging-access-gate`: document required MFA **no plan change**
+
+Docs only. The `mfa_configuration` description and a new Gotcha spell out what `ON` does: TOTP is
+the only factor, no SMS factor can exist, a user without an authenticator enrolls through the hosted
+UI's `MFA_SETUP` step at their next sign-in, live cookie sessions run to `session_hours`, and
+`identity_jwt` tokens and API keys are unaffected. The default stays `OPTIONAL` (TF-102).
+
 ## 2.39.0
 
 Targets 2.39.0.
