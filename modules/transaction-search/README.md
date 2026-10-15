@@ -21,7 +21,7 @@ module "transaction_search" {
 
   adopt_spans_log_group               = var.adopt_spans_log_group
   adopt_application_signals_log_group = var.adopt_application_signals_log_group
-  span_sample_ratio                   = var.environment == "production" ? null : 0.1
+  span_sample_ratio                   = 0.1
 }
 
 module "api_function" {
@@ -43,7 +43,7 @@ module "api_function" {
 | `application_signals_log_group_name` | Second group named in the policy; null leaves it out | `"/aws/application-signals/data"` |
 | `adopt_application_signals_log_group` | Import `/aws/application-signals/data` and hold its retention | `false` |
 | `application_signals_log_group_retention_in_days` | Retention held on the adopted Application Signals group | `30` |
-| `span_sample_ratio` | Trace fraction, 0 to 1, published as `WEBBPULSE_OTEL_SAMPLE_RATIO`; null publishes nothing | `null` |
+| `span_sample_ratio` | Trace fraction, 0 to 1, published as `WEBBPULSE_OTEL_SAMPLE_RATIO`; null publishes nothing, so the sampler keeps every trace | `null` |
 | `create_indexing_rule` | Manage the account's `Default` X-Ray indexing rule | `true` |
 | `indexing_rule_sampling_percentage` | Percentage of traces indexed, 0 to 100 | `1` |
 | `tags` | Tags on the adopted spans and Application Signals log groups | `{}` |
@@ -107,6 +107,9 @@ module "api_function" {
   the name is not reserved, so a consumer could let Terraform create it on a fresh account instead,
   but it then races AWS for the name, so prefer the two-apply bootstrap. Destroying the module with
   the group adopted deletes the group and its data.
+- **A null `span_sample_ratio` means a ratio of 1.0, not "leave it as it is".** The webbpulse
+  sampler keeps every trace when `WEBBPULSE_OTEL_SAMPLE_RATIO` is unset, so set the ratio explicitly
+  in every environment and drop any hand-set copy of the variable when adopting the output.
 - **`span_sample_ratio` is the lever that cuts ingestion; the indexing rule and X-Ray sampling rules
   are not.** Transaction Search ingests every span X-Ray receives into `aws/spans` and
   `/aws/application-signals/data`; `indexing_rule_sampling_percentage` only chooses how many of those
