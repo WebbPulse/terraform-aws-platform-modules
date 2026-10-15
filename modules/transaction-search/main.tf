@@ -20,6 +20,12 @@ locals {
   ]
 
   spans_log_groups = var.adopt_spans_log_group ? toset([var.spans_log_group_name]) : toset([])
+
+  application_signals_log_groups = var.adopt_application_signals_log_group ? toset([var.application_signals_log_group_name]) : toset([])
+
+  otel_environment_variables = var.span_sample_ratio == null ? {} : {
+    WEBBPULSE_OTEL_SAMPLE_RATIO = tostring(var.span_sample_ratio)
+  }
 }
 
 data "aws_iam_policy_document" "spans" {
@@ -66,6 +72,16 @@ resource "aws_cloudwatch_log_group" "spans" {
 
   name              = each.value
   retention_in_days = var.spans_log_group_retention_in_days
+  tags              = var.tags
+
+  depends_on = [aws_xray_trace_segment_destination.this]
+}
+
+resource "aws_cloudwatch_log_group" "application_signals" {
+  for_each = local.application_signals_log_groups
+
+  name              = each.value
+  retention_in_days = var.application_signals_log_group_retention_in_days
   tags              = var.tags
 
   depends_on = [aws_xray_trace_segment_destination.this]
