@@ -7,6 +7,20 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.41.0
+
+Targets 2.41.0.
+
+### `transaction-search`: Application Signals retention and a span sample ratio **no plan change**
+
+New `adopt_application_signals_log_group` (default false) puts `/aws/application-signals/data`
+under management at `application_signals_log_group_retention_in_days` (default 30). AWS creates that
+group with no retention, so it grows forever; like `aws/spans` it needs a consumer-side `import`
+block gated on the flag, documented in the module Gotchas. New `span_sample_ratio` (default null)
+publishes `WEBBPULSE_OTEL_SAMPLE_RATIO` through a new `otel_environment_variables` output for the
+`lambda-function` module, so staging can export a fraction of its traces while prod keeps its own
+setting. New output `application_signals_log_group_arn`. With the defaults nothing plans (PLAT-59).
+
 ## 2.40.0
 
 Targets 2.40.0.

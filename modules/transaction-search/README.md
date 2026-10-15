@@ -2,8 +2,9 @@
 
 X-Ray Transaction Search for one account and region: the CloudWatch Logs resource policy that lets
 X-Ray put span events, the trace segment destination that switches X-Ray to CloudWatch Logs, the
-`Default` indexing rule, and an optional adoption of the reserved `aws/spans` log group so its
-retention is managed rather than infinite.
+`Default` indexing rule, optional adoptions of the reserved `aws/spans` log group and the
+`/aws/application-signals/data` log group so their retention is managed rather than infinite, and an
+optional per-environment span sample ratio published for the `lambda-function` module.
 
 This is account scoped, not application scoped. One instance per account and region.
 
@@ -18,7 +19,15 @@ module "transaction_search" {
 
   name_prefix = "example-staging"
 
-  adopt_spans_log_group = var.adopt_spans_log_group
+  adopt_spans_log_group               = var.adopt_spans_log_group
+  adopt_application_signals_log_group = var.adopt_application_signals_log_group
+  span_sample_ratio                   = var.environment == "production" ? null : 0.1
+}
+
+module "api_function" {
+  source = "terraform.webbpulse.com/WebbPulse/platform-modules/aws//modules/lambda-function"
+
+  otel_environment_variables = merge(local.otel_environment, module.transaction_search.otel_environment_variables)
 }
 ```
 
@@ -32,9 +41,12 @@ module "transaction_search" {
 | `spans_log_group_name` | Reserved log group X-Ray writes spans to | `"aws/spans"` |
 | `spans_log_group_retention_in_days` | Retention held on the adopted group | `7` |
 | `application_signals_log_group_name` | Second group named in the policy; null leaves it out | `"/aws/application-signals/data"` |
+| `adopt_application_signals_log_group` | Import `/aws/application-signals/data` and hold its retention | `false` |
+| `application_signals_log_group_retention_in_days` | Retention held on the adopted Application Signals group | `30` |
+| `span_sample_ratio` | Trace fraction, 0 to 1, published as `WEBBPULSE_OTEL_SAMPLE_RATIO`; null publishes nothing | `null` |
 | `create_indexing_rule` | Manage the account's `Default` X-Ray indexing rule | `true` |
 | `indexing_rule_sampling_percentage` | Percentage of traces indexed, 0 to 100 | `1` |
-| `tags` | Tags on the adopted spans log group | `{}` |
+| `tags` | Tags on the adopted spans and Application Signals log groups | `{}` |
 
 ## Outputs
 
@@ -46,6 +58,8 @@ module "transaction_search" {
 | `spans_log_group_arn` | ARN of the adopted group, null when `adopt_spans_log_group` is false |
 | `trace_segment_destination` | Destination X-Ray sends segments to, `CloudWatchLogs` once applied |
 | `indexing_rule_name` | Name of the managed indexing rule, null when not managed |
+| `application_signals_log_group_arn` | ARN of the adopted Application Signals group, null when not adopted |
+| `otel_environment_variables` | `{ WEBBPULSE_OTEL_SAMPLE_RATIO = "<ratio>" }`, or `{}` when `span_sample_ratio` is null |
 
 ## Gotchas
 
@@ -73,6 +87,37 @@ module "transaction_search" {
   with an `InvalidParameterException` naming the reserved prefix. The `for_each` has to be gated on
   the same variable the module gets, or the import fires on an account where the group does not
   exist yet and fails at plan time.
+- **`adopt_application_signals_log_group` follows the same pattern and needs its own import.**
+  X-Ray writes Application Signals data derived from spans into `/aws/application-signals/data`,
+  which AWS creates with no retention. The module holds it at
+  `application_signals_log_group_retention_in_days` (30 by default) once adopted, and the consumer
+  writes a second import gated on the same variable:
+
+  ```hcl
+  import {
+    for_each = var.adopt_application_signals_log_group ? toset(["/aws/application-signals/data"]) : toset([])
+
+    to = module.transaction_search.aws_cloudwatch_log_group.application_signals[each.key]
+    id = each.value
+  }
+  ```
+
+  Check the group exists first (`aws logs describe-log-groups --log-group-name-prefix
+  /aws/application-signals/data`); importing a missing group is a plan time error. Unlike `aws/spans`
+  the name is not reserved, so a consumer could let Terraform create it on a fresh account instead,
+  but it then races AWS for the name, so prefer the two-apply bootstrap. Destroying the module with
+  the group adopted deletes the group and its data.
+- **`span_sample_ratio` is the lever that cuts ingestion; the indexing rule and X-Ray sampling rules
+  are not.** Transaction Search ingests every span X-Ray receives into `aws/spans` and
+  `/aws/application-signals/data`; `indexing_rule_sampling_percentage` only chooses how many of those
+  become indexed trace summaries. X-Ray sampling rules (`aws_xray_sampling_rule`) apply only to SDKs
+  that poll for centralized sampling, and the webbpulse SDK does not: it runs its own tail sampler
+  reading `WEBBPULSE_OTEL_SAMPLE_RATIO`, always keeping traces with an error. Lambda's own Active
+  tracing segments sample at a fixed 1 request per second plus 5 percent that Lambda does not let
+  you configure; the only way to drop those is `tracing_mode = "PassThrough"` on the function. The
+  module only publishes the variable: it reaches a function when the consumer merges
+  `otel_environment_variables` into the `lambda-function` input, and a key there overrides the same
+  key set by hand in `environment_variables`.
 - Without the adoption the group still exists and still collects spans; it just keeps the default
   never-expire retention and bills for it. Adopting it is the only reason this input exists.
 - The resource policy has to exist before the trace segment destination is switched, or X-Ray
