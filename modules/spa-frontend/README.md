@@ -279,6 +279,13 @@ module's sends `DENY`, no `X-XSS-Protection` and the CSP.
   redirects `www.<domain>` to `<domain>`, `"www"` redirects the other way, and `"none"` writes no
   redirect at all and leaves only the rewrite. `domain` is the registrable domain with no `www.`
   prefix either way; the module refuses one, because `canonical_host` is what picks the side.
+- **`/.well-known/` is never rewritten.** The function returns any path under `/.well-known/`
+  unchanged, so an extensionless document such as `/.well-known/apple-app-site-association` is
+  served from S3 instead of falling into the SPA shell. Apple fetches that file without following
+  redirects, so it must live on the canonical host: a request to the other host still gets the
+  301. Upload it with `Content-Type: application/json`; `spa-deploy.yml@v3` from v3.25.0 does
+  that for `.well-known/apple-app-site-association` in the build output. No SPA route may live
+  under `/.well-known/`.
 - `viewer_request_function` and `viewer_request_function_arn` are mutually exclusive and the module
   refuses both, as a `precondition` on the function. Leaving `viewer_request_function` null keeps
   the existing input working exactly as before, and an existing consumer's plan is empty.

@@ -35,7 +35,7 @@ function appHandler(event) {
     };
   }
 
-  if (uri === '' || uri === '/') {
+  if (uri === '' || uri === '/' || uri.indexOf('/.well-known/') === 0) {
     return request;
   }
 

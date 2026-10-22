@@ -126,6 +126,42 @@ run "the_gate_takes_the_slot_and_the_handler_is_still_rendered" {
   }
 }
 
+run "well_known_paths_pass_through_unrewritten_with_a_redirect" {
+  command = plan
+
+  variables {
+    viewer_request_function = {
+      domain = "example.com"
+    }
+  }
+
+  assert {
+    condition     = strcontains(aws_cloudfront_function.viewer_request[0].code, "uri.indexOf('/.well-known/') === 0")
+    error_message = "The function must return /.well-known/ requests unrewritten so an extensionless document such as apple-app-site-association is served from S3."
+  }
+
+  assert {
+    condition     = strcontains(output.viewer_request_handler_js, "uri.indexOf('/.well-known/') === 0")
+    error_message = "The handler a gate wraps must pass /.well-known/ through too."
+  }
+}
+
+run "well_known_paths_pass_through_unrewritten_without_a_redirect" {
+  command = plan
+
+  variables {
+    viewer_request_function = {
+      domain         = "example.com"
+      canonical_host = "none"
+    }
+  }
+
+  assert {
+    condition     = strcontains(aws_cloudfront_function.viewer_request[0].code, "uri.indexOf('/.well-known/') === 0")
+    error_message = "canonical_host none must pass /.well-known/ requests through unrewritten as well."
+  }
+}
+
 run "both_inputs_are_refused" {
   command = plan
 
