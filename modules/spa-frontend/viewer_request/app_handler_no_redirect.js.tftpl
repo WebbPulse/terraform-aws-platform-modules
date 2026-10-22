@@ -9,7 +9,7 @@ function appHandler(event) {
   var request = event.request;
   var uri = request.uri;
 
-  if (uri === '' || uri === '/') {
+  if (uri === '' || uri === '/' || uri.indexOf('/.well-known/') === 0) {
     return request;
   }
 

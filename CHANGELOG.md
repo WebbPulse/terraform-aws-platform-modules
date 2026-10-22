@@ -7,6 +7,23 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.42.0
+
+Targets 2.42.0.
+
+### `spa-frontend`: `/.well-known/` passes through the viewer request function
+
+Both viewer request templates now return a request under `/.well-known/` unchanged, ahead of the
+extensionless rewrite, so `/.well-known/apple-app-site-association` is served from S3 instead of
+as `/.well-known/apple-app-site-association/index.html`, which fell back to the SPA shell. Paths
+with an extension such as `/.well-known/terraform.json` were already untouched. No adopter serves an
+SPA route under `/.well-known/`, so this is on for everyone with no input. Plan effect: every
+adopter that sets `viewer_request_function` plans an in-place `aws_cloudfront_function` code
+update, and one behind a `staging-access-gate` plans the same update on the gate function, since it
+wraps `viewer_request_handler_js`. A consumer on `viewer_request_function_arn` plans nothing.
+Pair it with `spa-deploy.yml@v3` from v3.25.0, which uploads the file as `application/json`
+(PLAT-63).
+
 ## 2.41.0
 
 Targets 2.41.0.
