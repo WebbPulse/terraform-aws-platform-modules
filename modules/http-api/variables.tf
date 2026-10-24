@@ -285,7 +285,7 @@ variable "access_log_retention_days" {
 }
 
 variable "access_log_format" {
-  description = "Fields of the JSON access log line, field name to $context variable. The stage stores jsonencode() of this map, keys sorted, so two consumers with the same set of fields have byte-identical formats regardless of how they order them."
+  description = "Fields of the JSON access log line, field name to $context variable. The stage stores jsonencode() of this map, keys sorted, so two consumers with the same set of fields have byte-identical formats regardless of how they order them. The default identifies the caller without logging an email or a token: jwtSub and jwtSid come from the native JWT authorizer's claims, lambdaSub, lambdaSid and authSource from the shared identity Lambda authorizer (identity_jwt lambda mode and staging-access-gate), and any of them is \"-\" when that authorizer did not run or did not set it."
   type        = map(string)
   default = {
     requestId               = "$context.requestId"
@@ -303,6 +303,11 @@ variable "access_log_format" {
     integrationStatus       = "$context.integrationStatus"
     integrationErrorMessage = "$context.integrationErrorMessage"
     authorizerError         = "$context.authorizer.error"
+    jwtSub                  = "$context.authorizer.claims.sub"
+    jwtSid                  = "$context.authorizer.claims.sid"
+    lambdaSub               = "$context.authorizer.sub"
+    lambdaSid               = "$context.authorizer.sid"
+    authSource              = "$context.authorizer.auth_source"
     errorMessage            = "$context.error.message"
     errorType               = "$context.error.responseType"
   }

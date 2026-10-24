@@ -91,7 +91,7 @@ prefix arrives with no claims, which is the backend's signal to verify the key i
 | `detailed_metrics_enabled` | Per-route CloudWatch metrics for the whole stage | `false` |
 | `access_log_group_name` | Access log group name, null for `/aws/apigateway/<name>` | `null` |
 | `access_log_retention_days` | Access log retention in days, 0 keeps logs forever | `14` |
-| `access_log_format` | Field name to `$context` variable, stored as `jsonencode()` with sorted keys | 17 fields, see `variables.tf` |
+| `access_log_format` | Field name to `$context` variable, stored as `jsonencode()` with sorted keys | 22 fields including the caller's subject, session id and auth source, see `variables.tf` |
 | `lambda_permission_statement_id` | Base `statement_id` of the invoke permissions | `"AllowHttpApiInvoke"` |
 | `disable_execute_api_endpoint` | Turn off the execute-api hostname; requires `domain_name` | `false` |
 | `authorizer_id` | Authorizer applied to every route as `CUSTOM`, null makes every route `NONE` | `null` |
@@ -209,6 +209,13 @@ identity_jwt = object({
 - An authorizer denial logs `integrationStatus` and `integrationLatency` as `-` because no
   integration ran, and `authorizerError` names the reason, so it is the first field to read for a
   401 with no integration call.
+- The access log identifies the caller from whichever authorizer ran. The native JWT authorizer
+  fills `jwtSub` and `jwtSid` from `$context.authorizer.claims.*`; the shared identity Lambda
+  authorizer (lambda mode and `staging-access-gate`) fills `lambdaSub`, `lambdaSid` and
+  `authSource` (`bearer` or `api_key`) from flat context keys, because `$context.authorizer.<key>`
+  cannot address a key with a dot such as `jwt.claims.sub`. Anything not set logs `-`, which is
+  what an unauthenticated route shows. A session cookie is verified in the backend, not the
+  gateway, so the gateway cannot log it as a source. No email, token or API key is ever logged.
 - The Lambda Web Adapter passes the request context header as plain JSON, not base64.
 - Discovery and JWKS are fetched at CreateAuthorizer time, so the issuer must be live before apply.
 - Gate direct invocation of the function with an `x-origin-verify` header; the authorizer only
@@ -254,7 +261,8 @@ identity_jwt = object({
 - Native and lambda mode hand the integration the same thing: `authorizer.jwt.claims` as a string
   map with the same keys, so a backend verifying in process cannot tell them apart. The one
   difference is that lambda mode also admits a bearer matching `api_key_prefixes` without claims,
-  leaving the backend to verify the key as it already does.
+  only `auth_source = api_key`, leaving the backend to verify the key as it already does. Lambda
+  mode also adds the flat `sub`, `sid` and `auth_source` keys the access log reads.
 - Lambda mode declares no identity source and does not cache. API Gateway answers 401 without
   invoking a REQUEST authorizer whenever a listed identity source is missing, and a CORS preflight
   never carries a token, so an `Authorization` source 401s every preflight on a protected `ANY`

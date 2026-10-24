@@ -74,8 +74,8 @@ identity_jwt = {
 ```
 
 A bearer token on an enforced route whose value starts with one of `api_key_prefixes` is allowed
-through with no claims context, for the function behind the API to verify itself. Empty, the
-default, denies every bearer that is not a valid access token. A prefix may not be empty and may
+through with no claims context, only `auth_source = api_key` for the access log, for the function
+behind the API to verify itself. Empty, the default, denies every bearer that is not a valid access token. A prefix may not be empty and may
 not start with `ey`, which is where a JWT header begins.
 
 ## Outputs

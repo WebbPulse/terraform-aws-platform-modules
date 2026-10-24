@@ -7,6 +7,32 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## 2.43.0
+
+Targets 2.43.0.
+
+### `http-api`: the default access log identifies the caller
+
+The default `access_log_format` gains five fields, so a request can be attributed without matching
+IPs and timestamps: `jwtSub` and `jwtSid` (`$context.authorizer.claims.sub` and `.sid`, from the
+native JWT authorizer), and `lambdaSub`, `lambdaSid` and `authSource`
+(`$context.authorizer.sub`, `.sid` and `.auth_source`, from the shared identity Lambda authorizer).
+`sid` is the session id the identity service stamps on the access token. A field the authorizer
+that ran did not set logs `-`, so an unauthenticated route shows `-` in all five. No email, token or
+API key is logged. A consumer that passes its own `access_log_format` is unaffected.
+
+### `staging-access-gate`, `http-api`: flat identity keys in the Lambda authorizer context
+
+`$context.authorizer.<key>` cannot address a key containing a dot, so the shared identity
+authorizer now adds flat `sub`, `sid` and `auth_source = bearer` keys next to the existing
+`jwt.claims*` keys, and a passed-through API key bearer is admitted with
+`context = { auth_source = api_key }` instead of no context. What a backend reads is unchanged:
+`jwt.claims` is untouched and an API key bearer still carries no claims.
+
+Plan effect: every consumer on the default format plans an in-place `aws_apigatewayv2_stage`
+access log format update; a `staging-access-gate` consumer and an `identity_jwt` lambda mode
+consumer also plan an in-place authorizer function code update (PLAT-73).
+
 ## 2.42.0
 
 Targets 2.42.0.
