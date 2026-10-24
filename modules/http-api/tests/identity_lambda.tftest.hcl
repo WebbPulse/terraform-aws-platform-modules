@@ -335,3 +335,67 @@ run "a_supplied_authorizer_id_still_wins_in_lambda_mode" {
     error_message = "The supplied authorizer id must be the one attached to the marked routes."
   }
 }
+
+run "packaged_signing_public_keys_reach_the_authorizer_config" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer              = "https://api.example.com/api/auth"
+      audience            = "example-production-api"
+      mode                = "lambda"
+      signing_public_keys = ["-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----\n"]
+    }
+  }
+
+  assert {
+    condition     = jsondecode(local.identity_lambda_config_json).public_keys == ["-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----"]
+    error_message = "The packaged public keys must reach identity_jwt_config.json, trimmed, so the authorizer verifies their tokens with no JWKS fetch."
+  }
+}
+
+run "no_signing_public_keys_leaves_the_authorizer_config_unchanged" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer   = "https://api.example.com/api/auth"
+      audience = "example-production-api"
+      mode     = "lambda"
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(jsondecode(local.identity_lambda_config_json)), "public_keys")
+    error_message = "With no packaged keys the config must not gain a public_keys member, so the module bump alone changes no existing authorizer package."
+  }
+}
+
+run "signing_public_keys_without_lambda_mode_are_refused" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer              = "https://api.example.com/api/auth"
+      audience            = "example-production-api"
+      signing_public_keys = ["-----BEGIN PUBLIC KEY-----\nMIIB\n-----END PUBLIC KEY-----"]
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
+
+run "a_signing_public_key_that_is_not_pem_is_refused" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer              = "https://api.example.com/api/auth"
+      audience            = "example-production-api"
+      mode                = "lambda"
+      signing_public_keys = ["MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA"]
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}

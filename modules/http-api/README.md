@@ -158,6 +158,7 @@ identity_jwt = object({
   jwks_ttl_seconds          = optional(number, 300)
   jwks_fetch_timeout_ms     = optional(number, 4000)
   clock_skew_seconds        = optional(number, 60)
+  signing_public_keys       = optional(list(string), []) # module.identity.signing_public_keys_pem
   lambda_function_name      = optional(string) # defaults to "<name>-identity-authorizer"
   lambda_log_retention_days = optional(number, 14)
 })
@@ -274,6 +275,13 @@ identity_jwt = object({
 - `jwks_fetch_timeout_ms` must leave the authorizer time to answer: the function's timeout is 10
   seconds and a precondition rejects anything above `(10 - 4) * 1000`. The default 4000 ms allows one
   retry inside the budget.
+- Without `signing_public_keys` a cold authorizer fetches the JWKS from the issuer, and a cold
+  identity function behind it can outlast the 4 second fetch timeout, so the first call pays the
+  timeout plus a retry (about 8 seconds) or is denied. Pass `module.identity.signing_public_keys_pem`
+  and a token signed by a packaged key verifies with no fetch; any other kid still takes the JWKS.
+- A packaged key stays trusted until the next apply, even after it leaves the JWKS. Removing it from
+  `signing_key_arns` alone does not revoke it at the gateway, so the response to a compromised key
+  is rotate, then apply.
 - Flipping a product to lambda mode replaces the routes, because their `authorization_type` moves
   from `JWT` to `CUSTOM`, and destroys the native authorizer. Plan it as a route flip, in the same
   apply.

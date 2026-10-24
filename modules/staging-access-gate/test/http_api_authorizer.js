@@ -28,13 +28,22 @@ const KID = 'key-one';
 let counter = 0;
 
 /** Renders identity_jwt_config.json exactly as the http-api locals do. */
-function renderConfig({ routeKeys = [], apiKeyPrefixes = [], jwksFetchTimeoutMs = 4000, audiences = [] } = {}) {
+function renderConfig({ routeKeys = [], apiKeyPrefixes = [], jwksFetchTimeoutMs = 4000, audiences = [], publicKeys = [] } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
     api_key_prefixes: apiKeyPrefixes,
     jwks_fetch_timeout_ms: jwksFetchTimeoutMs,
     audiences,
+    ...(publicKeys.length > 0 ? { public_keys: publicKeys } : {}),
   });
+}
+
+/** Derives a kid the way webbpulse.identity kid_for_der does. */
+function webbpulseKid(publicKey) {
+  return crypto
+    .createHash('sha256')
+    .update(publicKey.export({ type: 'spki', format: 'der' }))
+    .digest('base64url');
 }
 
 /** Builds the deployment package the way the archive_file does and loads the handler. */
@@ -244,6 +253,41 @@ module.exports = async function run() {
     { isAuthorized: false },
     'a package with no config file fails closed',
   );
+
+  const packaged = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const packagedKid = webbpulseKid(packaged.publicKey);
+  const packagedPem = packaged.publicKey.export({ type: 'spki', format: 'pem' });
+  const seeded = loadAuthorizer({
+    routeKeys: [PROTECTED],
+    publicKeys: [packagedPem, 'not a pem', crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ type: 'spki', format: 'pem' })],
+  });
+  assert.deepStrictEqual(
+    seeded.seededKids(),
+    [packagedKid],
+    'only the RSA PEM is seeded, under the kid webbpulse.identity stamps; a bad entry is skipped, not fatal',
+  );
+
+  const beforeSeeded = fetches;
+  const seededGood = await seeded.handler(req({ token: sign(claims(), { key: packaged.privateKey, kid: packagedKid }) }));
+  assert.strictEqual(seededGood.isAuthorized, true, 'a token signed by a packaged key is admitted');
+  assert.strictEqual(seededGood.context.sub, 'user-123', 'a packaged key yields the same claims context');
+  assert.strictEqual(fetches, beforeSeeded, 'a packaged kid never waits on the JWKS, which is the cold start fix');
+
+  assert.deepStrictEqual(
+    await seeded.handler(req({ token: sign(claims(), { key: foreign.privateKey, kid: packagedKid }) })),
+    { isAuthorized: false },
+    'a packaged kid on a token signed by another key is denied',
+  );
+  assert.deepStrictEqual(
+    await seeded.handler(req({ token: sign(claims({ aud: 'example-staging-api' }), { key: packaged.privateKey, kid: packagedKid }) })),
+    { isAuthorized: false },
+    'a packaged key still enforces the audience',
+  );
+  assert.strictEqual(fetches, beforeSeeded, 'denials on a packaged kid do not fall through to the JWKS');
+
+  const rotated = await seeded.handler(req({ token: sign(claims()) }));
+  assert.strictEqual(rotated.isAuthorized, true, 'a kid that is not packaged still verifies through the JWKS');
+  assert.strictEqual(fetches, beforeSeeded + 1, 'an unpackaged kid fetches the JWKS as before');
 
   global.fetch = originalFetch;
   console.log('http-api identity authorizer tests passed');

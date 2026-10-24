@@ -7,6 +7,21 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `http-api`, `identity`: packaged signing keys for the identity Lambda authorizer
+
+A cold lambda mode authorizer fetched the issuer's JWKS on its first call, and a cold identity
+function behind it outlasted the 4 second fetch timeout, so the call took about 8 seconds or was
+denied. `identity_jwt.signing_public_keys` (default empty) packages PEM public keys with the
+function; the shared verifier parses them at init and verifies a token whose kid matches, derived
+as base64url SHA-256 of the DER SubjectPublicKeyInfo like webbpulse.identity, with no fetch. Any
+other kid takes the JWKS path unchanged. `identity` gains the `signing_public_keys_pem` output to
+feed it, read with `kms:GetPublicKey` at plan time. A packaged key stays trusted until the next
+apply, so a compromised key is rotate, then apply. Until a consumer sets `signing_public_keys`,
+the only plan change is an in-place code update of the lambda mode authorizer and the
+`staging-access-gate` authorizer, which package the shared verifier; behaviour is unchanged.
+
 ## 2.43.0
 
 Targets 2.43.0.
