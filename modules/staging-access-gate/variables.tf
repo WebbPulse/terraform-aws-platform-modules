@@ -237,6 +237,12 @@ variable "identity_jwt" {
                           token on a JWT route that starts with one of these is allowed through with
                           no claims context, so the function must verify the key itself. Empty, the
                           default, keeps today's behaviour where any non-JWT bearer is denied
+      signing_public_keys optional list of the issuer's PEM public keys, normally
+                          module.identity.signing_public_keys_pem. They are packaged with the
+                          function and matched by the kid webbpulse.identity derives, so a token
+                          they signed verifies with no JWKS fetch and a cold authorizer never
+                          waits on a cold identity function. Any other kid still takes the JWKS
+                          path. Empty, the default, changes nothing
 
     Staging only; production enforces the same token through the http-api module's identity_jwt
     input. The gate credential check still runs first, so this only narrows access.
@@ -252,6 +258,7 @@ variable "identity_jwt" {
     api_key_prefixes   = optional(list(string), [])
 
     jwks_fetch_timeout_ms = optional(number)
+    signing_public_keys   = optional(list(string), [])
   })
   default = null
 
@@ -290,7 +297,10 @@ variable "identity_jwt" {
     error_message = "identity_jwt.jwks_fetch_timeout_ms must be between 500 and 10000. Below 500 a cold identity function cannot serve the key set in time and the first authorized call after the TTL expires is denied; above 10000 the fetch outlives the authorizer function itself."
   }
 
-
+  validation {
+    condition     = var.identity_jwt == null || alltrue([for k in coalesce(try(var.identity_jwt.signing_public_keys, null), []) : startswith(trimspace(k), "-----BEGIN PUBLIC KEY-----")])
+    error_message = "identity_jwt.signing_public_keys must be PEM SubjectPublicKeyInfo public keys, each starting with -----BEGIN PUBLIC KEY-----, as aws_kms_public_key's public_key_pem returns them."
+  }
 
   validation {
     condition     = var.identity_jwt == null || alltrue([for p in coalesce(try(var.identity_jwt.api_key_prefixes, null), []) : trimspace(p) != ""])

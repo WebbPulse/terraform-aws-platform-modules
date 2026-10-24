@@ -70,6 +70,7 @@ identity_jwt = {
   clock_skew_seconds = optional(number) # 60
   api_key_prefixes   = optional(list(string)) # []; bearers with these prefixes pass through unverified
   jwks_fetch_timeout_ms = optional(number) # 4000; 500 to 10000, must cover a cold identity function
+  signing_public_keys   = optional(list(string), []) # module.identity.signing_public_keys_pem
 }
 ```
 
@@ -183,6 +184,13 @@ called around the gate. The allow-list ledger fields live at `staging_access_gat
 - A cold identity function can take about two seconds to serve the JWKS, so `jwks_fetch_timeout_ms`
   has to cover a cold start. Set it too low and the first authorized call after the TTL expires
   aborts the fetch and fails with `authorizerError=Forbidden` on a valid token.
+- Without `signing_public_keys` a cold authorizer fetches the JWKS from the issuer, and a cold
+  identity function behind it can outlast the 4 second fetch timeout, so the first call pays the
+  timeout plus a retry (about 8 seconds) or is denied. Pass `module.identity.signing_public_keys_pem`
+  and a token signed by a packaged key verifies with no fetch; any other kid still takes the JWKS.
+- A packaged key stays trusted until the next apply, even after it leaves the JWKS. Removing it from
+  `signing_key_arns` alone does not revoke it at the gate, so the response to a compromised key
+  is rotate, then apply.
 - Only public key material belongs in `identity_anonymous_path_prefixes`. An application path there
   is a hole straight past the gate.
 - A passed-through API key reaches the function with no `jwt.claims`, so only routes whose handlers

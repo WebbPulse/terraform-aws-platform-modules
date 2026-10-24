@@ -472,3 +472,43 @@ run "a_jwks_fetch_timeout_without_headroom_is_refused_at_plan_time" {
 
   expect_failures = [aws_lambda_function.authorizer]
 }
+
+run "packaged_signing_public_keys_reach_the_authorizer_config" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer              = "https://www.staging.example.com/api/auth"
+      audience            = "example-staging-api"
+      signing_public_keys = ["-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----\n"]
+    }
+  }
+
+  assert {
+    condition     = length(local.identity_signing_public_keys) == 1 && local.identity_signing_public_keys[0] == "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----"
+    error_message = "The packaged public keys must reach the public_keys member of identity_jwt_config.json, trimmed, so the gate authorizer verifies their tokens with no JWKS fetch."
+  }
+}
+
+run "no_signing_public_keys_leaves_the_authorizer_config_unchanged" {
+  command = plan
+
+  assert {
+    condition     = length(local.identity_signing_public_keys) == 0
+    error_message = "With no packaged keys the config must not gain a public_keys member, so the module bump alone changes no existing authorizer config."
+  }
+}
+
+run "a_signing_public_key_that_is_not_pem_is_refused" {
+  command = plan
+
+  variables {
+    identity_jwt = {
+      issuer              = "https://www.staging.example.com/api/auth"
+      audience            = "example-staging-api"
+      signing_public_keys = ["MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA"]
+    }
+  }
+
+  expect_failures = [var.identity_jwt]
+}
