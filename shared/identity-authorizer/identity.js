@@ -16,6 +16,8 @@ const DEFAULT_JWKS_FETCH_TIMEOUT_MS = 4000;
 const DEFAULT_JWKS_TTL_SECONDS = 300;
 const DEFAULT_CLOCK_SKEW_SECONDS = 60;
 const DEFAULT_JWKS_RETRY_BUDGET_MS = 9000;
+const AUTH_SOURCE_BEARER = 'bearer';
+const AUTH_SOURCE_API_KEY = 'api_key';
 
 /** Returns the request path from either payload 2.0 shape. */
 function requestPath(event) {
@@ -53,6 +55,8 @@ function decodeSegment(segment) {
 /**
  * Shapes verified claims into the authorizer context, mirroring the native JWT
  * authorizer. Every value is a string, since API Gateway rejects nested objects.
+ * The flat `sub`, `sid` and `auth_source` keys exist for the access log: a
+ * `$context.authorizer.<key>` variable only resolves a key without dots.
  */
 function claimsContext(claims) {
   const stringified = {};
@@ -64,7 +68,18 @@ function claimsContext(claims) {
     'jwt.claims.sub': stringified.sub || '',
     'jwt.claims.iss': stringified.iss || '',
     'jwt.claims.exp': stringified.exp || '',
+    sub: stringified.sub || '',
+    sid: stringified.sid || '',
+    auth_source: AUTH_SOURCE_BEARER,
   };
+}
+
+/**
+ * The authorizer result for a bearer passed through as an API key. It carries
+ * only `auth_source`, so the access log can tell it apart, and never the key.
+ */
+function apiKeyAllow() {
+  return { isAuthorized: true, context: { auth_source: AUTH_SOURCE_API_KEY } };
 }
 
 /** Normalises a configured string list, dropping blanks. */
@@ -319,6 +334,7 @@ function createIdentityVerifier(options) {
 
   return {
     anonymousPathPrefixes: () => [...anonymousPathPrefixes],
+    apiKeyAllow,
     apiKeyPrefixes: () => [...apiKeyPrefixes],
     bearerToken,
     claimsContext,
@@ -334,9 +350,12 @@ function createIdentityVerifier(options) {
 }
 
 module.exports = {
+  AUTH_SOURCE_API_KEY,
+  AUTH_SOURCE_BEARER,
   DEFAULT_JWKS_FETCH_TIMEOUT_MS,
   DEFAULT_JWKS_TTL_SECONDS,
   DEFAULT_CLOCK_SKEW_SECONDS,
+  apiKeyAllow,
   bearerToken,
   claimsContext,
   cleanList,

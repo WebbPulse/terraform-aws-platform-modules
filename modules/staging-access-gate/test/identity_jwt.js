@@ -132,6 +132,17 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   assert.strictEqual(emitted.roles, '["admin","user"]', 'a non-string claim is JSON encoded rather than dropped');
   assert.strictEqual(r.context['jwt.claims.sub'], 'user-123', 'the lifted sub matches');
   assert.strictEqual(r.context['jwt.claims.iss'], ISSUER, 'the lifted iss matches');
+  assert.strictEqual(r.context.sub, 'user-123', 'the flat sub the access log reads matches');
+  assert.strictEqual(r.context.sid, '', 'a token without a sid publishes an empty sid');
+  assert.strictEqual(r.context.auth_source, 'bearer', 'a verified token is logged as a bearer');
+  assert(
+    !Object.values(r.context).some((v) => v === 'me@example.com'),
+    'the email claim is never lifted into a flat context key',
+  );
+
+  fresh();
+  r = await auth.handler(req(PROTECTED, sign(claims({ sid: 'session-456' }))));
+  assert.strictEqual(r.context.sid, 'session-456', 'the session id reaches the flat sid key');
 
   for (const [k, v] of Object.entries(r.context)) {
     assert.strictEqual(typeof v, 'string', `context value ${k} must be a string`);
@@ -387,8 +398,8 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   r = await keyed.handler(req(PROTECTED, API_KEY));
   assert.deepStrictEqual(
     r,
-    { isAuthorized: true },
-    'an API key bearer on an enforced route is allowed through with no claims context',
+    { isAuthorized: true, context: { auth_source: 'api_key' } },
+    'an API key bearer on an enforced route is allowed through with only its auth source, never the key',
   );
   assert.strictEqual(fetches, 0, 'a passed-through key never fetches the JWKS');
 

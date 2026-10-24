@@ -40,8 +40,42 @@ run "default_format_explains_an_authorizer_denial" {
   }
 
   assert {
-    condition     = length(jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)) == 17
-    error_message = "The default access log format should render 17 fields; an existing field was dropped."
+    condition     = length(jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)) == 22
+    error_message = "The default access log format should render 22 fields; an existing field was dropped."
+  }
+}
+
+run "default_format_identifies_the_caller" {
+  command = plan
+
+  assert {
+    condition     = jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)["jwtSub"] == "$context.authorizer.claims.sub"
+    error_message = "The default access log format must carry jwtSub from the native JWT authorizer's claims."
+  }
+
+  assert {
+    condition     = jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)["jwtSid"] == "$context.authorizer.claims.sid"
+    error_message = "The default access log format must carry jwtSid from the native JWT authorizer's claims."
+  }
+
+  assert {
+    condition     = jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)["lambdaSub"] == "$context.authorizer.sub"
+    error_message = "The default access log format must carry lambdaSub from the shared identity Lambda authorizer's context."
+  }
+
+  assert {
+    condition     = jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)["lambdaSid"] == "$context.authorizer.sid"
+    error_message = "The default access log format must carry lambdaSid from the shared identity Lambda authorizer's context."
+  }
+
+  assert {
+    condition     = jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)["authSource"] == "$context.authorizer.auth_source"
+    error_message = "The default access log format must carry authSource from the shared identity Lambda authorizer's context."
+  }
+
+  assert {
+    condition     = alltrue([for v in values(jsondecode(one(aws_apigatewayv2_stage.default.access_log_settings).format)) : !strcontains(lower(v), "email") && !strcontains(lower(v), "token") && !strcontains(lower(v), "header")])
+    error_message = "The default access log format must never log an email, a token or a request header."
   }
 }
 

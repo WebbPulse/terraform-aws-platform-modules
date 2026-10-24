@@ -238,7 +238,7 @@ exports.handler = async (event) => {
   }
 
   if (identity.isApiKeyBearer(token)) {
-    return ALLOW;
+    return identity.apiKeyAllow();
   }
 
   const claims = await identity.verifyAccessToken(token);

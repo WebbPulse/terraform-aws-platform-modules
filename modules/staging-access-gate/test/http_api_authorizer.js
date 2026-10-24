@@ -126,6 +126,10 @@ module.exports = async function run() {
   assert.strictEqual(good.isAuthorized, true, 'a valid access token is admitted');
   assert.strictEqual(good.context['jwt.claims.sub'], 'user-123', 'the sub reaches the integration');
   assert.strictEqual(good.context['jwt.claims.iss'], ISSUER, 'the issuer reaches the integration');
+  assert.strictEqual(good.context.sub, 'user-123', 'the flat sub reaches the access log');
+  assert.strictEqual(good.context.auth_source, 'bearer', 'a verified token is logged as a bearer');
+  const withSession = await auth.handler(req({ token: sign(claims({ sid: 'session-456' })) }));
+  assert.strictEqual(withSession.context.sid, 'session-456', 'the session id reaches the access log');
   assert.strictEqual(
     JSON.parse(good.context['jwt.claims']).roles,
     JSON.stringify(['admin', 'user']),
@@ -139,12 +143,12 @@ module.exports = async function run() {
 
   assert.deepStrictEqual(
     await auth.handler(req({ token: 'wpk_live_abc123' })),
-    { isAuthorized: true },
+    { isAuthorized: true, context: { auth_source: 'api_key' } },
     'an API key bearer is passed through, which is the whole point of lambda mode',
   );
   assert.deepStrictEqual(
     await auth.handler(req({ token: 'wpk_' })),
-    { isAuthorized: true },
+    { isAuthorized: true, context: { auth_source: 'api_key' } },
     'the bare prefix is still a prefix match',
   );
 
