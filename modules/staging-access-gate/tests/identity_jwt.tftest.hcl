@@ -485,8 +485,8 @@ run "packaged_signing_public_keys_reach_the_authorizer_config" {
   }
 
   assert {
-    condition     = jsondecode(local.identity_jwt_config_json).public_keys == ["-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----"]
-    error_message = "The packaged public keys must reach identity_jwt_config.json, trimmed, so the gate authorizer verifies their tokens with no JWKS fetch."
+    condition     = local.identity_signing_public_keys == ["-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----"]
+    error_message = "The packaged public keys must reach the public_keys member of identity_jwt_config.json, trimmed, so the gate authorizer verifies their tokens with no JWKS fetch."
   }
 }
 
@@ -494,8 +494,8 @@ run "no_signing_public_keys_leaves_the_authorizer_config_unchanged" {
   command = plan
 
   assert {
-    condition     = !contains(keys(jsondecode(local.identity_jwt_config_json)), "public_keys")
-    error_message = "With no packaged keys the config must not gain a public_keys member, so the module bump alone changes no existing authorizer package."
+    condition     = length(local.identity_signing_public_keys) == 0
+    error_message = "With no packaged keys the config must not gain a public_keys member, so the module bump alone changes no existing authorizer config."
   }
 }
 
