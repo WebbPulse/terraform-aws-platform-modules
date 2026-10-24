@@ -485,7 +485,7 @@ run "packaged_signing_public_keys_reach_the_authorizer_config" {
   }
 
   assert {
-    condition     = local.identity_signing_public_keys == ["-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----"]
+    condition     = length(local.identity_signing_public_keys) == 1 && local.identity_signing_public_keys[0] == "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----"
     error_message = "The packaged public keys must reach the public_keys member of identity_jwt_config.json, trimmed, so the gate authorizer verifies their tokens with no JWKS fetch."
   }
 }
