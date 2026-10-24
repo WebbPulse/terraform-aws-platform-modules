@@ -59,6 +59,10 @@ locals {
     for p in coalesce(var.identity_jwt.api_key_prefixes, []) : trimspace(p) if trimspace(p) != ""
   ] : []
 
+  identity_signing_public_keys = local.identity_jwt_enabled ? [
+    for k in coalesce(var.identity_jwt.signing_public_keys, []) : trimspace(k)
+  ] : []
+
   identity_jwks_fetch_timeout_ms = var.identity_jwt != null ? coalesce(var.identity_jwt.jwks_fetch_timeout_ms, 4000) : 4000
 
   authorizer_timeout_seconds = 10
@@ -76,6 +80,7 @@ locals {
       jwks_fetch_timeout_ms   = local.identity_jwks_fetch_timeout_ms
     },
     length(local.identity_jwt_extra_audiences) > 0 ? { audiences = local.identity_jwt_audiences } : {},
+    length(local.identity_signing_public_keys) > 0 ? { public_keys = local.identity_signing_public_keys } : {},
   ))
 
   identity_anonymous_path_prefixes = var.identity_anonymous_path_prefixes != null ? var.identity_anonymous_path_prefixes : (

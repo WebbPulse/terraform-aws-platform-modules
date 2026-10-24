@@ -7,6 +7,20 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
+## Unreleased
+
+### `staging-access-gate`: packaged signing keys for the gate authorizer
+
+The gate authorizer gains `identity_jwt.signing_public_keys` (default empty), the same input
+http-api took in 2.44.0: PEM public keys, normally `module.identity.signing_public_keys_pem`, are
+packaged into `identity_jwt_config.json` and passed to the shared verifier as `publicKeys`, so a
+token whose kid matches verifies with no JWKS fetch and a cold gate authorizer no longer waits on a
+cold identity function. Any other kid takes the JWKS path unchanged. A packaged key stays trusted
+until the next apply, so a compromised key is rotate, then apply. With the default the only plan
+change is an in-place code update of the gate authorizer, because its handler now passes
+`publicKeys`; the packaged config gains no `public_keys` member and behaviour is unchanged. Setting
+it plans the same in-place code update, with `public_keys` added to the packaged config.
+
 ## 2.44.0
 
 Targets 2.44.0.

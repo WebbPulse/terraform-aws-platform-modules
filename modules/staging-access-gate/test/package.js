@@ -20,6 +20,7 @@ function renderConfig({
   apiKeyPrefixes = [],
   jwksFetchTimeoutMs = 4000,
   audiences = [],
+  publicKeys = [],
 } = {}) {
   return JSON.stringify({
     route_keys: [...routeKeys].sort(),
@@ -28,6 +29,7 @@ function renderConfig({
     api_key_prefixes: apiKeyPrefixes,
     jwks_fetch_timeout_ms: jwksFetchTimeoutMs,
     audiences,
+    ...(publicKeys.length > 0 ? { public_keys: publicKeys } : {}),
   });
 }
 

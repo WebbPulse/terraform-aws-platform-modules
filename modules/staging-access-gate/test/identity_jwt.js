@@ -39,6 +39,14 @@ function sign(claims, { key = signer.privateKey, kid = KID, alg = 'RS256' } = {}
   return `${header}.${payload}.${signature}`;
 }
 
+/** Derives a kid the way webbpulse.identity kid_for_der does. */
+function webbpulseKid(publicKey) {
+  return crypto
+    .createHash('sha256')
+    .update(publicKey.export({ type: 'spki', format: 'der' }))
+    .digest('base64url');
+}
+
 const now = () => Math.floor(Date.now() / 1000);
 
 /** Builds a valid claim set for this issuer and audience. */
@@ -573,6 +581,61 @@ module.exports = async function run({ gateCookies, signPolicy, publicPem }) {
   globalThis.fetch = savedFetch;
 
   console.log('identity jwt jwks fetch timeout tests passed');
+
+  const packaged = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const packagedKid = webbpulseKid(packaged.publicKey);
+  const packagedPem = packaged.publicKey.export({ type: 'spki', format: 'pem' });
+  const seeded = loadAuthorizer({
+    routeKeys: ENFORCED,
+    signingPublicKeyPem: publicPem,
+    publicKeys: [packagedPem, 'not a pem', crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ type: 'spki', format: 'pem' })],
+  });
+  assert.deepStrictEqual(
+    seeded.seededKids(),
+    [packagedKid],
+    'only the RSA PEM is seeded, under the kid webbpulse.identity stamps; a bad entry is skipped, not fatal',
+  );
+  assert.deepStrictEqual(auth.seededKids(), [], 'a package with no public_keys seeds nothing');
+
+  served = [jwk(signer.publicKey, KID)];
+  fetches = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    fetches += 1;
+    lastFetchHeaders = init.headers || {};
+    return { ok: true, status: 200, json: async () => ({ keys: served }) };
+  };
+  seeded.resetJwksCache();
+
+  r = await seeded.handler(req(PROTECTED, sign(claims(), { key: packaged.privateKey, kid: packagedKid })));
+  assert.strictEqual(r.isAuthorized, true, 'a token signed by a packaged key is admitted at the gate');
+  assert.strictEqual(r.context.sub, 'user-123', 'a packaged key yields the same claims context');
+  assert.strictEqual(fetches, 0, 'a packaged kid never waits on the JWKS, which is the cold start fix');
+
+  assert.deepStrictEqual(
+    await seeded.handler(req(PROTECTED, sign(claims(), { key: foreign.privateKey, kid: packagedKid }))),
+    { isAuthorized: false },
+    'a packaged kid on a token signed by another key is denied',
+  );
+  assert.deepStrictEqual(
+    await seeded.handler(req(PROTECTED, sign(claims({ aud: 'example-production-api' }), { key: packaged.privateKey, kid: packagedKid }))),
+    { isAuthorized: false },
+    'a packaged key still enforces the audience, so a production token stays out of staging',
+  );
+  assert.deepStrictEqual(
+    await seeded.handler(req(PROTECTED, sign(claims(), { key: packaged.privateKey, kid: packagedKid }), { noGate: true })),
+    { isAuthorized: false },
+    'a packaged key does not stand in for the gate credential',
+  );
+  assert.strictEqual(fetches, 0, 'denials on a packaged kid do not fall through to the JWKS');
+
+  r = await seeded.handler(req(PROTECTED, sign(claims())));
+  assert.strictEqual(r.isAuthorized, true, 'a kid that is not packaged still verifies through the JWKS');
+  assert.strictEqual(fetches, 1, 'an unpackaged kid fetches the JWKS as before');
+  assert.strictEqual(lastFetchHeaders['x-origin-verify'], 'S3CRET', 'that fetch still carries the origin verification header');
+
+  globalThis.fetch = savedFetch;
+
+  console.log('identity jwt packaged signing key tests passed');
 
   console.log('identity jwt authorizer tests passed');
 };
