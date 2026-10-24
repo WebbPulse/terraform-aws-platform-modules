@@ -513,6 +513,12 @@ variable "identity_jwt" {
                             Default 4000, which has to cover a cold identity function. Between 500
                             and 10000, and comfortably below the 10 second function timeout.
                             lambda mode only
+      signing_public_keys   optional list of the issuer's PEM public keys, normally
+                            module.identity.signing_public_keys_pem. They are packaged with the
+                            function and matched by the kid webbpulse.identity derives, so a token
+                            they signed verifies with no JWKS fetch and a cold authorizer never
+                            waits on a cold identity function. Any other kid still takes the JWKS
+                            path. Empty, the default, changes nothing. lambda mode only
       lambda_function_name       optional name for the authorizer function, defaults to
                                  "<var.name>-identity-authorizer". lambda mode only
       lambda_log_retention_days  optional retention on the authorizer's log group. Default 14
@@ -538,6 +544,7 @@ variable "identity_jwt" {
     jwks_ttl_seconds      = optional(number)
     clock_skew_seconds    = optional(number)
     jwks_fetch_timeout_ms = optional(number)
+    signing_public_keys   = optional(list(string), [])
 
     lambda_function_name      = optional(string)
     lambda_log_retention_days = optional(number, 14)
@@ -617,6 +624,16 @@ variable "identity_jwt" {
   validation {
     condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.mode, null), "native") == "lambda" || try(var.identity_jwt.jwks_url, null) == null
     error_message = "identity_jwt.jwks_url needs mode = \"lambda\". The native JWT authorizer derives the key set from the issuer's discovery document and has nowhere to put an override."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || coalesce(try(var.identity_jwt.mode, null), "native") == "lambda" || length(coalesce(try(var.identity_jwt.signing_public_keys, null), [])) == 0
+    error_message = "identity_jwt.signing_public_keys needs mode = \"lambda\". The native JWT authorizer always reads the key set from the issuer's JWKS and has nowhere to package keys."
+  }
+
+  validation {
+    condition     = var.identity_jwt == null || alltrue([for k in coalesce(try(var.identity_jwt.signing_public_keys, null), []) : startswith(trimspace(k), "-----BEGIN PUBLIC KEY-----")])
+    error_message = "identity_jwt.signing_public_keys must be PEM SubjectPublicKeyInfo public keys, each starting with -----BEGIN PUBLIC KEY-----, as aws_kms_public_key's public_key_pem returns them."
   }
 }
 

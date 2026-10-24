@@ -10,7 +10,7 @@
  * context shape. Nothing here knows about gate cookies or origin secrets.
  */
 
-const { createPublicKey, verify: verifySignature } = require('node:crypto');
+const { createHash, createPublicKey, verify: verifySignature } = require('node:crypto');
 
 const DEFAULT_JWKS_FETCH_TIMEOUT_MS = 4000;
 const DEFAULT_JWKS_TTL_SECONDS = 300;
@@ -90,6 +90,39 @@ function cleanList(values) {
 }
 
 /**
+ * Derives the kid webbpulse.identity stamps for a public key: the unpadded
+ * base64url SHA-256 of its DER SubjectPublicKeyInfo.
+ */
+function kidForPublicKey(keyObject) {
+  return createHash('sha256')
+    .update(keyObject.export({ type: 'spki', format: 'der' }))
+    .digest('base64url');
+}
+
+/**
+ * Builds the kid to key map for PEM public keys packaged at deploy time, so a
+ * token signed by one of them verifies with no JWKS fetch on the request path.
+ * A key that does not parse, or is not RSA, is skipped with a warning and left
+ * to the JWKS.
+ */
+function seedPublicKeys(pems) {
+  const seeded = new Map();
+  for (const pem of cleanList(pems)) {
+    try {
+      const key = createPublicKey(pem);
+      if (key.asymmetricKeyType !== 'rsa') {
+        console.warn(`a packaged public key is ${key.asymmetricKeyType}, and only RSA is verifiable here; skipping it`);
+        continue;
+      }
+      seeded.set(kidForPublicKey(key), key);
+    } catch (err) {
+      console.warn('a packaged public key could not be parsed, leaving it to the JWKS:', err.message);
+    }
+  }
+  return seeded;
+}
+
+/**
  * Builds a verifier bound to one issuer, a set of accepted audiences and a key set.
  *
  * `options.audience` is the primary aud claim and `options.audiences` an optional
@@ -100,6 +133,12 @@ function cleanList(values) {
  * on the JWKS fetch. The gate uses it to present its origin verification header,
  * because in that topology the issuer sits behind the very gate this authorizer
  * enforces. On an API with no gate it is omitted and the fetch goes out bare.
+ *
+ * `options.publicKeys` is an optional list of PEM public keys known at deploy
+ * time, the issuer's signing keys. A token whose kid matches one verifies
+ * against it directly, so a cold authorizer never waits on a cold issuer for its
+ * JWKS. Any other kid takes the JWKS path as before, which keeps a rotation to a
+ * key not yet packaged working.
  */
 function createIdentityVerifier(options) {
   const issuer = String(options.issuer || '');
@@ -119,6 +158,7 @@ function createIdentityVerifier(options) {
   const apiKeyPrefixes = cleanList(options.apiKeyPrefixes);
   const anonymousPathPrefixes = cleanList(options.anonymousPathPrefixes);
   const fetchHeaders = typeof options.fetchHeaders === 'function' ? options.fetchHeaders : null;
+  const seededKeys = seedPublicKeys(options.publicKeys);
 
   let jwksCache = { keys: null, fetchedAt: 0, inFlight: null };
 
@@ -208,10 +248,15 @@ function createIdentityVerifier(options) {
   }
 
   /**
-   * Resolves the JWK for a kid, refetching once on a miss so a key rotation takes
-   * effect within one request. Returns null when the kid stays unknown.
+   * Resolves the key for a kid: a packaged public key first, then the JWKS,
+   * refetching once on a miss so a key rotation takes effect within one request.
+   * Returns null when the kid stays unknown.
    */
   async function keyFor(kid) {
+    const seeded = seededKeys.get(kid);
+    if (seeded) {
+      return seeded;
+    }
     let keys = await jwks(false);
     let match = keys.find((k) => k.kid === kid);
     if (!match) {
@@ -345,6 +390,7 @@ function createIdentityVerifier(options) {
     requestPath,
     requiresIdentityJwt,
     resetJwksCache,
+    seededKids: () => [...seededKeys.keys()].sort(),
     verifyAccessToken,
   };
 }
@@ -361,5 +407,6 @@ module.exports = {
   cleanList,
   createIdentityVerifier,
   header,
+  kidForPublicKey,
   requestPath,
 };

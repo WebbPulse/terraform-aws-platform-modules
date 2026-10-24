@@ -13,6 +13,12 @@ resource "aws_kms_key" "identity_signing" {
   tags = length(local.signing_key_tags) == 0 ? null : local.signing_key_tags
 }
 
+data "aws_kms_public_key" "identity_signing" {
+  count = var.signing_key_count
+
+  key_id = aws_kms_key.identity_signing[count.index].arn
+}
+
 resource "aws_kms_alias" "identity_signing" {
   count = var.create_signing_key_alias ? 1 : 0
 

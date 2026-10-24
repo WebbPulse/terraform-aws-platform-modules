@@ -41,6 +41,10 @@ locals {
     for p in coalesce(var.identity_jwt.api_key_prefixes, []) : trimspace(p) if trimspace(p) != ""
   ] : []
 
+  identity_signing_public_keys = local.identity_jwt_enabled ? [
+    for k in coalesce(var.identity_jwt.signing_public_keys, []) : trimspace(k)
+  ] : []
+
   identity_lambda_extra_audiences = local.identity_jwt_enabled ? [for a in coalesce(var.identity_jwt.audiences, []) : a if a != var.identity_jwt.audience] : []
 
   identity_lambda_config_json = jsonencode(merge(
@@ -50,6 +54,7 @@ locals {
       jwks_fetch_timeout_ms = local.identity_jwks_fetch_timeout_ms
     },
     length(local.identity_lambda_extra_audiences) > 0 ? { audiences = var.identity_jwt.audiences } : {},
+    length(local.identity_signing_public_keys) > 0 ? { public_keys = local.identity_signing_public_keys } : {},
   ))
 
   identity_lambda_environment = local.identity_lambda_create ? {

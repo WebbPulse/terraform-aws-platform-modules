@@ -213,6 +213,7 @@ additional_table_grants = map(object({
 | Name | Description |
 | --- | --- |
 | `signing_key_arns` | The signing keys, active signer first. This is `IDENTITY_SIGNING_KEY_ARNS`. |
+| `signing_public_keys_pem` | PEM public key of each signing key, in `signing_key_arns` order. Feed it to http-api `identity_jwt.signing_public_keys`. |
 | `active_signing_key_arn` | The key that signs today, which is `signing_key_arns[0]`. |
 | `signing_key_ids` | Key id of each key, in creation index order rather than signing order. |
 | `signing_key_alias` | `alias/<name_prefix>-identity-signing`, null when the alias is off. |
@@ -317,6 +318,9 @@ from the same merge it already does.
 - JWT claims arrive at `authorizer.jwt.claims` as a string map, so `exp` is a string, not a number.
 - The Lambda Web Adapter passes the request context header as plain JSON, not base64.
 - Discovery and JWKS are fetched at CreateAuthorizer time, so the issuer must be live before apply.
+- `signing_public_keys_pem` is read with `kms:GetPublicKey` during plan. ReadOnlyAccess covers it
+  through `kms:Get*` and the generated key policy delegates to IAM; a custom
+  `signing_key_policy_json` must still let the plan role call it.
 - Gate direct invocation of the function with an `x-origin-verify` header; the authorizer only
   protects the API route.
 - Leave `http_api_id` null on the first apply of a new environment and set it on a later one, once

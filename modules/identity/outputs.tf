@@ -3,6 +3,11 @@ output "signing_key_arns" {
   value       = local.signing_key_arns
 }
 
+output "signing_public_keys_pem" {
+  description = "PEM public key of each signing key, in the same order as signing_key_arns. Pass it to the http-api module's identity_jwt.signing_public_keys so its Lambda authorizer verifies tokens with no JWKS fetch on a cold start. Read with kms:GetPublicKey at plan time, which ReadOnlyAccess covers through kms:Get*."
+  value       = [for i in local.signing_key_order : data.aws_kms_public_key.identity_signing[i].public_key_pem]
+}
+
 output "active_signing_key_arn" {
   description = "ARN of the key that signs today, which is the first entry of signing_key_arns."
   value       = local.active_signing_key_arn

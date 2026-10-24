@@ -24,6 +24,7 @@ function loadConfig() {
       apiKeyPrefixes: Array.isArray(parsed.api_key_prefixes) ? parsed.api_key_prefixes : [],
       audiences: Array.isArray(parsed.audiences) ? parsed.audiences : [],
       jwksFetchTimeoutMs: Number(parsed.jwks_fetch_timeout_ms) > 0 ? Number(parsed.jwks_fetch_timeout_ms) : DEFAULT_JWKS_FETCH_TIMEOUT_MS,
+      publicKeys: Array.isArray(parsed.public_keys) ? parsed.public_keys : [],
     };
   } catch (err) {
     console.error('identity_jwt_config.json could not be read, failing closed:', err.message);
@@ -32,6 +33,7 @@ function loadConfig() {
       apiKeyPrefixes: [],
       audiences: [],
       jwksFetchTimeoutMs: DEFAULT_JWKS_FETCH_TIMEOUT_MS,
+      publicKeys: [],
     };
   }
 }
@@ -47,7 +49,8 @@ const DENY = { isAuthorized: false };
 /**
  * The same verifier the staging access gate runs, built from the same source.
  * No fetchHeaders: without a gate in front the issuer's JWKS is reachable
- * directly, so the fetch goes out bare.
+ * directly, so the fetch goes out bare. The packaged public keys are parsed here,
+ * during init, so a token they signed never waits on the issuer's JWKS.
  */
 const identity = createIdentityVerifier({
   issuer: ISSUER,
@@ -60,6 +63,7 @@ const identity = createIdentityVerifier({
   clockSkewSeconds: process.env.IDENTITY_CLOCK_SKEW_SECONDS,
   routeKeys: CONFIG.routeKeys,
   apiKeyPrefixes: CONFIG.apiKeyPrefixes,
+  publicKeys: CONFIG.publicKeys,
 });
 
 /**
@@ -109,3 +113,6 @@ exports.enforcedRouteKeys = identity.enforcedRouteKeys;
 
 /** Returns the bearer token prefixes passed through on JWT routes. For the tests. */
 exports.apiKeyPrefixes = identity.apiKeyPrefixes;
+
+/** Returns the sorted kids of the packaged public keys. For the tests. */
+exports.seededKids = identity.seededKids;
