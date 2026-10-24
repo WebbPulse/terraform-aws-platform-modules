@@ -7,7 +7,9 @@ authoritative record for them.
 
 An entry marked **no plan change** is one an existing consumer can take without reviewing a diff.
 
-## Unreleased
+## 2.45.0
+
+Targets 2.45.0.
 
 ### `staging-access-gate`: packaged signing keys for the gate authorizer
 
